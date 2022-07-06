@@ -1,0 +1,6 @@
+logs/
+.idea/
+venv/
+.env
+config.json
+python
