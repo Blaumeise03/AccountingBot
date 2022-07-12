@@ -8,10 +8,11 @@ import time
 from os.path import exists
 
 import discord
+from discord import Option
 from discord.ext import commands
 from dotenv import load_dotenv
 
-from classes import AccountingView, get_embeds
+from classes import AccountingView, get_embeds, InduRoleMenu
 
 log_filename = "logs/" + datetime.now().strftime("%Y-%m-%d_%H-%M-%S") + ".log"
 print("Logging outputs goes to: " + log_filename)
@@ -68,7 +69,7 @@ else:
 logging.info("Starting up bot...")
 intents = discord.Intents.default()
 intents.message_content = True
-bot = commands.Bot(command_prefix="§", intents=intents)
+bot = commands.Bot(command_prefix="§", intents=intents, debug_guilds=[582649395149799491, 758444788449148938])
 
 
 @bot.event
@@ -158,6 +159,19 @@ async def setlogchannel(ctx):
     else:
         logging.info("Wrong server!")
         await ctx.send("Can only used inside the defined discord server")
+
+
+@bot.slash_command()
+async def indumenu(ctx, msg: Option(str, "Enter your friend's name", required=False, default=None)):
+    if msg is None:
+        logging.info("Sending role menu...")
+        await ctx.send(embeds=[InduRoleMenu()])
+        await ctx.respond("Neues Menü gesendet.", ephemeral=True)
+    else:
+        logging.info("Updating role menu " + str(msg))
+        msg = await ctx.channel.fetch_message(int(msg))
+        await msg.edit(embeds=[InduRoleMenu()])
+        await ctx.respond("Menü geupdated.", ephemeral=True)
 
 
 @bot.command()

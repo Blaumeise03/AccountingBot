@@ -142,6 +142,21 @@ class MenuEmbedVCB(Embed):
         self.add_field(name="Kontoname", value="[V2] Massive Dynamic LLC", inline=True)
 
 
+class InduRoleMenu(Embed):
+    def __init__(self):
+        super().__init__(color=Colour.green(), title="Industrierollen")
+        self.add_field(name="Schiffbauskills", value="<:Frigate:974611741633806376> Frigates\n"
+                                                     "<:Destroyer:974611810453958699> Destroyer\n"
+                                                     "<:Cruiser:974611846566936576> Cruiser\n"
+                                                     "<:BC:974611889982173193> Battlecruiser\n"
+                                                     "<:BS:974611977626329139> Battleship\n"
+                                                     "<:Industrial:974612368061517824> Industrial\n", inline=True)
+        self.add_field(name="Sonstiges", value=":regional_indicator_n: Nanocores\n"
+                                               ":regional_indicator_b: B-Type Module\n"
+                                               "<:Freighter:974612564707274752> Hauling-Service\n"
+                                               ":tools: Schiff-(Fitting)-Service")
+
+
 def get_embeds():
     return [
         MenuEmbedInternal(),
