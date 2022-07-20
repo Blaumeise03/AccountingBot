@@ -8,7 +8,7 @@ import time
 from os.path import exists
 
 import discord
-from discord import Option
+from discord import Option, ActivityType
 from discord.ext import commands
 from dotenv import load_dotenv
 
@@ -101,7 +101,7 @@ async def on_ready():
     ctx = await bot.get_context(message=msg)
     await msg.edit(view=AccountingView(ctx=ctx, bot=bot, accounting_log=ACCOUNTING_LOG),
                    embeds=get_embeds(), content="")
-    activity = discord.Game(name="Eve Echoes", type=3)
+    activity = discord.Activity(name="IAK-JW", type=ActivityType.competing)
     await bot.change_presence(status=discord.Status.online, activity=activity)
     logging.info("Setup complete.")
 
@@ -172,6 +172,19 @@ async def indumenu(ctx, msg: Option(str, "Enter your friend's name", required=Fa
         msg = await ctx.channel.fetch_message(int(msg))
         await msg.edit(embeds=[InduRoleMenu()])
         await ctx.respond("Menü geupdated.", ephemeral=True)
+
+"""
+@bot.slash_command()
+async def test(ctx, msg_id: Option(str, "Enter your friend's name", required=False, default=None)):
+    if msg_id is None:
+        pass
+    else:
+        msg = await ctx.channel.fetch_message(int(msg_id))
+        print(msg.content)
+        print(f'Clean_Content: {msg.clean_content}')
+        print(f'System_Content: {msg.system_content}')
+        await ctx.respond("Test", ephemeral=True)
+"""
 
 
 @bot.command()

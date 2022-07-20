@@ -153,8 +153,8 @@ class InduRoleMenu(Embed):
                                                      "<:Industrial:974612368061517824> Industrial\n", inline=True)
         self.add_field(name="Sonstiges", value=":regional_indicator_n: Nanocores\n"
                                                ":regional_indicator_b: B-Type Module\n"
-                                               "<:Freighter:974612564707274752> Hauling-Service\n"
-                                               ":tools: Schiff-(Fitting)-Service")
+                                               # "<:Freighter:974612564707274752> Hauling-Service\n"
+                                               ":regional_indicator_f: Schiff-(Fitting)-Service")
 
 
 def get_embeds():
