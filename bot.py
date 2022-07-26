@@ -1,3 +1,4 @@
+import re
 import traceback
 from datetime import datetime
 import logging
@@ -9,11 +10,13 @@ from os.path import exists
 
 import discord
 import mariadb
+import pytz as pytz
 from discord import Option, ActivityType
 from discord.ext import commands
 from dotenv import load_dotenv
 
 import classes
+import sheet
 from classes import AccountingView, get_embeds, InduRoleMenu
 from database import DatabaseConnector
 
@@ -70,7 +73,8 @@ else:
         "db_password": "Password",
         "db_port": 3306,
         "db_host": "localhost",
-        "db_name": "accountingBot"
+        "db_name": "accountingBot",
+        "google_sheet": "SHEET_ID"
     }
     with open("config.json", "w") as outfile:
         json.dump(config, outfile, indent=4)
@@ -85,6 +89,8 @@ connector = DatabaseConnector(
 )
 classes.set_up(connector, ADMINS)
 
+logging.info("Starting Google sheets API...")
+sheet.setup_sheet(config["google_sheet"])
 
 logging.info("Starting up bot...")
 intents = discord.Intents.default()
@@ -177,7 +183,48 @@ async def on_raw_reaction_add(reaction):
         if res > 0:
             channel = bot.get_channel(ACCOUNTING_LOG)
             msg = await channel.fetch_message(reaction.message_id)
-            await msg.edit(view=None)
+            if msg.content.startswith("Verifiziert von"):
+                await msg.author.send(content="Hinweis, diese Transaktion wurde bereits verifiziert, sie wurde nicht "
+                                              "erneut im Sheet eingetragen. Bitte trage sie selbstständig ein, falls"
+                                              "dies gewünscht ist.")
+                return
+            if len(msg.embeds) > 0:
+                embed = msg.embeds[0]
+                t = embed.timestamp
+                amount = -1
+                purpose = ""
+                reference = ""
+                u_from = ""
+                u_to = ""
+                t_type = -1
+                if embed.title.casefold() == "Transfer".casefold():
+                    t_type = 0
+                elif embed.title.casefold() == "Einzahlen".casefold():
+                    t_type = 1
+                elif embed.title.casefold() == "Auszahlen".casefold():
+                    t_type = 2
+                for field in embed.fields:
+                    name = field.name.casefold()
+                    if name == "Menge:".casefold():
+                        amount = re.sub(r"[,a-zA-Z]", "", field.value)
+                    elif name == "Verwendungszweck:".casefold():
+                        purpose = field.value.strip()
+                    elif name == "Referenz:".casefold():
+                        reference = field.value.strip()
+                    elif name == "Von:".casefold():
+                        u_from = field.value.strip()
+                    elif name == "Zu:".casefold():
+                        u_to = field.value.strip()
+                    elif name == "Konto:".casefold():
+                        if t_type == 1:
+                            u_to = field.value.strip()
+                        elif t_type == 2:
+                            u_from = field.value.strip()
+                sheet.add_transaction(t.astimezone(pytz.timezone("Europe/Berlin")).strftime("%d.%m.%Y %H:%M"), u_from, u_to, amount, purpose, reference)
+                user = await bot.get_or_fetch_user(reaction.user_id)
+                await msg.edit(content=f"Verifiziert von {user.name}", view=None)
+            else:
+                await msg.edit(view=None)
 
 
 @bot.event

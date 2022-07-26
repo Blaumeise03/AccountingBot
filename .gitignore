@@ -4,3 +4,5 @@ venv/
 .env
 config.json
 python
+credentials.json
+accounting-bot-*.json
