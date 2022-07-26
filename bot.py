@@ -8,11 +8,14 @@ import time
 from os.path import exists
 
 import discord
+import mariadb
 from discord import Option, ActivityType
 from discord.ext import commands
 from dotenv import load_dotenv
 
+import classes
 from classes import AccountingView, get_embeds, InduRoleMenu
+from database import DatabaseConnector
 
 log_filename = "logs/" + datetime.now().strftime("%Y-%m-%d_%H-%M-%S") + ".log"
 print("Logging outputs goes to: " + log_filename)
@@ -41,6 +44,7 @@ ACCOUNTING_LOG = -1
 MENU_MESSAGE = -1
 MENU_CHANNEL = -1
 ACCOUNTING_LOG = -1
+ADMINS = []
 
 # loading json config
 logging.info("Loading JSON Config...")
@@ -55,21 +59,38 @@ if exists("config.json"):
         ACCOUNTING_LOG = config["logChannel"]
         MENU_MESSAGE = config["menuMessage"]
         MENU_CHANNEL = config["menuChannel"]
+        ADMINS = config["admins"]
 else:
     config = {
         "server": -1,
         "logChannel": -1,
         "menuMessage": -1,
-        "menuChannel": -1
+        "menuChannel": -1,
+        "db_user": "Username",
+        "db_password": "Password",
+        "db_port": 3306,
+        "db_host": "localhost",
+        "db_name": "accountingBot"
     }
     with open("config.json", "w") as outfile:
         json.dump(config, outfile, indent=4)
         logging.error("ERROR: Config not found, created new one. Please change the settings and restart!")
 
+connector = DatabaseConnector(
+    username=config["db_user"],
+    password=config["db_password"],
+    port=config["db_port"],
+    host=config["db_host"],
+    database=config["db_name"]
+)
+classes.set_up(connector, ADMINS)
+
+
 logging.info("Starting up bot...")
 intents = discord.Intents.default()
 intents.message_content = True
-bot = commands.Bot(command_prefix="§", intents=intents, debug_guilds=[582649395149799491, 758444788449148938])
+intents.reactions = True
+bot = commands.Bot(command_prefix="dev§", intents=intents, debug_guilds=[582649395149799491, 758444788449148938])
 
 
 @bot.event
@@ -96,19 +117,81 @@ async def on_ready():
     if MENU_CHANNEL == -1:
         return
     channel = await bot.fetch_channel(MENU_CHANNEL)
-    await bot.fetch_channel(ACCOUNTING_LOG)
+    accounting_log = await bot.fetch_channel(ACCOUNTING_LOG)
     msg = await channel.fetch_message(MENU_MESSAGE)
     ctx = await bot.get_context(message=msg)
     await msg.edit(view=AccountingView(ctx=ctx, bot=bot, accounting_log=ACCOUNTING_LOG),
                    embeds=get_embeds(), content="")
     activity = discord.Activity(name="IAK-JW", type=ActivityType.competing)
     await bot.change_presence(status=discord.Status.online, activity=activity)
+    logging.info("Setting up unverified accounting log entries")
+    unverified = connector.get_unverified()
+    logging.info(f"Found {len(unverified)} unverified message(s)")
+    for m in unverified:
+        try:
+            msg = await accounting_log.fetch_message(m)
+        except discord.errors.NotFound as ignored:
+            msg = None
+        if msg is not None:
+            v = False
+            for r in msg.reactions:
+                emoji = r.emoji
+                name = ""
+                if isinstance(emoji, str):
+                    name = emoji
+                else:
+                    name = emoji.name
+                if name == "✅":
+                    users = await r.users().flatten()
+                    for u in users:
+                        if u.id in ADMINS:
+                            v = True
+                            break
+                    break
+            if v:
+                try:
+                    connector.set_verification(m, 1)
+                except mariadb.Error as e:
+                    pass
+                await msg.edit(view=None)
+            else:
+                await msg.edit(view=classes.TransactionView(bot))
+        else:
+            connector.delete(m)
     logging.info("Setup complete.")
 
 
 @bot.event
 async def on_message(message):
     await bot.process_commands(message)
+
+
+@bot.event
+async def on_raw_reaction_add(reaction):
+    if reaction.emoji.name == "✅" and reaction.channel_id == ACCOUNTING_LOG and reaction.user_id in ADMINS:
+        try:
+            res = connector.set_verification(message=reaction.message_id, verified=1)
+        except mariadb.Error as e:
+            res = 0
+            pass
+        if res > 0:
+            channel = bot.get_channel(ACCOUNTING_LOG)
+            msg = await channel.fetch_message(reaction.message_id)
+            await msg.edit(view=None)
+
+
+@bot.event
+async def on_raw_reaction_remove(reaction):
+    if reaction.emoji.name == "✅" and reaction.channel_id == ACCOUNTING_LOG and reaction.user_id in ADMINS:
+        try:
+            res = connector.set_verification(message=reaction.message_id, verified=0)
+        except mariadb.Error as e:
+            res = 0
+            pass
+        if res > 0:
+            channel = bot.get_channel(ACCOUNTING_LOG)
+            msg = await channel.fetch_message(reaction.message_id)
+            await msg.edit(view=classes.TransactionView(ctx=bot))
 
 
 @bot.command()
@@ -192,6 +275,7 @@ async def stop(ctx):
     if ctx.author.id == 485518598517948416:
         logging.critical("Shutdown Command received, shutting down bot in 10 seconds")
         await ctx.send("Bot wird in 10 Sekunden gestoppt...")
+        connector.con.close()
         time.sleep(10)
         exit(0)
     else:
