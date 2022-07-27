@@ -21,7 +21,7 @@ def setup_sheet(sheet_id):
     global SPREADSHEET_ID, creds, users, sheet, wkAccounting, wkLog
     SPREADSHEET_ID = sheet_id
 
-    account = gspread.service_account(filename="accounting-bot-357510-628b680d7a4d.json")
+    account = gspread.service_account(filename="credentials.json")
     sheet = account.open_by_key(sheet_id)
     wkAccounting = sheet.worksheet("Accounting")
     wkLog = sheet.worksheet("Accounting Log")

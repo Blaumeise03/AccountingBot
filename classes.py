@@ -7,23 +7,27 @@ import discord
 import mariadb
 import database
 import discord.ext
-from discord import Embed, Interaction, Colour, Color
+from discord import Embed, Interaction, Colour, Color, PartialEmoji
 from discord.ui import Modal, View, InputText
 
 import sheet
 
 BOT = None  # type: discord.ext.commands.bot.Bot | None
 ACCOUNTING_LOG = None  # type: int | None
+SERVER = None  # type: int | None
 
 connector = None  # type: database.DatabaseConnector | None
 
 admins = []
 
 
-def set_up(new_connector, new_admins):
-    global connector, admins
+def set_up(new_connector, new_admins, bot, acc_log, server):
+    global connector, admins, BOT, ACCOUNTING_LOG, SERVER
     connector = new_connector
     admins = new_admins
+    BOT = bot
+    ACCOUNTING_LOG = acc_log
+    SERVER = server
 
 
 def get_current_time():
@@ -31,23 +35,29 @@ def get_current_time():
     return now.strftime("%d.%m.%Y %H:%M")
 
 
-async def send_transaction(embed, ctx, interaction, note=""):
-    msg = await BOT.get_channel(ACCOUNTING_LOG).send(embeds=[embed], view=TransactionView(ctx=ctx))
-    try:
-        connector.add_transaction(msg.id, interaction.user.id)
-    except mariadb.Error as e:
-        note += "\nFehler beim Eintragen in die Datenbank, die Transaktion wurde jedoch trotzdem im " \
-                "Accountinglog gepostet. Solltest du sie bearbeiten/löschen wollen, " \
-                f"informiere bitte einen Admin\n{e}"
+def parse_number(string: str):
+    if bool(re.match(r"[0-9]+(,[0-9]+)*(\.[0-9]+)?[a-zA-Z]*", string)):
+        number = re.sub(r"[,a-zA-Z]", "", string).split(".", 1)[0]
+        return int(number)
+    else:
+        return None
+
+
+async def send_transaction(embeds, ctx, interaction, note=""):
+    for embed in embeds:
+        msg = await BOT.get_channel(ACCOUNTING_LOG).send(embeds=[embed], view=TransactionView(ctx=ctx))
+        try:
+            connector.add_transaction(msg.id, interaction.user.id)
+        except mariadb.Error as e:
+            note += "\nFehler beim Eintragen in die Datenbank, die Transaktion wurde jedoch trotzdem im " \
+                    "Accountinglog gepostet. Solltest du sie bearbeiten/löschen wollen, " \
+                    f"informiere bitte einen Admin\n{e}"
     await interaction.response.send_message("Transaktion gesendet!" + note, ephemeral=True)
 
 
 class AccountingView(View):
-    def __init__(self, bot, accounting_log, ctx):
+    def __init__(self, ctx):
         super().__init__(timeout=None)
-        global BOT, ACCOUNTING_LOG
-        BOT = bot
-        ACCOUNTING_LOG = accounting_log
         self.ctx = ctx
 
     @discord.ui.button(label="Transfer", style=discord.ButtonStyle.blurple)
@@ -64,6 +74,21 @@ class AccountingView(View):
     async def btn_withdraw_callback(self, button, interaction):
         modal = TransferModal(title="Auszahlen", ctx=self.ctx, color=Color.red(), modal_type=2)
         await interaction.response.send_modal(modal)
+
+    @discord.ui.button(label="Shipyard", style=discord.ButtonStyle.grey)
+    async def btn_shipyard_callback(self, button, interaction):
+        modal = ShipyardModal(title="Schiffskauf", ctx=self.ctx, color=Color.red())
+        await interaction.response.send_modal(modal)
+
+    @discord.ui.button(emoji="🖨️", style=discord.ButtonStyle.grey)
+    async def btn_list_transactions_callback(self, button, interaction):
+        unverified = connector.get_unverified(include_user=True)
+        msg = "Unverifizierte Transaktionen:"
+        if len(unverified) == 0:
+            msg += "\nKeine"
+        for (msgID, userID) in unverified:
+            msg += f"\nhttps://discord.com/channels/{SERVER}/{ACCOUNTING_LOG}/{msgID} von <@{userID}>"
+        await interaction.response.send_message(msg, ephemeral=True)
 
     async def on_error(self, error: Exception, item, interaction):
         logging.error(f"Error in TransactionView: {error}")
@@ -100,7 +125,7 @@ class ConfirmView(View):
 
     @discord.ui.button(label="Ja", style=discord.ButtonStyle.green)
     async def btn_confirm_callback(self, button, interaction):
-        await send_transaction(interaction.message.embeds[0], self.ctx, interaction)
+        await send_transaction(interaction.message.embeds, self.ctx, interaction)
 
     async def on_error(self, error: Exception, item, interaction):
         logging.error(f"Error in ConfirmView: {error}", error)
@@ -186,12 +211,13 @@ class TransferModal(Modal):
         if ("," in amount) or ("." in amount):
             note = "\nHinweis: Es wurden Punkte und/oder Kommas erkannt, die Zahl wird automatisch nach dem Format " \
                    "\"1,000,000.00 ISK\" geparsed."
-        if bool(re.match(r"[0-9]+(,[0-9]+)*(\.[0-9]+)?[a-zA-Z]*", amount)):
-            amount = re.sub(r"[,a-zA-Z]", "", amount).split(".", 1)[0]
-            amount_int = int(amount)
+        amount_int = parse_number(amount)
+        if amount_int is not None:
             embed.add_field(name="Menge:", value="{:,} ISK".format(amount_int))
         else:
-            await interaction.response.send_message(f"Eingabe \"{amount}\" ist weder eine Zahl, noch entspricht sie dem Format \"1,000,000.00 ISK\"!")
+            await interaction.response.send_message(
+                f"Eingabe \"{amount}\" ist weder eine Zahl, noch entspricht sie dem Format \"1,000,000.00 ISK\"!",
+                ephemeral=True)
             return
             # embed.add_field(name="Menge:", value=self.children[2].value)
         embed.add_field(name="Verwendungszweck:", value=purpose)
@@ -199,10 +225,76 @@ class TransferModal(Modal):
         if reference is not None:
             embed.add_field(name="Referenz:", value=reference)
         embed.set_footer(text=interaction.user.name)
-        if (u_from is not None and u_from.casefold() != f.casefold()) or (u_to is not None and u_to.casefold() != t.casefold()):
-            await interaction.response.send_message(f"Meintest du '{f}' und '{t}'? Ansonsten wiederhole bitte deine Eingabe.", embeds=[embed], ephemeral=True, view=ConfirmView(ctx=self.ctx))
+        if (u_from is not None and u_from.casefold() != f.casefold()) or (
+                u_to is not None and u_to.casefold() != t.casefold()):
+            await interaction.response.send_message(
+                f"Meintest du '{f}' und '{t}'? Ansonsten wiederhole bitte deine Eingabe.", embeds=[embed],
+                ephemeral=True, view=ConfirmView(ctx=self.ctx))
         else:
-            await send_transaction(embed, self.ctx, interaction, note)
+            await send_transaction([embed], self.ctx, interaction, note)
+
+    async def on_error(self, error: Exception, interaction: Interaction) -> None:
+        logging.error(f"Error on Transaction Modal: {error}", error)
+        await interaction.response.send_message(str(error))
+
+
+class ShipyardModal(Modal):
+    def __init__(self, ctx, color: Color, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.color = color
+        self.ctx = ctx
+        self.add_item(InputText(label="Käufer", placeholder="Käufer", required=True))
+        self.add_item(InputText(label="Schiff", placeholder="Schiffsname", required=True))
+        self.add_item(InputText(label="Preis", placeholder="Gesamtkosten", required=True))
+        self.add_item(InputText(label="Davon Stationsgebühren", placeholder="(Klickkosten)", required=True))
+
+    async def callback(self, interaction: Interaction):
+        embed_ship = Embed(title="Transfer", color=Color.blue(), timestamp=datetime.now())
+        embed_corp = Embed(title="Auszahlung", color=Color.red(), timestamp=datetime.now())
+        embed_corp.add_field(name="Von:", value="Buyback Program")
+        user_raw = self.children[0].value.strip()
+        ship = self.children[1].value
+        price = self.children[2].value.replace(" ", "")
+        station_fees = self.children[3].value.replace(" ", "")
+
+        if user_raw is not None:
+            u_list = difflib.get_close_matches(user_raw, sheet.users, 1)
+        else:
+            u_list = [None]
+
+        if len(u_list) > 0:
+            u = str(u_list[0])
+            embed_ship.add_field(name="Von:", value=u)
+            embed_ship.add_field(name="Zu:", value="Buyback Program")
+        else:
+            await interaction.response.send_message(f"Namen konnten nicht gefunden werden: {user_raw}",
+                                                    ephemeral=True)
+            return
+
+        note = ""
+        if ("," in price) or ("." in price) or ("," in station_fees) or ("." in station_fees):
+            note = "\nHinweis: Es wurden Punkte und/oder Kommas erkannt, die Zahl wird automatisch nach dem Format " \
+                   "\"1,000,000.00 ISK\" geparsed."
+        price_int = parse_number(price)
+        station_fees_int = parse_number(station_fees)
+        if price_int is not None and station_fees_int is not None:
+            embed_ship.add_field(name="Menge:", value="{:,} ISK".format(price_int))
+            embed_corp.add_field(name="Menge:", value="{:,} ISK".format(station_fees_int))
+        else:
+            await interaction.response.send_message(
+                f"Eingabe \"{price}\" oder \"{station_fees_int}\" ist weder eine Zahl, noch entspricht sie dem Format \"1,000,000.00 ISK\"!")
+            return
+        embed_ship.add_field(name="Verwendungszweck:", value=f"Kauf {ship}")
+        embed_corp.add_field(name="Verwendungszweck:", value=f"Stationsgebühren {ship}")
+
+        embed_corp.set_footer(text=interaction.user.name)
+        embed_ship.set_footer(text=interaction.user.name)
+        if user_raw.casefold() != u.casefold():
+            await interaction.response.send_message(f"Meintest du '{u}'? Ansonsten wiederhole bitte deine Eingabe.",
+                                                    embeds=[embed_ship, embed_corp], ephemeral=True,
+                                                    view=ConfirmView(ctx=self.ctx))
+        else:
+            await send_transaction([embed_ship, embed_corp], self.ctx, interaction, note)
 
     async def on_error(self, error: Exception, interaction: Interaction) -> None:
         logging.error(f"Error on Transaction Modal: {error}", error)
@@ -211,23 +303,33 @@ class TransferModal(Modal):
 
 class MenuEmbedInternal(Embed):
     def __init__(self):
-        super().__init__(color=Colour.red(), title="Interner Handel")
-        self.add_field(name="(zwischen Spielern)", value="Für Handel zwischen zwei Spielern bitte \"Transfer\" "
-                                                         "verwenden. Zum Ein/Auszahlen bitte den jeweiligen Knopf "
-                                                         "nutzen.\n\n**Hinweis:** Die Zahl entweder als reine Zahl "
-                                                         "(z.B.\"1000000\") oder im Format \"1,000,000.00 ISK\" "
-                                                         "oder ähnlich eingeben. Kommas werden als Tausender-Seperator "
-                                                         "erkannt, Buchstaben werden gelöscht.")
+        super().__init__(color=Colour.red(), title="Allgemein")
+        self.add_field(name="Interner Handel", inline=False,
+                       value="Für Handel zwischen zwei Spielern bitte \"Transfer\" verwenden. Nicht zu verwechseln mit "
+                             "dem Ingame Missionsbetreff \"Transfer\", welche für den Transfer von ISK zwischen Twinks "
+                             "gedacht ist. Zum Ein/Auszahlen bitte den jeweiligen Knopf nutzen.\n\n")
+        self.add_field(name="Hinweis", inline=False,
+                       value="Die Zahl entweder als reine Zahl (z.B.\"1000000\") oder im Format "
+                             "\"1,000,000.00 ISK\" oder ähnlich eingeben. Kommas werden als Tausender-Seperator "
+                             "erkannt, Buchstaben werden gelöscht.")
+        self.add_field(name="Referenzfeld", inline=False,
+                       value="Dieses Feld ist **optional**, also einfach leer lassen. Bitte, bitte keine Platzhalter "
+                             "wie Bindestriche, Schrägstriche usw. eintragen, sonst müssen wir das manuell aus dem "
+                             "Sheet entfernen. Aktuell ist das nur für VCB "
+                             "Vertragslinks gedacht/benötigt.")
+        self.add_field(name="Graue Knöpfe", inline=False,
+                       value="Die grauen Knöpfe bitte einfach ignorieren, diejenigen die diese drücken sollen wissen "
+                             "das. Alle anderen können damit wenig/nichts anfangen.")
 
 
 class MenuEmbedExternal(Embed):
     def __init__(self):
         super().__init__(color=Colour.red(), title="VoidCoins")
-        self.add_field(name="VC-Verträge", value="Wenn ihr über VOID gehandelt habt, bitte ebenfalls die "
-                                                 "\"Einzahlen/Auszahlen\"-Knöpfe nehmen. Wenn ihr VC erhalten habt "
-                                                 "(z.B. SRP) \"Einzahlen\", wenn ihr VC ausgegeben habt "
-                                                 "(z.B. Shipyard Kauf) \"Auszahlen\"\n\n"
-                                                 "Den Vertraglink bitte im Feld \"Referenz\" eintragen."
+        self.add_field(name="VC-Verträge", inline=False,
+                       value="Wenn ihr über VOID gehandelt habt, bitte ebenfalls die "
+                             "\"Einzahlen/Auszahlen\"-Knöpfe nehmen. Wenn ihr VC erhalten habt (z.B. SRP) "
+                             "\"Einzahlen\", wenn ihr VC ausgegeben habt (z.B. Shipyard Kauf) \"Auszahlen\"\n\n"
+                             "Den Vertragslink bitte im Feld \"**Referenz**\" eintragen."
                        )
 
 
@@ -249,7 +351,7 @@ class InduRoleMenu(Embed):
                                                      "<:Industrial:974612368061517824> Industrial\n", inline=True)
         self.add_field(name="Sonstiges", value=":regional_indicator_n: Nanocores\n"
                                                ":regional_indicator_b: B-Type Module\n"
-                                               # "<:Freighter:974612564707274752> Hauling-Service\n"
+        # "<:Freighter:974612564707274752> Hauling-Service\n"
                                                ":regional_indicator_f: Schiff-(Fitting)-Service")
 
 

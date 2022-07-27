@@ -87,7 +87,6 @@ connector = DatabaseConnector(
     host=config["db_host"],
     database=config["db_name"]
 )
-classes.set_up(connector, ADMINS)
 
 logging.info("Starting Google sheets API...")
 sheet.setup_sheet(config["google_sheet"])
@@ -96,7 +95,9 @@ logging.info("Starting up bot...")
 intents = discord.Intents.default()
 intents.message_content = True
 intents.reactions = True
-bot = commands.Bot(command_prefix="dev§", intents=intents, debug_guilds=[582649395149799491, 758444788449148938])
+bot = commands.Bot(command_prefix="dev§", intents=intents, debug_guilds=[582649395149799491, 758444788449148938, GUILD])
+
+classes.set_up(connector, ADMINS, bot, ACCOUNTING_LOG, GUILD)
 
 
 @bot.event
@@ -126,7 +127,7 @@ async def on_ready():
     accounting_log = await bot.fetch_channel(ACCOUNTING_LOG)
     msg = await channel.fetch_message(MENU_MESSAGE)
     ctx = await bot.get_context(message=msg)
-    await msg.edit(view=AccountingView(ctx=ctx, bot=bot, accounting_log=ACCOUNTING_LOG),
+    await msg.edit(view=AccountingView(ctx=ctx),
                    embeds=get_embeds(), content="")
     activity = discord.Activity(name="IAK-JW", type=ActivityType.competing)
     await bot.change_presence(status=discord.Status.online, activity=activity)
@@ -251,7 +252,7 @@ async def setup(ctx):
     elif ctx.guild.id == GUILD or ctx.author.id == 485518598517948416:
         if ctx.author.guild_permissions.administrator or ctx.author.id == 485518598517948416:
             logging.info("User verified, starting setup...")
-            view = AccountingView(ctx=ctx, bot=bot, accounting_log=ACCOUNTING_LOG)
+            view = AccountingView(ctx=ctx)
             msg = await ctx.send(view=view, embeds=get_embeds())
             logging.info("Send menu message with id " + str(msg.id))
             MENU_MESSAGE = msg.id

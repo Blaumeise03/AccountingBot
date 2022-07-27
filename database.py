@@ -88,15 +88,21 @@ class DatabaseConnector:
             logger.error(f"Error while trying to insert a new transaction: {e}")
             raise e
 
-    def get_unverified(self):
+    def get_unverified(self, include_user=False):
         if self.con is None or not self.con.open:
             self.try_connect()
         try:
-            self.cursor.execute(
-                "SELECT msgID FROM messages WHERE verified=b'0';")
             res = []
-            for (msg,) in self.cursor:
-                res.append(msg)
+            if include_user:
+                self.cursor.execute(
+                    "SELECT msgID, userID FROM messages WHERE verified=b'0';")
+                for (msg, user) in self.cursor:
+                    res.append((msg, user))
+            else:
+                self.cursor.execute(
+                    "SELECT msgID FROM messages WHERE verified=b'0';")
+                for (msg,) in self.cursor:
+                    res.append(msg)
             return res
         except mariadb.Error as e:
             logger.error(f"Error while trying to get all unverified transactions: {e}")
