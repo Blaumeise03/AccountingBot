@@ -1,7 +1,44 @@
 # AccountingBot
+This is a bot for Eve Echoes to manage your corporation wallet using an accounting sheet.
 
 ## Commands
 Prefix: §
 - setup: Posts the menu with the buttons and saves this menu to the config, so it will be loaded after restarting the bot.
-- setlogchannel: Sets the channel the command was used in as the accounting log channel.
-- stop: Shuts down the bot after 10 seconds.
+- setlogchannel: Sets the channel the command was used in as the accounting log channel. Bot must be restarted to take effect.
+- stop: Shuts down the bot after 10 seconds. Only for owner.
+
+### Example menu
+The menu can be customised in the classes.py file. Just change the text to what you want it to be.
+
+![Example menu](https://user-images.githubusercontent.com/43181741/181205554-dc8f02a1-6f9f-4869-b1e3-1068dec3d427.png)
+
+### Example transaction
+The bot will post the channels into the accounting log channel. An admin can verify it by reacting with the checkmark-emoji. It will be saved into the Google worksheet.
+
+![Example transaction](https://user-images.githubusercontent.com/43181741/181206049-7e3f9aec-ce76-44c8-b0e5-e8875804db42.png)
+
+#### Buttons
+The first three buttons are designed for the three kind of transactions: "Transfer", "Deposit" and "Withdraw". The "Shipyard" button is designed of some kind of Buyback Program. You will enter the buyer, the shipprice and the stations fees. It creates automatically two transactions, one which transfers the ISK of the buyer to the buyback and one which withdraws the station fees of the Buyback Wallet (this is meant when buidling via the corp hangar).
+
+### Config
+The bot requires a credentials.json file for the Google API Service Account credentials, please refer to [the Google docs](https://developers.google.com/workspace/guides/create-credentials) for more information about how to create this file.
+The name of the sheet itself and the worksheet name can be changed in the sheet.py file. All other settings have to be entered into the config.json, which will be generated on startup:
+```
+{
+  "server": ID of target server,
+  "logChannel": ID of accounting log channel,
+  "menuMessage": ID of message with the menu,
+  "menuChannel": ID of the channel where the menu is posted,
+  "owner": ID of owner,
+  "admins": [
+      ID of admin,
+      ID of another admin
+  ],
+  "db_user": "MariaDB username",
+  "db_password": "MariaDB password",
+  "db_port": MariaDB port,
+  "db_host": "MariaDB host",
+  "db_name": "accountingBot",
+  "google_sheet": "SHEET_ID"
+}
+```
