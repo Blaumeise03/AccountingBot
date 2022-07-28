@@ -144,7 +144,13 @@ class TransferModal(Modal):
         else:
             self.add_item(InputText(label="Spieler(konto)name", placeholder="z.B. \"KjinaDeNiel\"", required=True))
         self.add_item(InputText(label="Menge", placeholder="Menge", required=True))
-        self.add_item(InputText(label="Verwendungszweck", placeholder="Verwendungszweck", required=True))
+        if modal_type == 1:
+            purpose = "Einzahlung Accounting"
+        elif modal_type == 2:
+            purpose = "Auszahlung Accounting"
+        else:
+            purpose = None
+        self.add_item(InputText(label="Verwendungszweck", placeholder="Verwendungszweck", required=True, value=purpose))
         self.add_item(InputText(label="Referenz", placeholder="z.B \"voidcoin.app/contract/20577\"", required=False))
 
     async def callback(self, interaction: Interaction):
@@ -189,21 +195,28 @@ class TransferModal(Modal):
             if self.modal_type == 0:
                 f = str(f_list[0])
                 t = str(t_list[0])
-                embed.add_field(name="Von:", value=f)
-                embed.add_field(name="Zu:", value=t)
+                embed.add_field(name="Von:", value=f, inline=True)
+                embed.add_field(name="Zu:", value=t, inline=True)
             else:
                 if u_from is not None:
                     f = str(f_list[0])
-                    embed.add_field(name="Von:", value=f)
+                    embed.add_field(name="Von:", value=f, inline=True)
                 else:
                     f = ""
                 if u_to is not None:
                     t = str(t_list[0])
-                    embed.add_field(name="Zu:", value=t)
+                    embed.add_field(name="Zu:", value=t, inline=True)
                 else:
                     t = ""
         else:
-            await interaction.response.send_message(f"Namen konnten nicht gefunden werden: Von: {f_list} Zu: {t_list}",
+            e_t = ""
+            e_f = ""
+            if len(f_list) < 1:
+                e_t = u_from
+            if len(t_list) < 1:
+                e_f = u_to
+
+            await interaction.response.send_message(f"Namen konnten nicht gefunden werden: {e_f} {e_t}",
                                                     ephemeral=True)
             return
 
@@ -212,15 +225,15 @@ class TransferModal(Modal):
             note = "\nHinweis: Es wurden Punkte und/oder Kommas erkannt, die Zahl wird automatisch nach dem Format " \
                    "\"1,000,000.00 ISK\" geparsed."
         amount_int = parse_number(amount)
-        if amount_int is not None:
-            embed.add_field(name="Menge:", value="{:,} ISK".format(amount_int))
+        if amount_int is not None and amount_int > 0:
+            embed.add_field(name="Menge:", value="{:,} ISK".format(amount_int), inline=False)
         else:
             await interaction.response.send_message(
-                f"Eingabe \"{amount}\" ist weder eine Zahl, noch entspricht sie dem Format \"1,000,000.00 ISK\"!",
+                f"Eingabe \"{amount}\" ist weder eine Zahl > 0, noch entspricht sie dem Format \"1,000,000.00 ISK\"!",
                 ephemeral=True)
             return
             # embed.add_field(name="Menge:", value=self.children[2].value)
-        embed.add_field(name="Verwendungszweck:", value=purpose)
+        embed.add_field(name="Verwendungszweck:", value=purpose, inline=True)
 
         if reference is not None:
             embed.add_field(name="Referenz:", value=reference)

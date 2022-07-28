@@ -34,7 +34,8 @@ class DatabaseConnector:
                 password=self.password,
                 host=self.host,
                 port=self.port,
-                database=self.database
+                database=self.database,
+                connect_timeout=8
             )
             logging.info("Connected to database!")
             self.cursor = self.con.cursor()
@@ -87,6 +88,23 @@ class DatabaseConnector:
         except mariadb.Error as e:
             logger.error(f"Error while trying to insert a new transaction: {e}")
             raise e
+
+    def is_unverified_transaction(self, message):
+        if self.con is None or not self.con.open:
+            self.try_connect()
+        try:
+            self.cursor.execute(
+                "SELECT msgID, verified FROM messages WHERE messages.msgID=?;",
+                (message, ))
+            self.con.commit()
+            res = self.cursor.fetchone()
+            if res is None:
+                return None
+            (msgID, verified) = res
+            return verified == b'\x00'
+        except mariadb.Error as e:
+            logger.error(f"Error while trying to check a transaction: {e}")
+            return False
 
     def get_unverified(self, include_user=False):
         if self.con is None or not self.con.open:

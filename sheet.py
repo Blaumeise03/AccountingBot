@@ -29,6 +29,10 @@ def setup_sheet(sheet_id):
     for u in user_raw:
         if len(u) >= 11 and u[10]:
             users.append(u[0])
+    users.append("Buyback Program")
+    users.append("VOID Coins Bank")
+    users.append("Lotterie")
+    users.append("Ship Replacement Program")
 
 
 def add_transaction(time: str, user_f: str, user_t: str, amount: int, purpose: str, reference: str):
