@@ -226,7 +226,7 @@ class TransferModal(Modal):
                    "\"1,000,000.00 ISK\" geparsed."
         amount_int = parse_number(amount)
         if amount_int is not None and amount_int > 0:
-            embed.add_field(name="Menge:", value="{:,} ISK".format(amount_int), inline=False)
+            embed.add_field(name="Menge:", value="{:,} ISK".format(amount_int), inline=True)
         else:
             await interaction.response.send_message(
                 f"Eingabe \"{amount}\" ist weder eine Zahl > 0, noch entspricht sie dem Format \"1,000,000.00 ISK\"!",
@@ -236,7 +236,7 @@ class TransferModal(Modal):
         embed.add_field(name="Verwendungszweck:", value=purpose, inline=True)
 
         if reference is not None:
-            embed.add_field(name="Referenz:", value=reference)
+            embed.add_field(name="Referenz:", value=reference, inline=True)
         embed.set_footer(text=interaction.user.name)
         if (u_from is not None and u_from.casefold() != f.casefold()) or (
                 u_to is not None and u_to.casefold() != t.casefold()):
