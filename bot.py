@@ -170,7 +170,6 @@ async def on_ready():
                 user = None
                 for r in msg.reactions:
                     emoji = r.emoji
-                    name = ""
                     if isinstance(emoji, str):
                         name = emoji
                     else:
