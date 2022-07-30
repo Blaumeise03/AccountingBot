@@ -233,10 +233,12 @@ async def save_embeds(msg, user_id):
                     u_to = field.value.strip()
                 elif t_type == 2:
                     u_from = field.value.strip()
-        if amount == -1 or (not u_from and not u_to) or t_type == -1 or not purpose:
+        if amount == -1 or (not u_from and not u_to) or not purpose:
             logging.error(
                 f"Invalid embed in message {msg.id}! Can't parse transaction data: timestamp: {t} amount: {amount} purpose: {purpose} from: {u_from} to: {u_to} type: {t_type}")
         else:
+            if t_type == -1:
+                logging.warning(f"Invalid embed in message {msg.id}! Can't detect type: {t_type}, title: {embed.title}")
             time_formatted = t.astimezone(pytz.timezone("Europe/Berlin")).strftime("%d.%m.%Y %H:%M")
             sheet.add_transaction(time_formatted, u_from, u_to,
                                   amount, purpose, reference)

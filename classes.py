@@ -174,7 +174,7 @@ class TransferModal(Modal):
             else:
                 logging.error(f"Modal Type is not within expected range [0-2], got {self.modal_type}")
                 await interaction.response.send_message(
-                    f"Error: Modal Type is not within expected range [0-2], got {self.modal_type}")
+                    f"Error: Modal Type is not within expected range [0-2], got {self.modal_type}", ephemeral=True)
                 return
             amount = self.children[1].value.replace(" ", "")
             purpose = self.children[2].value
@@ -248,7 +248,7 @@ class TransferModal(Modal):
 
     async def on_error(self, error: Exception, interaction: Interaction) -> None:
         logging.error(f"Error on Transaction Modal: {error}", error)
-        await interaction.response.send_message(str(error))
+        await interaction.response.send_message(str(error), ephemeral=True)
 
 
 class ShipyardModal(Modal):
@@ -263,7 +263,7 @@ class ShipyardModal(Modal):
 
     async def callback(self, interaction: Interaction):
         embed_ship = Embed(title="Transfer", color=Color.blue(), timestamp=datetime.now())
-        embed_corp = Embed(title="Auszahlung", color=Color.red(), timestamp=datetime.now())
+        embed_corp = Embed(title="Auszahlen", color=Color.red(), timestamp=datetime.now())
         embed_corp.add_field(name="Von:", value="Buyback Program")
         user_raw = self.children[0].value.strip()
         ship = self.children[1].value
@@ -295,7 +295,7 @@ class ShipyardModal(Modal):
             embed_corp.add_field(name="Menge:", value="{:,} ISK".format(station_fees_int))
         else:
             await interaction.response.send_message(
-                f"Eingabe \"{price}\" oder \"{station_fees_int}\" ist weder eine Zahl, noch entspricht sie dem Format \"1,000,000.00 ISK\"!")
+                f"Eingabe \"{price}\" oder \"{station_fees_int}\" ist weder eine Zahl, noch entspricht sie dem Format \"1,000,000.00 ISK\"!", ephemeral=True)
             return
         embed_ship.add_field(name="Verwendungszweck:", value=f"Kauf {ship}")
         embed_corp.add_field(name="Verwendungszweck:", value=f"Stationsgebühren {ship}")
@@ -311,7 +311,7 @@ class ShipyardModal(Modal):
 
     async def on_error(self, error: Exception, interaction: Interaction) -> None:
         logging.error(f"Error on Transaction Modal: {error}", error)
-        await interaction.response.send_message(str(error))
+        await interaction.response.send_message(str(error), ephemeral=True)
 
 
 class MenuEmbedInternal(Embed):
