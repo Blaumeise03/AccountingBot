@@ -45,6 +45,11 @@ class DatabaseConnector:
                                 "verified BIT NOT NULL DEFAULT b'0', "
                                 "PRIMARY KEY (msgID)"
                                 ") ENGINE = InnoDB; ")
+            self.cursor.execute("CREATE TABLE IF NOT EXISTS shortcuts ("
+                                "msgID BIGINT NOT NULL, "
+                                "channelID BIGINT NOT NULL, "
+                                "PRIMARY KEY (msgID)"
+                                ") ENGINE = InnoDB; ")
         except mariadb.Error as e:
             logger.error(f"Error connecting to MariaDB Platform: {e}")
             raise e
@@ -140,3 +145,48 @@ class DatabaseConnector:
                 logger.info(f"Deleted message {message}, affected {affected} rows")
         except mariadb.Error as e:
             logger.error(f"Error while trying to delete a transaction: {e}")
+
+    def add_shortcut(self, msg_id: int, channel_id: int):
+        if self.con is None or not self.con.open:
+            self.try_connect()
+        try:
+            self.cursor.execute(
+                "INSERT INTO shortcuts (msgID, channelID) VALUES (?, ?);",
+                (msg_id, channel_id))
+            self.con.commit()
+            affected = self.cursor.rowcount
+            if not affected == 1:
+                logger.warning(f"Insertion of shortcut message {msg_id} affected {affected} rows, expected was 1 row")
+            else:
+                logger.info(f"Inserted shortcut message {msg_id}, affected {affected} rows")
+        except mariadb.Error as e:
+            logger.error(f"Error while trying to insert a shortcut message {msg_id}: {e}")
+
+    def get_shortcuts(self):
+        if self.con is None or not self.con.open:
+            self.try_connect()
+        try:
+            res = []
+            self.cursor.execute(
+                "SELECT msgID, channelID FROM shortcuts;")
+            for (msg, channel) in self.cursor:
+                res.append((msg, channel))
+            return res
+        except mariadb.Error as e:
+            logger.error(f"Error while trying to get all shortcut messages: {e}")
+
+    def delete_shortcut(self, message):
+        if self.con is None or not self.con.open:
+            self.try_connect()
+        try:
+            self.cursor.execute(
+                "DELETE FROM shortcuts WHERE shortcuts.msgID=?",
+                (message,))
+            self.con.commit()
+            affected = self.cursor.rowcount
+            if not affected == 1:
+                logger.warning(f"Deletion of shortcut message {message} affected {affected} rows, expected was 1 row")
+            else:
+                logger.info(f"Deleted shortcut message {message}, affected {affected} rows")
+        except mariadb.Error as e:
+            logger.error(f"Error while trying to delete a shortcut message: {e}")

@@ -295,7 +295,8 @@ class ShipyardModal(Modal):
             embed_corp.add_field(name="Menge:", value="{:,} ISK".format(station_fees_int))
         else:
             await interaction.response.send_message(
-                f"Eingabe \"{price}\" oder \"{station_fees_int}\" ist weder eine Zahl, noch entspricht sie dem Format \"1,000,000.00 ISK\"!", ephemeral=True)
+                f"Eingabe \"{price}\" oder \"{station_fees_int}\" ist weder eine Zahl, noch entspricht sie dem Format \"1,000,000.00 ISK\"!",
+                ephemeral=True)
             return
         embed_ship.add_field(name="Verwendungszweck:", value=f"Kauf {ship}")
         embed_corp.add_field(name="Verwendungszweck:", value=f"Stationsgebühren {ship}")
@@ -351,6 +352,14 @@ class MenuEmbedVCB(Embed):
         super().__init__(color=Colour.red(), title="VCB Kontodaten")
         self.add_field(name="Link", value="https://voidcoin.app/pilot/1421", inline=True)
         self.add_field(name="Kontoname", value="[V2] Massive Dynamic LLC", inline=True)
+
+
+class MenuShortcut(Embed):
+    def __init__(self):
+        super().__init__(color=Colour.red(), title="Schnellzugriff")
+        self.add_field(name="Hinweise", inline=False,
+                       value="Transfer zum Handel zwischen Spielern, Ein/Auszahlen zum Ein- und Auszahlen. Das "
+                             "Referenzfeld ist optional.")
 
 
 class InduRoleMenu(Embed):

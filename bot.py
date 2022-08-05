@@ -17,7 +17,7 @@ from dotenv import load_dotenv
 
 import classes
 import sheet
-from classes import AccountingView, get_embeds, InduRoleMenu
+from classes import AccountingView, get_embeds, InduRoleMenu, MenuShortcut
 from database import DatabaseConnector
 from discordLogger import PycordHandler
 
@@ -107,7 +107,7 @@ logging.info("Starting up bot...")
 intents = discord.Intents.default()
 intents.message_content = True
 intents.reactions = True
-bot = commands.Bot(command_prefix="§", intents=intents, debug_guilds=[582649395149799491, 758444788449148938, GUILD])
+bot = commands.Bot(command_prefix="§", intents=intents, debug_guilds=[582649395149799491, GUILD])
 
 classes.set_up(connector, ADMINS, bot, ACCOUNTING_LOG, GUILD)
 
@@ -152,6 +152,19 @@ async def on_ready():
     await msg.edit(view=AccountingView(ctx=ctx),
                    embeds=get_embeds(), content="")
     activity = discord.Activity(name="IAK-JW", type=ActivityType.competing)
+    shortcuts = connector.get_shortcuts()
+    logging.info(f"Found {len(shortcuts)} shortcut menus")
+    for (m, c) in shortcuts:
+        chan = bot.get_channel(c)
+        if chan is None:
+            chan = bot.fetch_channel(c)
+        try:
+            msg = await chan.fetch_message(m)
+            await msg.edit(view=AccountingView(ctx=ctx),
+                           embed=MenuShortcut(), content="")
+        except discord.errors.NotFound as ignored:
+            logging.warning(f"Message {m} in channel {c} not found, deleting it from DB")
+            connector.delete_shortcut(m)
     await bot.change_presence(status=discord.Status.online, activity=activity)
     logging.info("Setting up unverified accounting log entries")
     unverified = connector.get_unverified()
@@ -280,15 +293,15 @@ async def on_raw_reaction_remove(reaction):
         logging.info(f"{reaction.user_id} removed checkmark from {reaction.message_id}!")
 
 
-@bot.command()
+@bot.slash_command(description="Creates the main menu for the bot and sets all required settings.")
 async def setup(ctx):
     global MENU_MESSAGE, MENU_CHANNEL, GUILD
     logging.info("Setup command called by user " + str(ctx.author.id))
     if ctx.guild is None:
         logging.info("Command was send via DM!")
-        await ctx.send("Can only be executed inside a guild")
+        await ctx.respond("Can only be executed inside a guild")
     elif ctx.guild.id == GUILD or ctx.author.id == OWNER:
-        if ctx.author.guild_permissions.administrator or ctx.author.id == OWNER:
+        if ctx.author.guild_permissions.administrator or ctx.author.id in ADMINS or ctx.author.id == OWNER:
             logging.info("User verified, starting setup...")
             view = AccountingView(ctx=ctx)
             msg = await ctx.send(view=view, embeds=get_embeds())
@@ -298,17 +311,37 @@ async def setup(ctx):
             GUILD = ctx.guild.id
             save_config()
             logging.info("Setup completed.")
-            await ctx.send("Saved config")
+            await ctx.respond("Saved config", ephemeral=True)
         else:
             logging.info("Missing perms!")
-            await ctx.send("Missing permissions")
+            await ctx.respond("Missing permissions", ephemeral=True)
     else:
         logging.info("Wrong server!")
-        await ctx.send("Wrong server")
+        await ctx.respond("Wrong server", ephemeral=True)
+
+
+@bot.slash_command(description="Creates a new shortcut menu containing all buttons.")
+async def createshortcut(ctx):
+    global MENU_MESSAGE, MENU_CHANNEL, GUILD
+    if ctx.guild is None:
+        await ctx.respond("Can only be executed inside a guild")
+    elif ctx.guild.id == GUILD or ctx.author.id == OWNER:
+        logging.info("Create shortcut command called by " + str(ctx.author.id))
+        if ctx.author.guild_permissions.administrator or ctx.author.id in ADMINS or ctx.author.id == OWNER:
+            view = AccountingView(ctx=ctx)
+            msg = await ctx.send(view=view, embed=MenuShortcut())
+            connector.add_shortcut(msg.id, ctx.channel.id)
+            await ctx.respond("Shortcut menu posted", ephemeral=True)
+        else:
+            logging.info("Missing perms!")
+            await ctx.respond("Missing permissions", ephemeral=True)
+    else:
+        logging.info("Wrong server!")
+        await ctx.respond("Wrong server", ephemeral=True)
 
 
 # noinspection SpellCheckingInspection
-@bot.command()
+@bot.command(description="Sets the current channel as the accounting log channel.")
 async def setlogchannel(ctx):
     global ACCOUNTING_LOG
     logging.info("SetLogChannel command received.")
@@ -330,8 +363,8 @@ async def setlogchannel(ctx):
         await ctx.send("Can only used inside the defined discord server")
 
 
-@bot.slash_command()
-async def indumenu(ctx, msg: Option(str, "Enter your friend's name", required=False, default=None)):
+@bot.slash_command(description="Posts a menu with all available manufacturing roles.")
+async def indumenu(ctx, msg: Option(str, "Message ID", required=False, default=None)):
     if msg is None:
         logging.info("Sending role menu...")
         await ctx.send(embeds=[InduRoleMenu()])
