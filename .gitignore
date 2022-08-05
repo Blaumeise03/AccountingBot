@@ -3,6 +3,7 @@ logs/
 venv/
 .env
 config.json
+user_overwrites.json
 python
 credentials.json
 accounting-bot-*.json

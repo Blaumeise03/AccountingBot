@@ -23,22 +23,34 @@ The first three buttons are designed for the three kind of transactions: "Transf
 ### Config
 The bot requires a credentials.json file for the Google API Service Account credentials, please refer to [the Google docs](https://developers.google.com/workspace/guides/create-credentials) for more information about how to create this file.
 The name of the sheet itself and the worksheet name can be changed in the sheet.py file. All other settings have to be entered into the config.json, which will be generated on startup:
-```
+```json
 {
-  "server": ID of target server,
-  "logChannel": ID of accounting log channel,
-  "menuMessage": ID of message with the menu,
-  "menuChannel": ID of the channel where the menu is posted,
-  "owner": ID of owner,
+  "server": "ID of target server",
+  "logChannel": "ID of accounting log channel",
+  "menuMessage": "ID of message with the menu",
+  "menuChannel": "ID of the channel where the menu is posted",
+  "owner": "ID of owner",
   "admins": [
-      ID of admin,
-      ID of another admin
+      "ID of admin",
+      "ID of another admin"
   ],
   "db_user": "MariaDB username",
   "db_password": "MariaDB password",
-  "db_port": MariaDB port,
+  "db_port": "MariaDB port",
   "db_host": "MariaDB host",
   "db_name": "accountingBot",
   "google_sheet": "SHEET_ID"
 }
 ```
+Note: All ID's as well as the MariaDB Port should be saved as a number, not a string.
+
+#### Custom user overwrites
+You can define custom overwrites in the file called `user_overwrites.json`. An example config looks like this:
+```json
+{
+  "user_that_should_be_added": null,
+  "username_that_should_be_replaced": "new_username"
+}
+```
+All entries with the value `null` will be added to the normal user list. Same applies to all non-null values inside this config. Before data is saved into the database, the bot will replace the usernames with the defined overwrites (only if the value is not null).
+In the example config `user_that_should_be_added` will be treated as a normal user, while `username_that_should_be_replaced` will be replaced with `new_username` before writing the transaction into the google sheet.
