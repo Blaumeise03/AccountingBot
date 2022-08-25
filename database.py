@@ -18,10 +18,11 @@ class DatabaseConnector:
         connected = False
         counter = 0
         while not connected and counter < 5:
+            # Retrying the connection in case the database is not yet ready
             try:
                 self.try_connect()
                 connected = True
-            except mariadb.Error as e:
+            except mariadb.Error:
                 counter += 1
                 logger.warning(f"Retrying connection in {counter*2} seconds")
                 sleep(counter*2)
@@ -91,7 +92,7 @@ class DatabaseConnector:
             self.con.commit()
             return self.cursor.rowcount
         except mariadb.Error as e:
-            logger.error(f"Error while trying to insert a new transaction: {e}")
+            logger.error(f"Error while trying to update the transaction {message} to {verified}: {e}")
             raise e
 
     def is_unverified_transaction(self, message):

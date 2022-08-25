@@ -1,11 +1,9 @@
-import re
-import traceback
-from datetime import datetime
-import logging
 import json
+import logging
 import os
 import sys
 import time
+from datetime import datetime
 from os.path import exists
 
 import discord
@@ -17,7 +15,7 @@ from dotenv import load_dotenv
 
 import classes
 import sheet
-from classes import AccountingView, get_embeds, InduRoleMenu, MenuShortcut
+from classes import AccountingView, Transaction, get_embeds, InduRoleMenu, MenuShortcut
 from database import DatabaseConnector
 from discordLogger import PycordHandler
 
@@ -105,7 +103,9 @@ sheet.setup_sheet(config["google_sheet"])
 
 logging.info("Starting up bot...")
 intents = discord.Intents.default()
+# noinspection PyUnresolvedReferences,PyDunderSlots
 intents.message_content = True
+# noinspection PyUnresolvedReferences,PyDunderSlots
 intents.reactions = True
 bot = commands.Bot(command_prefix="§", intents=intents, debug_guilds=[582649395149799491, GUILD])
 
@@ -140,6 +140,8 @@ async def on_command_error(ctx, error):
 @bot.event
 async def on_ready():
     logging.info("Logged in!")
+
+    # Basic setup
     if MENU_CHANNEL == -1:
         return
     if LOG_CHANNEL != -1:
@@ -149,9 +151,12 @@ async def on_ready():
     accounting_log = await bot.fetch_channel(ACCOUNTING_LOG)
     msg = await channel.fetch_message(MENU_MESSAGE)
     ctx = await bot.get_context(message=msg)
-    await msg.edit(view=AccountingView(ctx=ctx),
+
+    # Updating View on the menu message
+    await msg.edit(view=AccountingView(),
                    embeds=get_embeds(), content="")
-    activity = discord.Activity(name="IAK-JW", type=ActivityType.competing)
+
+    # Updating shortcut menus
     shortcuts = connector.get_shortcuts()
     logging.info(f"Found {len(shortcuts)} shortcut menus")
     for (m, c) in shortcuts:
@@ -160,51 +165,62 @@ async def on_ready():
             chan = bot.fetch_channel(c)
         try:
             msg = await chan.fetch_message(m)
-            await msg.edit(view=AccountingView(ctx=ctx),
+            await msg.edit(view=AccountingView(),
                            embed=MenuShortcut(), content="")
         except discord.errors.NotFound as ignored:
             logging.warning(f"Message {m} in channel {c} not found, deleting it from DB")
             connector.delete_shortcut(m)
+
+    # Basic setup completed
+    activity = discord.Activity(name="IAK-JW", type=ActivityType.competing)
     await bot.change_presence(status=discord.Status.online, activity=activity)
+
+    # Updating unverified accountinglog entries
     logging.info("Setting up unverified accounting log entries")
     unverified = connector.get_unverified()
     logging.info(f"Found {len(unverified)} unverified message(s)")
     for m in unverified:
         try:
             msg = await accounting_log.fetch_message(m)
-        except discord.errors.NotFound as ignored:
-            msg = None
-        if msg is not None:
-            if msg.content.startswith("Verifiziert von"):
-                logging.warning(f"Transaction already verified bot not inside database: {msg.id}: {msg.content}")
-                connector.set_verification(m, 1)
-            else:
-                v = False
-                user = None
-                for r in msg.reactions:
-                    emoji = r.emoji
-                    if isinstance(emoji, str):
-                        name = emoji
-                    else:
-                        name = emoji.name
-                    if name == "✅":
-                        users = await r.users().flatten()
-                        for u in users:
-                            if u.id in ADMINS:
-                                v = True
-                                user = u.id
-                                break
-                        break
-                if v:
-                    try:
-                        await save_embeds(msg, user)
-                    except mariadb.Error as e:
-                        pass
-                    await msg.edit(view=None)
-                else:
-                    await msg.edit(view=classes.TransactionView(bot))
-        else:
+        except discord.errors.NotFound:
             connector.delete(m)
+            continue
+        if msg.content.startswith("Verifiziert von"):
+            logging.warning(f"Transaction already verified but not inside database: {msg.id}: {msg.content}")
+            connector.set_verification(m, 1)
+            continue
+        v = False  # Was transaction verified while the bot was offline?
+        user = None  # User ID who verified the message
+        # Checking all the reactions below the message
+        for r in msg.reactions:
+            emoji = r.emoji
+            if isinstance(emoji, str):
+                name = emoji
+            else:
+                name = emoji.name
+            if name != "✅":
+                continue
+            users = await r.users().flatten()
+            for u in users:
+                if u.id in ADMINS:
+                    # User is admin, the transaction is therefore verified
+                    v = True
+                    user = u.id
+                    break
+            break
+        if v:
+            # Message was verified
+            try:
+                # Saving transaction to google sheet
+                await save_embeds(msg, user)
+            except mariadb.Error as e:
+                pass
+            # Removing the View
+            await msg.edit(view=None)
+        else:
+            # Updating the message View, so it can be used by the users
+            await msg.edit(view=classes.TransactionView())
+    # Setup completed
     logging.info("Setup complete.")
 
 
@@ -214,77 +230,61 @@ async def on_message(message):
 
 
 async def save_embeds(msg, user_id):
-    if len(msg.embeds) > 0:
-        embed = msg.embeds[0]
-        t = embed.timestamp
-        amount = -1
-        purpose = ""
-        reference = ""
-        u_from = ""
-        u_to = ""
-        t_type = -1
-        if embed.title.casefold() == "Transfer".casefold():
-            t_type = 0
-        elif embed.title.casefold() == "Einzahlen".casefold():
-            t_type = 1
-        elif embed.title.casefold() == "Auszahlen".casefold():
-            t_type = 2
-        for field in embed.fields:
-            name = field.name.casefold()
-            if name == "Menge:".casefold():
-                amount = int(re.sub(r"[,a-zA-Z]", "", field.value))
-            elif name == "Verwendungszweck:".casefold():
-                purpose = field.value.strip()
-            elif name == "Referenz:".casefold():
-                reference = field.value.strip()
-            elif name == "Von:".casefold():
-                u_from = field.value.strip()
-            elif name == "Zu:".casefold():
-                u_to = field.value.strip()
-            elif name == "Konto:".casefold():
-                if t_type == 1:
-                    u_to = field.value.strip()
-                elif t_type == 2:
-                    u_from = field.value.strip()
-        if amount == -1 or (not u_from and not u_to) or not purpose:
-            logging.error(
-                f"Invalid embed in message {msg.id}! Can't parse transaction data: timestamp: {t} amount: {amount} purpose: {purpose} from: {u_from} to: {u_to} type: {t_type}")
-        else:
-            if t_type == -1:
-                logging.warning(f"Invalid embed in message {msg.id}! Can't detect type: {t_type}, title: {embed.title}")
-            time_formatted = t.astimezone(pytz.timezone("Europe/Berlin")).strftime("%d.%m.%Y %H:%M")
-            sheet.add_transaction(time_formatted, u_from, u_to,
-                                  amount, purpose, reference)
-            user = await bot.get_or_fetch_user(user_id)
-            logging.info(f"Verified transaction {msg.id} ({time_formatted}. Verified by {user.name} ({user.id}).")
-            connector.set_verification(msg.id, verified=1)
-            await msg.edit(content=f"Verifiziert von {user.name}", view=None)
-    else:
-        pass
+    """
+    Saves a transaction to the sheet
+
+    :param msg:
+    :param user_id:
+    """
+    if len(msg.embeds) == 0:
+        return
+    elif len(msg.embeds) > 1:
+        logging.warning(f"Message {msg.id} has more than one embed ({msg.embeds})!")
+    # Getting embed of the message, should contain only one
+    embed = msg.embeds[0]
+    # Convert embed to Transaction
+    transaction = Transaction.from_embed(embed)
+    # Check if transaction is valid
+    if transaction.amount is None or (not transaction.name_from and not transaction.name_to) or not transaction.purpose:
+        logging.error(f"Invalid embed in message {msg.id}! Can't parse transaction data: {transaction}")
+        return
+    time_formatted = transaction.timestamp.astimezone(pytz.timezone("Europe/Berlin")).strftime("%d.%m.%Y %H:%M")
+    # Save transaction to sheet
+    sheet.add_transaction(transaction=transaction)
+    user = await bot.get_or_fetch_user(user_id)
+    logging.info(f"Verified transaction {msg.id} ({time_formatted}. Verified by {user.name} ({user.id}).")
+    # Set message as verified
+    connector.set_verification(msg.id, verified=1)
+    await msg.edit(content=f"Verifiziert von {user.name}", view=None)
 
 
 @bot.event
 async def on_raw_reaction_add(reaction):
     if reaction.emoji.name == "✅" and reaction.channel_id == ACCOUNTING_LOG and reaction.user_id in ADMINS:
-        res = connector.is_unverified_transaction(message=reaction.message_id)
-        if res is None:
+        is_verified = connector.is_unverified_transaction(message=reaction.message_id)
+        if is_verified is None:
             return
-        if res:
-            channel = bot.get_channel(ACCOUNTING_LOG)
-            msg = await channel.fetch_message(reaction.message_id)
-            if msg.content.startswith("Verifiziert von"):
-                author = await bot.get_or_fetch_user(reaction.user_id)
-                await author.send(content="Hinweis: Diese Transaktion wurde bereits verifiziert, sie wurde nicht "
-                                          "erneut im Sheet eingetragen. Bitte trage sie selbstständig ein, falls "
-                                          "dies nötig ist.")
-                return
-            else:
-                await save_embeds(msg, reaction.user_id)
-        else:
+        if not is_verified:
+            # Message is already verified
             author = await bot.get_or_fetch_user(reaction.user_id)
             await author.send(content="Hinweis: Diese Transaktion wurde bereits verifiziert, sie wurde nicht "
                                       "erneut im Sheet eingetragen. Bitte trage sie selbstständig ein, falls "
                                       "dies nötig ist.")
+            return
+        # Message is not verified
+        channel = bot.get_channel(ACCOUNTING_LOG)
+        msg = await channel.fetch_message(reaction.message_id)
+        if msg.content.startswith("Verifiziert von"):
+            # Message was already verified, but due to an Error it got not updated in the SQL DB
+            author = await bot.get_or_fetch_user(reaction.user_id)
+            await author.send(content="Hinweis: Diese Transaktion wurde bereits verifiziert, sie wurde nicht "
+                                      "erneut im Sheet eingetragen. Bitte trage sie selbstständig ein, falls "
+                                      "dies nötig ist.")
+            connector.set_verification(msg.id, True)
+            return
+        else:
+            # Save transaction
+            await save_embeds(msg, reaction.user_id)
 
 
 @bot.event
@@ -300,44 +300,49 @@ async def setup(ctx):
     if ctx.guild is None:
         logging.info("Command was send via DM!")
         await ctx.respond("Can only be executed inside a guild")
-    elif ctx.guild.id == GUILD or ctx.author.id == OWNER:
-        if ctx.author.guild_permissions.administrator or ctx.author.id in ADMINS or ctx.author.id == OWNER:
-            logging.info("User verified, starting setup...")
-            view = AccountingView(ctx=ctx)
-            msg = await ctx.send(view=view, embeds=get_embeds())
-            logging.info("Send menu message with id " + str(msg.id))
-            MENU_MESSAGE = msg.id
-            MENU_CHANNEL = ctx.channel.id
-            GUILD = ctx.guild.id
-            save_config()
-            logging.info("Setup completed.")
-            await ctx.respond("Saved config", ephemeral=True)
-        else:
-            logging.info("Missing perms!")
-            await ctx.respond("Missing permissions", ephemeral=True)
-    else:
+        return
+    if ctx.guild.id != GUILD and ctx.author.id != OWNER:
         logging.info("Wrong server!")
         await ctx.respond("Wrong server", ephemeral=True)
+        return
+
+    if ctx.author.guild_permissions.administrator or ctx.author.id in ADMINS or ctx.author.id == OWNER:
+        # Running setup
+        logging.info("User verified, starting setup...")
+        view = AccountingView()
+        msg = await ctx.send(view=view, embeds=get_embeds())
+        logging.info("Send menu message with id " + str(msg.id))
+        MENU_MESSAGE = msg.id
+        MENU_CHANNEL = ctx.channel.id
+        GUILD = ctx.guild.id
+        save_config()
+        logging.info("Setup completed.")
+        await ctx.respond("Saved config", ephemeral=True)
+    else:
+        logging.info(f"User {ctx.author.id} is missing permissions to run the setup command")
+        await ctx.respond("Missing permissions", ephemeral=True)
 
 
+# noinspection SpellCheckingInspection
 @bot.slash_command(description="Creates a new shortcut menu containing all buttons.")
 async def createshortcut(ctx):
     global MENU_MESSAGE, MENU_CHANNEL, GUILD
     if ctx.guild is None:
         await ctx.respond("Can only be executed inside a guild")
-    elif ctx.guild.id == GUILD or ctx.author.id == OWNER:
-        logging.info("Create shortcut command called by " + str(ctx.author.id))
-        if ctx.author.guild_permissions.administrator or ctx.author.id in ADMINS or ctx.author.id == OWNER:
-            view = AccountingView(ctx=ctx)
-            msg = await ctx.send(view=view, embed=MenuShortcut())
-            connector.add_shortcut(msg.id, ctx.channel.id)
-            await ctx.respond("Shortcut menu posted", ephemeral=True)
-        else:
-            logging.info("Missing perms!")
-            await ctx.respond("Missing permissions", ephemeral=True)
-    else:
+        return
+    if ctx.guild.id != GUILD and ctx.author.id != OWNER:
         logging.info("Wrong server!")
         await ctx.respond("Wrong server", ephemeral=True)
+        return
+
+    if ctx.author.guild_permissions.administrator or ctx.author.id in ADMINS or ctx.author.id == OWNER:
+        view = AccountingView()
+        msg = await ctx.send(view=view, embed=MenuShortcut())
+        connector.add_shortcut(msg.id, ctx.channel.id)
+        await ctx.respond("Shortcut menu posted", ephemeral=True)
+    else:
+        logging.info(f"User {ctx.author.id} is missing permissions to run the createshortcut command")
+        await ctx.respond("Missing permissions", ephemeral=True)
 
 
 # noinspection SpellCheckingInspection
@@ -348,21 +353,24 @@ async def setlogchannel(ctx):
     if ctx.guild is None:
         logging.info("Command was send via DM!")
         await ctx.send("Only available inside a guild")
-    elif ctx.guild.id == GUILD:
-        if ctx.author.id == OWNER or ctx.author.guild_permissions.administrator:
-            logging.info("User Verified. Setting up channel...")
-            ACCOUNTING_LOG = ctx.channel.id
-            save_config()
-            logging.info("Channel changed!")
-            await ctx.send("Log channel set to this channel (" + str(ACCOUNTING_LOG) + ")")
-        else:
-            logging.info("Missing perms!")
-            await ctx.send("Missing permissions")
-    else:
+        return
+    if ctx.guild.id != GUILD:
         logging.info("Wrong server!")
         await ctx.send("Can only used inside the defined discord server")
+        return
+
+    if ctx.author.id == OWNER or ctx.author.guild_permissions.administrator:
+        logging.info("User Verified. Setting up channel...")
+        ACCOUNTING_LOG = ctx.channel.id
+        save_config()
+        logging.info("Channel changed!")
+        await ctx.send("Log channel set to this channel (" + str(ACCOUNTING_LOG) + ")")
+    else:
+        logging.info(f"User {ctx.author.id} is missing permissions to run the setlogchannel command")
+        await ctx.send("Missing permissions")
 
 
+# noinspection SpellCheckingInspection
 @bot.slash_command(description="Posts a menu with all available manufacturing roles.")
 async def indumenu(ctx, msg: Option(str, "Message ID", required=False, default=None)):
     if msg is None:
@@ -389,6 +397,9 @@ async def stop(ctx):
 
 
 def save_config():
+    """
+    Saves the config
+    """
     logging.warning("Saving config...")
     global outfile
     config["server"] = GUILD

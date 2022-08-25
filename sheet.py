@@ -1,10 +1,9 @@
-import difflib
 import json
 import logging
-import os
 from os.path import exists
 
 import gspread
+import pytz
 from gspread.utils import ValueRenderOption
 
 logger = logging.getLogger(__name__)
@@ -26,12 +25,11 @@ def load_config():
     if exists("user_overwrites.json"):
         with open("user_overwrites.json") as json_file:
             overwrites = json.load(json_file)
-
     else:
         config = {}
         with open("user_overwrites.json", "w") as outfile:
             json.dump(config, outfile, indent=4)
-            logging.warning("ERROR: User overwrite config not found, created new one.")
+            logging.warning("User overwrite config not found, created new one.")
 
 
 def setup_sheet(sheet_id):
@@ -55,12 +53,25 @@ def setup_sheet(sheet_id):
             users.append(u_2)
 
 
-def add_transaction(time: str, user_f: str, user_t: str, amount: int, purpose: str, reference: str):
+def add_transaction(transaction):
+    if transaction is None:
+        return
+    # Get data from transaction
+    user_f = transaction.name_from if transaction.name_from is not None else ""
+    user_t = transaction.name_to if transaction.name_to is not None else ""
+    time = transaction.timestamp.astimezone(pytz.timezone("Europe/Berlin")).strftime("%d.%m.%Y %H:%M")
+    amount = transaction.amount
+    purpose = transaction.purpose if transaction.purpose is not None else ""
+    reference = transaction.reference if transaction.reference is not None else ""
+
+    # Applying custom username overwrites
     overwrite_f = overwrites.get(user_f, None)
     if overwrite_f is not None:
         user_f = overwrite_f
     overwrite_t = overwrites.get(user_t, None)
     if overwrite_t is not None:
         user_t = overwrite_t
+
+    # Saving the data
     logger.info(f"Saving row [{time}; {user_f}; {user_t}; {amount}; {purpose}; {reference}]")
     wkLog.append_row([time, user_f, user_t, amount, purpose, reference], value_input_option="USER_ENTERED")
