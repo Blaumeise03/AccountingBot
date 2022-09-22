@@ -15,7 +15,7 @@ from dotenv import load_dotenv
 
 import classes
 import sheet
-from classes import AccountingView, Transaction, get_embeds, InduRoleMenu, MenuShortcut
+from classes import AccountingView, Transaction, get_menu_embeds
 from database import DatabaseConnector
 from discordLogger import PycordHandler
 
@@ -53,6 +53,7 @@ MENU_CHANNEL = -1
 LOG_CHANNEL = -1
 OWNER = -1
 ADMINS = []
+PREFIX = "§"
 
 # loading json config
 logging.info("Loading JSON Config...")
@@ -70,6 +71,7 @@ if exists("config.json"):
         ADMINS = config["admins"]
         OWNER = config["owner"]
         LOG_CHANNEL = config["errorLogChannel"]
+        PREFIX = config["prefix"]
 else:
     config = {
         "server": -1,
@@ -85,6 +87,7 @@ else:
         "db_host": "localhost",
         "db_name": "accountingBot",
         "google_sheet": "SHEET_ID",
+        "prefix": "§"
     }
     with open("config.json", "w") as outfile:
         json.dump(config, outfile, indent=4)
@@ -107,7 +110,7 @@ intents = discord.Intents.default()
 intents.message_content = True
 # noinspection PyUnresolvedReferences,PyDunderSlots
 intents.reactions = True
-bot = commands.Bot(command_prefix="§", intents=intents, debug_guilds=[582649395149799491, GUILD])
+bot = commands.Bot(command_prefix=PREFIX, intents=intents, debug_guilds=[582649395149799491, GUILD])
 
 classes.set_up(connector, ADMINS, bot, ACCOUNTING_LOG, GUILD)
 
@@ -154,7 +157,7 @@ async def on_ready():
 
     # Updating View on the menu message
     await msg.edit(view=AccountingView(),
-                   embeds=get_embeds(), content="")
+                   embeds=get_menu_embeds(), content="")
 
     # Updating shortcut menus
     shortcuts = connector.get_shortcuts()
@@ -166,7 +169,7 @@ async def on_ready():
         try:
             msg = await chan.fetch_message(m)
             await msg.edit(view=AccountingView(),
-                           embed=MenuShortcut(), content="")
+                           embed=classes.EMBED_MENU_SHORTCUT, content="")
         except discord.errors.NotFound as ignored:
             logging.warning(f"Message {m} in channel {c} not found, deleting it from DB")
             connector.delete_shortcut(m)
@@ -310,7 +313,7 @@ async def setup(ctx):
         # Running setup
         logging.info("User verified, starting setup...")
         view = AccountingView()
-        msg = await ctx.send(view=view, embeds=get_embeds())
+        msg = await ctx.send(view=view, embeds=get_menu_embeds())
         logging.info("Send menu message with id " + str(msg.id))
         MENU_MESSAGE = msg.id
         MENU_CHANNEL = ctx.channel.id
@@ -337,7 +340,7 @@ async def createshortcut(ctx):
 
     if ctx.author.guild_permissions.administrator or ctx.author.id in ADMINS or ctx.author.id == OWNER:
         view = AccountingView()
-        msg = await ctx.send(view=view, embed=MenuShortcut())
+        msg = await ctx.send(view=view, embed=classes.EMBED_MENU_SHORTCUT)
         connector.add_shortcut(msg.id, ctx.channel.id)
         await ctx.respond("Shortcut menu posted", ephemeral=True)
     else:
@@ -346,17 +349,17 @@ async def createshortcut(ctx):
 
 
 # noinspection SpellCheckingInspection
-@bot.command(description="Sets the current channel as the accounting log channel.")
+@bot.slash_command(description="Sets the current channel as the accounting log channel.")
 async def setlogchannel(ctx):
     global ACCOUNTING_LOG
     logging.info("SetLogChannel command received.")
     if ctx.guild is None:
         logging.info("Command was send via DM!")
-        await ctx.send("Only available inside a guild")
+        await ctx.respond("Only available inside a guild")
         return
     if ctx.guild.id != GUILD:
         logging.info("Wrong server!")
-        await ctx.send("Can only used inside the defined discord server")
+        await ctx.respond("Can only used inside the defined discord server", ephemeral=True)
         return
 
     if ctx.author.id == OWNER or ctx.author.guild_permissions.administrator:
@@ -364,10 +367,10 @@ async def setlogchannel(ctx):
         ACCOUNTING_LOG = ctx.channel.id
         save_config()
         logging.info("Channel changed!")
-        await ctx.send("Log channel set to this channel (" + str(ACCOUNTING_LOG) + ")")
+        await ctx.respond("Log channel set to this channel (" + str(ACCOUNTING_LOG) + ")")
     else:
         logging.info(f"User {ctx.author.id} is missing permissions to run the setlogchannel command")
-        await ctx.send("Missing permissions")
+        await ctx.respond("Missing permissions", ephemeral=True)
 
 
 # noinspection SpellCheckingInspection
@@ -375,25 +378,25 @@ async def setlogchannel(ctx):
 async def indumenu(ctx, msg: Option(str, "Message ID", required=False, default=None)):
     if msg is None:
         logging.info("Sending role menu...")
-        await ctx.send(embeds=[InduRoleMenu()])
+        await ctx.send(embeds=[classes.EMBED_INDU_MENU])
         await ctx.respond("Neues Menü gesendet.", ephemeral=True)
     else:
         logging.info("Updating role menu " + str(msg))
         msg = await ctx.channel.fetch_message(int(msg))
-        await msg.edit(embeds=[InduRoleMenu()])
+        await msg.edit(embeds=[classes.EMBED_INDU_MENU])
         await ctx.respond("Menü geupdated.", ephemeral=True)
 
 
-@bot.command()
+@bot.slash_command(description="Shuts down the discord bot, if set up properly, it will restart.")
 async def stop(ctx):
     if ctx.author.id == OWNER:
         logging.critical("Shutdown Command received, shutting down bot in 10 seconds")
-        await ctx.send("Bot wird in 10 Sekunden gestoppt...")
+        await ctx.respond("Bot wird in 10 Sekunden gestoppt...")
         connector.con.close()
         time.sleep(10)
         exit(0)
     else:
-        await ctx.send("Fehler! Berechtigungen fehlen...")
+        await ctx.respond("Fehler! Berechtigungen fehlen.", ephemeral=True)
 
 
 def save_config():

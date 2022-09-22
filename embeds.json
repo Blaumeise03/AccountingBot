@@ -1,0 +1,87 @@
+{
+  "MenuEmbedInternal": {
+    "fields": [
+      {
+        "name": "Interner Handel",
+        "value": "F\u00fcr Handel zwischen zwei Spielern bitte \"Transfer\" verwenden. Nicht zu verwechseln mit dem Ingame Missionsbetreff \"Transfer\", welche f\u00fcr den Transfer von ISK zwischen Twinks gedacht ist. Zum Ein/Auszahlen bitte den jeweiligen Knopf nutzen.\n\n",
+        "inline": false
+      },
+      {
+        "name": "Hinweis",
+        "value": "Die Zahl entweder als reine Zahl (z.B.\"1000000\") oder im Format \"1,000,000.00 ISK\" oder \u00e4hnlich eingeben. Kommas werden als Tausender-Seperator erkannt, Buchstaben werden gel\u00f6scht.",
+        "inline": false
+      },
+      {
+        "name": "Referenzfeld",
+        "value": "Dieses Feld ist **optional**, also einfach leer lassen. Bitte, bitte keine Platzhalter wie Bindestriche, Schr\u00e4gstriche usw. eintragen, sonst m\u00fcssen wir das manuell aus dem Sheet entfernen. Aktuell ist das nur f\u00fcr VCB Vertragslinks gedacht/ben\u00f6tigt.",
+        "inline": false
+      },
+      {
+        "name": "Graue Kn\u00f6pfe",
+        "value": "Die grauen Kn\u00f6pfe bitte einfach ignorieren, diejenigen die diese dr\u00fccken sollen wissen das. Alle anderen k\u00f6nnen damit wenig/nichts anfangen.",
+        "inline": false
+      }
+    ],
+    "color": 15158332,
+    "type": "rich",
+    "title": "Allgemein"
+  },
+  "MenuEmbedExternal": {
+    "fields": [
+      {
+        "name": "VC-Vertr\u00e4ge",
+        "value": "Wenn ihr \u00fcber VOID gehandelt habt, bitte ebenfalls die \"Einzahlen/Auszahlen\"-Kn\u00f6pfe nehmen. Wenn ihr VC erhalten habt (z.B. SRP) \"Einzahlen\", wenn ihr VC ausgegeben habt (z.B. Shipyard Kauf) \"Auszahlen\"\n\nDen Vertragslink bitte im Feld \"**Referenz**\" eintragen.\n\nDen **Verwendungszweck** bitte \u00e4ndern, dort also z.B. anstatt \"Einzahlung Accounting\" \"**Void SRP**\" eintragen.",
+        "inline": false
+      }
+    ],
+    "color": 15158332,
+    "type": "rich",
+    "title": "VoidCoins"
+  },
+  "MenuEmbedVCB": {
+    "fields": [
+      {
+        "name": "Link",
+        "value": "https://voidcoin.app/pilot/1421",
+        "inline": true
+      },
+      {
+        "name": "Kontoname",
+        "value": "[V2] Massive Dynamic LLC",
+        "inline": true
+      }
+    ],
+    "color": 15158332,
+    "type": "rich",
+    "title": "VCB Kontodaten"
+  },
+  "MenuShortcut": {
+    "fields": [
+      {
+        "name": "Hinweise",
+        "value": "Transfer zum Handel zwischen Spielern, Ein/Auszahlen zum Ein- und Auszahlen. Das Referenzfeld ist optional.",
+        "inline": false
+      }
+    ],
+    "color": 15158332,
+    "type": "rich",
+    "title": "Schnellzugriff"
+  },
+  "InduRoleMenu": {
+    "fields": [
+      {
+        "name": "Schiffbauskills",
+        "value": "<:Frigate:974611741633806376> Frigates\n<:Destroyer:974611810453958699> Destroyer\n<:Cruiser:974611846566936576> Cruiser\n<:BC:974611889982173193> Battlecruiser\n<:BS:974611977626329139> Battleship\n<:Industrial:974612368061517824> Industrial\n",
+        "inline": true
+      },
+      {
+        "name": "Sonstiges",
+        "value": ":regional_indicator_n: Nanocores\n:regional_indicator_b: B-Type Module\n:regional_indicator_f: Schiff-(Fitting)-Service",
+        "inline": true
+      }
+    ],
+    "color": 3066993,
+    "type": "rich",
+    "title": "Industrierollen"
+  }
+}

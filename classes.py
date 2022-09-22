@@ -1,4 +1,5 @@
 import difflib
+import json
 import logging
 import re
 from datetime import datetime
@@ -14,9 +15,16 @@ from discord.ui import Modal, View, InputText
 import sheet
 from database import DatabaseConnector
 
+logger = logging.getLogger(__name__)
+
 BOT = None  # type: discord.ext.commands.bot.Bot | None
 ACCOUNTING_LOG = None  # type: int | None
 SERVER = None  # type: int | None
+EMBED_MENU_INTERNAL = None  # type: Embed | None
+EMBED_MENU_EXTERNAL = None  # type: Embed | None
+EMBED_MENU_VCB = None  # type: Embed | None
+EMBED_MENU_SHORTCUT = None  # type: Embed | None
+EMBED_INDU_MENU = None  # type: Embed | None
 
 connector = None  # type: DatabaseConnector | None
 
@@ -37,11 +45,29 @@ def set_up(new_connector: DatabaseConnector,
     :param server: the id of the server
     """
     global connector, admins, BOT, ACCOUNTING_LOG, SERVER
+    global EMBED_MENU_INTERNAL, EMBED_MENU_EXTERNAL, EMBED_MENU_VCB, EMBED_MENU_SHORTCUT, EMBED_INDU_MENU
     connector = new_connector
     admins = new_admins
     BOT = bot
     ACCOUNTING_LOG = acc_log
     SERVER = server
+    logger.info("Loading embed config...")
+    with open("embeds.json", "r") as embed_file:
+        embeds = json.load(embed_file)
+        EMBED_MENU_INTERNAL = Embed.from_dict(embeds["MenuEmbedInternal"])
+        EMBED_MENU_EXTERNAL = Embed.from_dict(embeds["MenuEmbedExternal"])
+        EMBED_MENU_VCB = Embed.from_dict(embeds["MenuEmbedVCB"])
+        EMBED_MENU_SHORTCUT = Embed.from_dict(embeds["MenuShortcut"])
+        EMBED_INDU_MENU = Embed.from_dict(embeds["InduRoleMenu"])
+        logger.info("Embeds loaded.")
+
+
+def get_menu_embeds():
+    return [
+        EMBED_MENU_INTERNAL,
+        EMBED_MENU_EXTERNAL,
+        EMBED_MENU_VCB
+    ]
 
 
 def get_current_time() -> str:
@@ -178,7 +204,7 @@ class Transaction:
         """
         transaction_type = self.detect_type()
         if transaction_type < 0:
-            logging.error(f"Unexpected transaction type: {transaction_type}")
+            logger.error(f"Unexpected transaction type: {transaction_type}")
         embed = Embed(title=Transaction.NAMES[transaction_type],
                       color=Transaction.COLORS[transaction_type],
                       timestamp=datetime.now())
@@ -332,7 +358,7 @@ class AccountingView(View):
         await interaction.response.send_message(msg, ephemeral=True)
 
     async def on_error(self, error: Exception, item, interaction):
-        logging.exception(f"Error in AccountingView: {error}")
+        logger.exception(f"Error in AccountingView: {error}")
         await send_exception(error, interaction)
 
 
@@ -366,7 +392,7 @@ class TransactionView(View):
             await interaction.response.send_message("Bereits verifiziert!", ephemeral=True)
 
     async def on_error(self, error: Exception, item, interaction):
-        logging.exception(f"Error in TransactionView: {error}", error)
+        logger.exception(f"Error in TransactionView: {error}", error)
         await send_exception(error, interaction)
 
 
@@ -374,12 +400,12 @@ class ConfirmView(View):
     def __init__(self):
         super().__init__(timeout=None)
 
-    @discord.ui.button(label="Ja", style=discord.ButtonStyle.green)
+    @discord.ui.button(label="Senden", style=discord.ButtonStyle.green)
     async def btn_confirm_callback(self, button, interaction):
         await send_transaction(interaction.message.embeds, interaction)
 
     async def on_error(self, error: Exception, item, interaction):
-        logging.error(f"Error in ConfirmView: {error}", error)
+        logger.error(f"Error in ConfirmView: {error}", error)
         await send_exception(error, interaction)
 
 
@@ -394,7 +420,7 @@ class ConfirmEditView(View):
         await interaction.response.send_message("Transaktion bearbeitet!", ephemeral=True)
 
     async def on_error(self, error: Exception, item, interaction):
-        logging.error(f"Error in ConfirmEditView: {error}", error)
+        logger.error(f"Error in ConfirmEditView: {error}", error)
         await send_exception(error, interaction)
 
 
@@ -435,7 +461,7 @@ class TransferModal(Modal):
         await send_transaction([transaction.create_embed()], interaction, warnings)
 
     async def on_error(self, error: Exception, interaction: Interaction) -> None:
-        logging.error(f"Error on Transfer Modal: {error}", error)
+        logger.error(f"Error on Transfer Modal: {error}", error)
         await send_exception(error, interaction)
 
 
@@ -540,75 +566,5 @@ class ShipyardModal(Modal):
             await send_transaction(embeds, interaction, "")
 
     async def on_error(self, error: Exception, interaction: Interaction) -> None:
-        logging.error(f"Error on Shipyard Modal: {error}", error)
+        logger.error(f"Error on Shipyard Modal: {error}", error)
         await send_exception(error, interaction)
-
-
-class MenuEmbedInternal(Embed):
-    def __init__(self):
-        super().__init__(color=Colour.red(), title="Allgemein")
-        self.add_field(name="Interner Handel", inline=False,
-                       value="Für Handel zwischen zwei Spielern bitte \"Transfer\" verwenden. Nicht zu verwechseln mit "
-                             "dem Ingame Missionsbetreff \"Transfer\", welche für den Transfer von ISK zwischen Twinks "
-                             "gedacht ist. Zum Ein/Auszahlen bitte den jeweiligen Knopf nutzen.\n\n")
-        self.add_field(name="Hinweis", inline=False,
-                       value="Die Zahl entweder als reine Zahl (z.B.\"1000000\") oder im Format "
-                             "\"1,000,000.00 ISK\" oder ähnlich eingeben. Kommas werden als Tausender-Seperator "
-                             "erkannt, Buchstaben werden gelöscht.")
-        self.add_field(name="Referenzfeld", inline=False,
-                       value="Dieses Feld ist **optional**, also einfach leer lassen. Bitte, bitte keine Platzhalter "
-                             "wie Bindestriche, Schrägstriche usw. eintragen, sonst müssen wir das manuell aus dem "
-                             "Sheet entfernen. Aktuell ist das nur für VCB "
-                             "Vertragslinks gedacht/benötigt.")
-        self.add_field(name="Graue Knöpfe", inline=False,
-                       value="Die grauen Knöpfe bitte einfach ignorieren, diejenigen die diese drücken sollen wissen "
-                             "das. Alle anderen können damit wenig/nichts anfangen.")
-
-
-class MenuEmbedExternal(Embed):
-    def __init__(self):
-        super().__init__(color=Colour.red(), title="VoidCoins")
-        self.add_field(name="VC-Verträge", inline=False,
-                       value="Wenn ihr über VOID gehandelt habt, bitte ebenfalls die "
-                             "\"Einzahlen/Auszahlen\"-Knöpfe nehmen. Wenn ihr VC erhalten habt (z.B. SRP) "
-                             "\"Einzahlen\", wenn ihr VC ausgegeben habt (z.B. Shipyard Kauf) \"Auszahlen\"\n\n"
-                             "Den Vertragslink bitte im Feld \"**Referenz**\" eintragen."
-                       )
-
-
-class MenuEmbedVCB(Embed):
-    def __init__(self):
-        super().__init__(color=Colour.red(), title="VCB Kontodaten")
-        self.add_field(name="Link", value="https://voidcoin.app/pilot/1421", inline=True)
-        self.add_field(name="Kontoname", value="[V2] Massive Dynamic LLC", inline=True)
-
-
-class MenuShortcut(Embed):
-    def __init__(self):
-        super().__init__(color=Colour.red(), title="Schnellzugriff")
-        self.add_field(name="Hinweise", inline=False,
-                       value="Transfer zum Handel zwischen Spielern, Ein/Auszahlen zum Ein- und Auszahlen. Das "
-                             "Referenzfeld ist optional.")
-
-
-class InduRoleMenu(Embed):
-    def __init__(self):
-        super().__init__(color=Colour.green(), title="Industrierollen")
-        self.add_field(name="Schiffbauskills", value="<:Frigate:974611741633806376> Frigates\n"
-                                                     "<:Destroyer:974611810453958699> Destroyer\n"
-                                                     "<:Cruiser:974611846566936576> Cruiser\n"
-                                                     "<:BC:974611889982173193> Battlecruiser\n"
-                                                     "<:BS:974611977626329139> Battleship\n"
-                                                     "<:Industrial:974612368061517824> Industrial\n", inline=True)
-        self.add_field(name="Sonstiges", value=":regional_indicator_n: Nanocores\n"
-                                               ":regional_indicator_b: B-Type Module\n"
-                                               # "<:Freighter:974612564707274752> Hauling-Service\n"
-                                               ":regional_indicator_f: Schiff-(Fitting)-Service")
-
-
-def get_embeds():
-    return [
-        MenuEmbedInternal(),
-        MenuEmbedExternal(),
-        MenuEmbedVCB()
-    ]

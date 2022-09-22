@@ -25,11 +25,12 @@ def load_config():
     if exists("user_overwrites.json"):
         with open("user_overwrites.json") as json_file:
             overwrites = json.load(json_file)
+        logger.info("User overwrite config loaded.")
     else:
         config = {}
         with open("user_overwrites.json", "w") as outfile:
             json.dump(config, outfile, indent=4)
-            logging.warning("User overwrite config not found, created new one.")
+            logger.warning("User overwrite config not found, created new one.")
 
 
 def setup_sheet(sheet_id):
