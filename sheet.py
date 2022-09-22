@@ -19,6 +19,10 @@ wkLog = None  # type: gspread.worksheet.Worksheet | None
 users = []
 overwrites = {}
 
+MEMBERS_AREA = "A4:K"      # The area of the member list
+MEMBERS_NAME_INDEX = 0     # The column index of the name
+MEMBERS_ACTIVE_INDEX = 10  # The column index of the "active" column
+
 
 def load_config():
     global overwrites
@@ -42,10 +46,10 @@ def setup_sheet(sheet_id):
     sheet = account.open_by_key(sheet_id)
     wkAccounting = sheet.worksheet("Accounting")
     wkLog = sheet.worksheet("Accounting Log")
-    user_raw = wkAccounting.get("A4:K", value_render_option=ValueRenderOption.unformatted)
+    user_raw = wkAccounting.get(MEMBERS_AREA, value_render_option=ValueRenderOption.unformatted)
     for u in user_raw:
-        if len(u) >= 11 and u[10]:
-            users.append(u[0])
+        if len(u) > MEMBERS_ACTIVE_INDEX and u[MEMBERS_ACTIVE_INDEX]:
+            users.append(u[MEMBERS_NAME_INDEX])
     for u in overwrites.keys():
         u_2 = overwrites.get(u)
         if u_2 is None:
