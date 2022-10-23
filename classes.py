@@ -9,10 +9,11 @@ import discord
 import discord.ext
 import mariadb
 import pytz
-from discord import Embed, Interaction, Colour, Color, Message
+from discord import Embed, Interaction, Colour, Color, Message, InputTextStyle
 from discord.ui import Modal, View, InputText
 
 import sheet
+import utils
 from database import DatabaseConnector
 
 logger = logging.getLogger(__name__)
@@ -117,13 +118,7 @@ def parse_player(string: str) -> (Union[str, None], bool):
     :param string: the string which should be looked up
     :return: (Playername: str or None, Perfect match: bool)
     """
-    names = difflib.get_close_matches(string, sheet.users, 1)
-    if len(names) > 0:
-        name = str(names[0])
-        if name.casefold() == string.casefold():
-            return str(names[0]), True
-        return str(names[0]), False
-    return None, False
+    return utils.parse_player(sheet.users)
 
 
 async def send_exception(error: Exception, interaction: Interaction):

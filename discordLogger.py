@@ -45,16 +45,17 @@ class PycordHandler(Handler):
         while len(self.cache) > 0:
             record = self.cache.pop(0)
             text = self.format(record)
-            if len(msg) + len(text) < 1980:
+            text = text.replace("\\", "/")
+            if len(msg) + len(text) < 1970:
                 # Message length is fine
                 msg += "\n" + text
             else:
                 # Message would become to long
                 msg += "\n```"
                 await self.channel.send(content=msg)
-                if len(text) > 1980:
+                if len(text) > 1970:
                     # Truncating text
-                    text = text[:1980] + " **(Truncated)**"
+                    text = text[:1970] + " **(Truncated)**"
                 msg = "```\n" + text
         if len(msg) > 3:
             msg += "\n```"

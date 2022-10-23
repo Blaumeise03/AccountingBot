@@ -14,10 +14,12 @@ from discord.ext import commands, tasks
 from dotenv import load_dotenv
 
 import classes
+import projects
 import sheet
 from classes import AccountingView, Transaction, get_menu_embeds
 from database import DatabaseConnector
 from discordLogger import PycordHandler
+from utils import log_error
 
 log_filename = "logs/" + datetime.now().strftime("%Y-%m-%d_%H-%M-%S") + ".log"
 print("Logging outputs goes to: " + log_filename)
@@ -32,7 +34,7 @@ file_handler.setFormatter(formatter)
 logging.getLogger().addHandler(file_handler)
 # Console log handler
 console = logging.StreamHandler(sys.stdout)
-console.setLevel(logging.INFO)
+console.setLevel(logging.DEBUG)
 console.setFormatter(formatter)
 logging.getLogger().addHandler(console)
 # Discord channel log handler
@@ -54,6 +56,7 @@ LOG_CHANNEL = -1
 OWNER = -1
 ADMINS = []
 PREFIX = "§"
+PROJECT_RESOURCES = []
 
 # loading json config
 logging.info("Loading JSON Config...")
@@ -72,6 +75,7 @@ if exists("config.json"):
         OWNER = config["owner"]
         LOG_CHANNEL = config["errorLogChannel"]
         PREFIX = config["prefix"]
+        PROJECT_RESOURCES = config["project_resources"]
 else:
     config = {
         "server": -1,
@@ -87,7 +91,8 @@ else:
         "db_host": "localhost",
         "db_name": "accountingBot",
         "google_sheet": "SHEET_ID",
-        "prefix": "§"
+        "prefix": "§",
+        "project_resources": []
     }
     with open("config.json", "w") as outfile:
         json.dump(config, outfile, indent=4)
@@ -101,9 +106,6 @@ connector = DatabaseConnector(
     database=config["db_name"]
 )
 
-logging.info("Starting Google sheets API...")
-sheet.setup_sheet(config["google_sheet"])
-
 logging.info("Starting up bot...")
 intents = discord.Intents.default()
 # noinspection PyUnresolvedReferences,PyDunderSlots
@@ -114,10 +116,13 @@ bot = commands.Bot(command_prefix=PREFIX, intents=intents, debug_guilds=[5826493
 
 classes.set_up(connector, ADMINS, bot, ACCOUNTING_LOG, GUILD)
 
+bot.add_cog(projects.ProjectCommands(bot, ADMINS, OWNER))
+
 
 @bot.event
 async def on_error(event_name, *args, **kwargs):
-    logging.exception("Error:")
+    #logging.exception("Error:")
+    pass
 
 
 @tasks.loop(seconds=10.0)
@@ -126,23 +131,29 @@ async def log_loop():
 
 log_loop.start()
 
+#asyncio.run(sheet.setup_sheet(config["google_sheet"]))
+
 
 @bot.event
-async def on_command_error(ctx, error):
+async def on_application_command_error(ctx, error):
     if ctx.guild is not None:
         logging.error(
             "Error in guild " + str(ctx.guild.id) + " in channel " + str(ctx.channel.id) +
-            ", sent by " + str(ctx.author.id) + ": " + ctx.author.name)
+            ", sent by " + str(ctx.author.id) + ": " + ctx.author.name + " while executing command " + ctx.command.name)
     else:
         logging.error(
             "Error outside of guild in channel " + str(ctx.channel.id) +
             ", sent by " + str(ctx.author.id) + ": " + ctx.author.name)
-    logging.exception(error, exc_info=False)
+    log_error(logging.getLogger(), error)
+    await ctx.respond(f"Error: {str(error)}", ephemeral=True)
 
 
 @bot.event
 async def on_ready():
     logging.info("Logged in!")
+
+    logging.info("Starting Google sheets API...")
+    await sheet.setup_sheet(config["google_sheet"], PROJECT_RESOURCES)
 
     # Basic setup
     if MENU_CHANNEL == -1:
@@ -253,7 +264,7 @@ async def save_embeds(msg, user_id):
         return
     time_formatted = transaction.timestamp.astimezone(pytz.timezone("Europe/Berlin")).strftime("%d.%m.%Y %H:%M")
     # Save transaction to sheet
-    sheet.add_transaction(transaction=transaction)
+    await sheet.add_transaction(transaction=transaction)
     user = await bot.get_or_fetch_user(user_id)
     logging.info(f"Verified transaction {msg.id} ({time_formatted}. Verified by {user.name} ({user.id}).")
     # Set message as verified

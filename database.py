@@ -28,7 +28,7 @@ class DatabaseConnector:
                 sleep(counter*2)
 
     def try_connect(self):
-        logging.info("Connecting to database...")
+        logger.info("Connecting to database...")
         try:
             self.con = mariadb.connect(
                 user=self.username,
@@ -38,7 +38,7 @@ class DatabaseConnector:
                 database=self.database,
                 connect_timeout=8
             )
-            logging.info("Connected to database!")
+            logger.info("Connected to database!")
             self.cursor = self.con.cursor()
             self.cursor.execute("CREATE TABLE IF NOT EXISTS messages ("
                                 "msgID BIGINT NOT NULL, "
