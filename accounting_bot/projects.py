@@ -1,25 +1,21 @@
-import asyncio
 import io
 import logging
 import re
-import threading
-import traceback
 from enum import Enum
 from typing import Dict, List
 
 import discord
 import pytz
-from discord import guild, ApplicationContext, Color, InputTextStyle, Interaction, Option, InteractionResponse
+from discord import ApplicationContext, InputTextStyle, Interaction, Option
 from discord.ext import commands
+from discord.ext.commands import Cooldown
 from discord.ui import Modal, InputText, View
 
-import classes
-import sheet
-import utils
-from exceptions import GoogleSheetException
-from utils import string_to_file, list_to_string, send_exception, log_error
+from accounting_bot import sheet, utils
+from accounting_bot.exceptions import GoogleSheetException
+from accounting_bot.utils import string_to_file, list_to_string, send_exception, log_error
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("bot.projects")
 logger.setLevel(logging.DEBUG)
 
 
@@ -29,7 +25,11 @@ class ProjectCommands(commands.Cog):
         self.admins = admins
         self.owner = owner
 
-    @commands.slash_command(description="Loads and list all projects")
+    @commands.slash_command(
+        name="loadprojects",
+        description="Loads and list all projects"
+    )
+    @commands.cooldown(1, 5, commands.BucketType.default)
     async def load_projects(self, ctx: ApplicationContext, silent: Option(bool, "Execute command silently", required=False, default=True)):
         if not (ctx.author.guild_permissions.administrator or ctx.author.id in self.admins or ctx.author.id == self.owner):
             await ctx.respond("Missing permissions", ephemeral=True)
@@ -44,23 +44,27 @@ class ProjectCommands(commands.Cog):
             string_to_file(list_to_string(log), "log.txt"),
             string_to_file(res, "project_list.txt")], ephemeral=silent)
 
-    @commands.slash_command(description="List all projects")
+    @commands.slash_command(
+        name="listprojects",
+        description="Lists all projects"
+    )
     async def list_projects(self, ctx: ApplicationContext, silent: Option(bool, "Execute command silently", required=False, default=True)):
-        if not (
-                ctx.author.guild_permissions.administrator or ctx.author.id in self.admins or ctx.author.id == self.owner):
-            await ctx.respond("Missing permissions", ephemeral=True)
-            return
-
         res = "Projectlist version: " + sheet.lastChanges.astimezone(pytz.timezone("Europe/Berlin")).strftime("%d.%m.%Y %H:%M") + "\n"
-        for p in sheet.allProjects:
-            res += p.to_string() + "\n\n"
-        data = io.BytesIO(res.encode())
-        data.seek(0)
+        async with sheet.projects_lock:
+            for p in sheet.allProjects:
+                res += p.to_string() + "\n\n"
         await ctx.respond("Projektliste:", file=string_to_file(res, "project_list.txt"), ephemeral=silent)
 
-    @commands.slash_command()
+    @commands.slash_command(
+        name="insertinvestment",
+        description="Saves an investment into the sheet"
+    )
+    @commands.cooldown(1, 5, commands.BucketType.default)
     async def insert_investments(self, ctx: ApplicationContext):
-        await ctx.response.send_modal(ListModal())
+        if ctx.author.guild_permissions.administrator or ctx.author.id in self.admins or ctx.author.id == self.owner:
+            await ctx.response.send_modal(ListModal())
+        else:
+            await ctx.response.send_message("Fehlende Berechtigungen!", ephemeral=True)
 
 
 class ConfirmView(View):
@@ -111,19 +115,23 @@ class ListModal(Modal):
     async def callback(self, interaction: Interaction):
         logger.debug("Insert Investments command received...")
         await interaction.response.send_message("Bitte warten, dies kann einige Sekunden dauern.", ephemeral=True)
+        log = []
         player, is_perfect = utils.parse_player(self.children[0].value, sheet.users)
         player = sheet.check_name_overwrites(player)
-        log = ["Parsing list..."]
+        if player is None:
+            await interaction.followup.send(f"Fehler: Spieler \"{self.children[0].value}\" nicht gefunden!")
+            return
+        log.append("Parsing list...")
         items = Project.Item.parse_list(self.children[1].value)
+        await interaction.followup.send("Lade Projekte, bitte warten...", ephemeral=True)
+        log.append("Reloading projects...")
+        await sheet.load_projects()
         log.append("Splitting contract...")
         async with sheet.projects_lock:
             logger.debug("Splitting contract for %s ", player)
             split = Project.split_contract(items, sheet.allProjects)
         log.append("Calculating investments...")
         investments = Project.calc_investments(split)
-        if player is None:
-            await interaction.followup.send(f"Fehler: Spieler \"{self.children[0].value}\" nicht gefunden!")
-            return
         if not is_perfect:
             await interaction.followup.send(
                 f"Meintest du \"{player}\"? (Deine Eingabe war \"{self.children[0].value}\").\n"
@@ -150,14 +158,14 @@ class Project(object):
         self.pendingResources = []  # type: [Project.Item]
         self.investments_range = None
 
-    def get_pending_resource(self, resource: str):
+    def get_pending_resource(self, resource: str) -> int:
         resource = resource.casefold()
         for item in self.pendingResources:
             if item.name.casefold() == resource:
                 return item.amount
         return 0
 
-    def to_string(self):
+    def to_string(self) -> str:
         exclude = ""
         if self.exclude == Project.ExcludeSettings.all:
             exclude = " (ausgeblendet)"
@@ -207,21 +215,22 @@ class Project(object):
             self.amount = amount
 
         @staticmethod
-        def sort_list(items: [], order: [str]):
-            for item in items:
+        def sort_list(items: [], order: [str]) -> None:
+            for item in items:  # type: Project.Item
                 if item.name not in order:
                     order.append(item.name)
             items.sort(key=lambda x: order.index(x.name))
 
         @staticmethod
-        def parse_list(raw: str):
+        def parse_list(raw: str) -> []:
             items = []  # type: [Project.Item]
             for line in raw.split("\n"):
                 if re.fullmatch("[a-zA-Z ]*", line):
                     continue
                 line = re.sub("\t", "    ", line.strip())      # Replace Tabs with spaces
                 line = re.sub("^\\d+ *", "", line.strip())     # Delete first column (numeric Index)
-                line = re.sub(" *[0-9.]+$", "", line.strip())  # Delete last column (Valuation, decimal)
+                if len(re.findall("[0-9]+", line.strip())) > 1:
+                    line = re.sub(" *[0-9.]+$", "", line.strip())  # Delete last column (Valuation, decimal)
                 item = re.sub(" +\\d+$", "", line)
                 quantity = line.replace(item, "").strip()
                 item = item.strip()

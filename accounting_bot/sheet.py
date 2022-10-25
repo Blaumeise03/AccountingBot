@@ -3,20 +3,20 @@ import datetime
 import json
 import logging
 import re
-import threading
 from os.path import exists
 
 import gspread_asyncio
 import pytz
 from google.oauth2.service_account import Credentials
-from gspread import GSpreadException, Cell
+from gspread import GSpreadException
 from gspread.utils import ValueRenderOption, ValueInputOption
 
-import projects
-from exceptions import GoogleSheetException
-from projects import Project
+from accounting_bot import projects
+from accounting_bot.project_utils import find_player_row, calculate_changes, verify_batch_data, process_first_column
+from accounting_bot.exceptions import GoogleSheetException
+from accounting_bot.projects import Project
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("bot.sheet")
 logger.setLevel(logging.DEBUG)
 
 SCOPES = ["https://www.googleapis.com/auth/spreadsheets"]
@@ -70,6 +70,7 @@ agcm = gspread_asyncio.AsyncioGspreadClientManager(get_creds)
 
 async def setup_sheet(sheet_id, project_resources):
     global SPREADSHEET_ID, PROJECT_RESOURCES, users
+    logger.info("Loading google sheet...")
     agc = await agcm.authorize()
     SPREADSHEET_ID = sheet_id
     PROJECT_RESOURCES = project_resources
@@ -99,7 +100,7 @@ def check_name_overwrites(name: str):
 async def add_transaction(transaction):
     agc = await agcm.authorize()
     sheet = await agc.open_by_key(SPREADSHEET_ID)
-    wkLog = await sheet.worksheet("Accounting Log")
+    wk_log = await sheet.worksheet("Accounting Log")
     if transaction is None:
         return
     # Get data from transaction
@@ -112,14 +113,16 @@ async def add_transaction(transaction):
 
     # Applying custom username overwrites
     user_f = check_name_overwrites(user_f)
-    user_t = check_name_overwrites(user_f)
+    user_t = check_name_overwrites(user_t)
 
     # Saving the data
     logger.info(f"Saving row [{time}; {user_f}; {user_t}; {amount}; {purpose}; {reference}]")
-    await wkLog.append_row([time, user_f, user_t, amount, purpose, reference], value_input_option="USER_ENTERED")
+    await wk_log.append_row([time, user_f, user_t, amount, purpose, reference], value_input_option=ValueInputOption.user_entered)
+    logger.debug("Saved row")
 
 
 async def find_projects():
+    logger.debug("Reloading projects...")
     agc = await agcm.authorize()
     sheet = await agc.open_by_key(SPREADSHEET_ID)
     wk_projects = []
@@ -136,6 +139,32 @@ async def find_projects():
     await load_projects()
 
 
+async def load_projects():
+    global lastChanges, loadProject_blocked, loadProject_time
+    # Prevent parallel execution of function, instead all other calls will be delayed until the first call is finished
+    # In that case, the function won't reload the projects, as they were just reloaded recently
+    time = datetime.datetime.now()
+    if projects_lock.locked():
+        logger.debug("load_projects is locked, waiting for it to complete...")
+        while projects_lock.locked():  # and (time - loadProject_time).total_seconds() / 60.0 < 2:
+            await asyncio.sleep(5)
+        return ["Parallel command call discovered! Method evaluation was canceled. The received data may be deprecated."]
+
+    async with projects_lock:
+        log = []
+        agc = await agcm.authorize()
+        sheet = await agc.open_by_key(SPREADSHEET_ID)
+        lastChanges = datetime.datetime.strptime(sheet.ss.lastUpdateTime, "%Y-%m-%dT%H:%M:%S.%fZ")
+
+        allProjects.clear()
+
+        for project_name in wkProjectNames:
+            await load_project(project_name, log, sheet)
+
+    logger.debug("Projects loaded")
+    return log
+
+
 async def load_project(project_name: str, log: [str], sheet: gspread_asyncio.AsyncioGspreadSpreadsheet):
     logger.info(f"Loading project {project_name}")
     log.append(f"Starting processing of project sheet \"{project_name}\"")
@@ -143,19 +172,9 @@ async def load_project(project_name: str, log: [str], sheet: gspread_asyncio.Asy
 
     # Scanning project sheet to find the locations of the required entries
     batch_cells = await s.findall(re.compile(r"(ausstehende Ressourcenkosten)|(Investitionen)|(Auszahlung)"))
-    pending_cell = None
-    investments_cell = None
-    payout_cell = None
-    for c in batch_cells:
-        if c.value == "ausstehende Ressourcenkosten":
-            pending_cell = c
-            log.append(f"  Found ressource cost cell: {c.address}")
-        if c.value == "Investitionen":
-            investments_cell = c
-            log.append(f"  Found investments cell: {c.address}")
-        if c.value == "Auszahlung":
-            payout_cell = c
-            log.append(f"  Found payout cell: {c.address}")
+
+    pending_cell, investments_cell, payout_cell = process_first_column(batch_cells, log)
+
     if pending_cell is None:
         log.append(f"  ERROR: Project sheet {project_name} is malformed")
         logger.warning(f"Project sheet {project_name} is malformed")
@@ -181,30 +200,16 @@ async def load_project(project_name: str, log: [str], sheet: gspread_asyncio.Asy
          f"A{invest_cell_row}:A{payout_cell_row - 1}"  # Investment area
          ],
         value_render_option=ValueRenderOption.unformatted)
-
     log.append(f"  Received {len(batch_data)} results!")
-    # Verify result
-    if len(batch_data) != 4:
-        logger.error("Unexpected batch size: %s. Expected: 4", len(batch_data))
-        log.append(f"  Unexpected batch size: {len(batch_data)}. Expected: 4")
-        return
-    if len(batch_data[0]) != 1:
-        logger.error("Unexpected length of item_names: %s. Expected: 1", len(batch_data[0]))
-        log.append(f"  Unexpected length of item_names: {len(batch_data[0])}. Expected: 1")
-        return
-    if len(batch_data[1]) != 1:
-        logger.error("Unexpected length of item_quantities: %s. Expected: 1", len(batch_data[1]))
-        log.append(f"  Unexpected length of item_quantities: {len(batch_data[1])}. Expected: 1")
-        return
-    if len(batch_data[3]) == 0:
-        logger.error("Unexpected length of investments: %s", len(batch_data[3]))
-        log.append(f"  Unexpected length of investments: {len(batch_data[3])}")
+
+    # Verify result length
+    if not verify_batch_data(batch_data, log):
         return
 
     items_names = batch_data[0][0]  # type: [str]
     item_quantities = batch_data[1][0]  # type: [str]
 
-    if len(batch_data) > 2 and len(batch_data[2]) > 0 and len(batch_data[2][0]) > 0:
+    if len(batch_data[2]) > 0 and len(batch_data[2][0]) > 0:
         exclude = batch_data[2][0][0].casefold()
         if exclude == "ExcludeAll".casefold():
             project.exclude = Project.ExcludeSettings.all
@@ -257,35 +262,6 @@ async def load_project(project_name: str, log: [str], sheet: gspread_asyncio.Asy
     log.append(f"\"{project_name}\" processed!")
 
 
-async def load_projects():
-    global lastChanges, loadProject_blocked, loadProject_time
-    # Prevent parallel execution of function, instead all other calls will be delayed until the first call is finished
-    # In that case, the function won't reload the projects, as they were just reloaded recently
-    time = datetime.datetime.now()
-    logger.debug("Reloading projects...")
-    if projects_lock.locked():
-        logger.debug("load_projects is locked, waiting for it to complete...")
-        while projects_lock.locked():  # and (time - loadProject_time).total_seconds() / 60.0 < 2:
-            await asyncio.sleep(5)
-        return ["Parallel command call discovered! Method evaluation was canceled. The received data may be deprecated."]
-
-    logger.debug("Locking thread...")
-    async with projects_lock:
-        logger.debug("Thread locked")
-        log = []
-        agc = await agcm.authorize()
-        sheet = await agc.open_by_key(SPREADSHEET_ID)
-        lastChanges = datetime.datetime.strptime(sheet.ss.lastUpdateTime, "%Y-%m-%dT%H:%M:%S.%fZ")
-
-        allProjects.clear()
-
-        for project_name in wkProjectNames:
-            await load_project(project_name, log, sheet)
-
-    logger.debug("Projects loaded")
-    return log
-
-
 async def insert_investments(player: str, investments: {str: [int]}):
     log = []
     for project in investments:
@@ -309,94 +285,58 @@ async def insert_investment(player: str, project_name: str, quantities: [int], l
         agc = await agcm.authorize()
         sheet = await agc.open_by_key(SPREADSHEET_ID)
         log.append(f"  Quantities: {quantities}")
-
         log.append(f"  Loading project sheet...")
-        s = await sheet.worksheet(project_name)
+        worksheet = await sheet.worksheet(project_name)
         project = None  # type: Project | None
         for project in allProjects:
             if project.name == project_name:
                 break
         if project is None:
             log.append(f"  Error, project sheet {project_name} not found!")
-            raise GoogleSheetException(f"  Error while inserting investments for {player}, project sheet {project} not found!", log)
+            raise GoogleSheetException(
+                f"  Error while inserting investments for {player}, project sheet {project} not found!", log)
         if project.investments_range is None:
             if project is None:
                 log.append(f"  Error, project sheet {project_name} has no investment range!")
                 raise GoogleSheetException(
                     log,
-                    "Error while inserting investments for {player} in project sheet {project}: Investment range not found!"
+                    "Error while inserting investments for {player} in project sheet {project}:"
+                    " Investment range not found!"
                 )
-        cells = await s.range(f"{project.investments_range[0]}:{project.investments_range[1]}")
-        log.append("  Loaded investment range")
-        player_row = await find_player_row(cells, player, project, s, log)
 
+        # Loading all investment cells
+        cells = await worksheet.range(f"{project.investments_range[0]}:{project.investments_range[1]}")
+        log.append("  Loaded investment range")
+
+        # Find or create investment row for player, throws error
+        player_row = await find_player_row(cells, player, project, worksheet, log)
+
+        # Loading raw formulas to change them, as worksheet.range doesn't return the raw formulas
         log.append(f"  Loading raw formulas")
-        # s.get throws a TypeError for unknown reasons, that's why s.batch_get is used
-        player_row_formulas = await s.batch_get([f"{player_row}:{player_row}"], value_render_option=ValueRenderOption.formula)
+        # worksheet.get throws a TypeError for unknown reasons, that's why worksheet.batch_get is used
+        player_row_formulas = await worksheet.batch_get([f"{player_row}:{player_row}"], value_render_option=ValueRenderOption.formula)
         if len(player_row_formulas) == 0 or len(player_row_formulas[0]) == 0:
             log.append("  Error while loading raw formulas: Not found")
-            raise GSpreadException(log, f"Error while fetching investment row for player {player} in {project} (row {player_row})")
+            raise GSpreadException(
+                log,
+                f"Error while fetching investment row for player {player} in {project} (row {player_row})"
+            )
+        # Extracting row from returned array
         player_row_formulas = player_row_formulas[0][0]
-        changes = []
+
         log.append("  Calculating changes...")
-        for i in range(len(PROJECT_RESOURCES)):
-            cell = next(filter(lambda c: c.row == player_row and c.col == (i + 8), cells), None)
-            if cell is None:
-                cell = Cell(player_row, i + 8, "")
-            if 0 < (cell.col - 7) < len(PROJECT_RESOURCES):
-                resource_name = PROJECT_RESOURCES[cell.col - 8]
-                if len(player_row_formulas) < cell.col:
-                    quantity_formula = ""
-                else:
-                    quantity_formula = player_row_formulas[cell.col - 1]  # type: str
-                new_quantity = quantities[cell.col - 8]
-                if new_quantity <= 0:
-                    continue
-                log.append(f"    Invested quantity for {resource_name} is {new_quantity}")
-                if len(quantity_formula) == 0:
-                    quantity_formula = "=" + str(new_quantity)
-                else:
-                    if re.fullmatch("=([-+*]?\\d+)+", quantity_formula) is None:
-                        log.append(f"Error! Cell {cell.address} does contain an illegal formula: \"{quantity_formula}\"")
-                        raise GoogleSheetException(log, "Sheet %s contains illegal formula for player %s (cell %s): \"%s\"",
-                                                   project_name, player, cell.address, quantity_formula)
-                    quantity_formula += "+" + str(new_quantity)
-                log.append(f"      New quantity formula: \"{quantity_formula}\"")
-                changes.append({
-                    "range": cell.address,
-                    "values": [[quantity_formula]]
-                })
+        changes = calculate_changes(
+            PROJECT_RESOURCES, quantities,
+            player_row, player_row_formulas,
+            project_name, player,
+            cells, log)
+
         log.append(f"  Applying {len(changes)} changes to {project_name}:")
         for change in changes:
             log.append(f"    {change['range']}: '{change['values'][0][0]}'")
-        await s.batch_update(changes, value_input_option=ValueInputOption.user_entered)
+        await worksheet.batch_update(changes, value_input_option=ValueInputOption.user_entered)
     logger.debug("Inserted investment for %s into %s!", player, project_name)
     log.append(f"Project {project_name} processed!")
-
-
-async def find_player_row(cells, player, project, s, log):
-    player_row = -1
-    for cell in cells:
-        if cell.col != 1:
-            continue
-        if cell.value.casefold() == player.casefold():
-            player_row = cell.row
-            break
-    if player_row == -1:
-        log.append(f"  Investment row for player {player} not found, creating one...")
-        for cell in cells:
-            if cell.col == 1 and cell.value == "":
-                log.append(f"    Found empty cell at {cell.address}, inserting player name...")
-                await s.update_cell(cell.row, cell.col, player)
-                log.append("    Player name inserted!")
-                player_row = cell.row
-                break
-    if player_row == -1:
-        log.append(f"  Error! Could not insert investments for {player} into {project}: Could not find or create investment row!")
-        raise GoogleSheetException(log,
-            f"Error while inserting investments for {player} into project sheet {project}: Could not find or create investment row!")
-    log.append(f"  Identified investment row: {player_row}")
-    return player_row
 
 
 async def insert_overflow(player: str, quantities: [int], log=None):
@@ -411,12 +351,13 @@ async def insert_overflow(player: str, quantities: [int], log=None):
     for item, quantity in zip(PROJECT_RESOURCES, quantities):
         if quantity > 0:
             log.append(f"  Item \"{item}\": {quantity}")
-            request.append([item, quantity, None, player])
+            request.append([item, quantity, player])
     log.append(f"Overflow table generated:")
     for r in request:
         log.append(f"  {r}")
     log.append("  Inserting into sheet...")
     await s.append_rows(request, value_input_option=ValueInputOption.user_entered)
     log.append("Overflow inserted!")
+    logger.debug("Inserted overflow for %s!", player)
     return log
 

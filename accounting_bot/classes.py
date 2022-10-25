@@ -1,4 +1,3 @@
-import difflib
 import json
 import logging
 import re
@@ -9,14 +8,13 @@ import discord
 import discord.ext
 import mariadb
 import pytz
-from discord import Embed, Interaction, Colour, Color, Message, InputTextStyle
+from discord import Embed, Interaction, Color, Message
 from discord.ui import Modal, View, InputText
 
-import sheet
-import utils
-from database import DatabaseConnector
+from accounting_bot import sheet, utils
+from accounting_bot .database import DatabaseConnector
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("bot.classes")
 
 BOT = None  # type: discord.ext.commands.bot.Bot | None
 ACCOUNTING_LOG = None  # type: int | None
@@ -118,7 +116,7 @@ def parse_player(string: str) -> (Union[str, None], bool):
     :param string: the string which should be looked up
     :return: (Playername: str or None, Perfect match: bool)
     """
-    return utils.parse_player(sheet.users)
+    return utils.parse_player(string, sheet.users)
 
 
 async def send_exception(error: Exception, interaction: Interaction):

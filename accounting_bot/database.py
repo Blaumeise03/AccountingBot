@@ -3,7 +3,7 @@ from time import sleep
 
 import mariadb
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("database")
 
 
 class DatabaseConnector:

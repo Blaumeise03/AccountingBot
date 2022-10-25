@@ -2,24 +2,23 @@ import json
 import logging
 import os
 import sys
-import time
 from datetime import datetime
 from os.path import exists
 
 import discord
 import mariadb
 import pytz as pytz
-from discord import Option, ActivityType
+from discord import ActivityType
 from discord.ext import commands, tasks
+from discord.ext.commands import CommandOnCooldown
 from dotenv import load_dotenv
 
-import classes
-import projects
-import sheet
-from classes import AccountingView, Transaction, get_menu_embeds
-from database import DatabaseConnector
-from discordLogger import PycordHandler
-from utils import log_error
+from accounting_bot import classes, sheet, projects
+from accounting_bot.classes import AccountingView, Transaction, get_menu_embeds
+from accounting_bot.commands import BaseCommands
+from accounting_bot.database import DatabaseConnector
+from accounting_bot.discordLogger import PycordHandler
+from accounting_bot.utils import log_error
 
 log_filename = "logs/" + datetime.now().strftime("%Y-%m-%d_%H-%M-%S") + ".log"
 print("Logging outputs goes to: " + log_filename)
@@ -116,12 +115,13 @@ bot = commands.Bot(command_prefix=PREFIX, intents=intents, debug_guilds=[5826493
 
 classes.set_up(connector, ADMINS, bot, ACCOUNTING_LOG, GUILD)
 
+bot.add_cog(BaseCommands(GUILD, ADMINS, OWNER, connector))
 bot.add_cog(projects.ProjectCommands(bot, ADMINS, OWNER))
 
 
 @bot.event
 async def on_error(event_name, *args, **kwargs):
-    #logging.exception("Error:")
+    logging.exception("An Error occurred: %s", event_name)
     pass
 
 
@@ -131,20 +131,22 @@ async def log_loop():
 
 log_loop.start()
 
-#asyncio.run(sheet.setup_sheet(config["google_sheet"]))
-
 
 @bot.event
 async def on_application_command_error(ctx, error):
-    if ctx.guild is not None:
-        logging.error(
-            "Error in guild " + str(ctx.guild.id) + " in channel " + str(ctx.channel.id) +
-            ", sent by " + str(ctx.author.id) + ": " + ctx.author.name + " while executing command " + ctx.command.name)
-    else:
-        logging.error(
-            "Error outside of guild in channel " + str(ctx.channel.id) +
-            ", sent by " + str(ctx.author.id) + ": " + ctx.author.name)
-    log_error(logging.getLogger(), error)
+    silent = False
+    if isinstance(error, CommandOnCooldown):
+        silent = True
+    if not silent:
+        if ctx.guild is not None:
+            logging.error(
+                "Error in guild " + str(ctx.guild.id) + " in channel " + str(ctx.channel.id) +
+                ", sent by " + str(ctx.author.id) + ": " + ctx.author.name + " while executing command " + ctx.command.name)
+        else:
+            logging.error(
+                "Error outside of guild in channel " + str(ctx.channel.id) +
+                ", sent by " + str(ctx.author.id) + ": " + ctx.author.name)
+        log_error(logging.getLogger(), error)
     await ctx.respond(f"Error: {str(error)}", ephemeral=True)
 
 
@@ -154,7 +156,7 @@ async def on_ready():
 
     logging.info("Starting Google sheets API...")
     await sheet.setup_sheet(config["google_sheet"], PROJECT_RESOURCES)
-
+    logging.info("Setting up channels...")
     # Basic setup
     if MENU_CHANNEL == -1:
         return
@@ -338,42 +340,20 @@ async def setup(ctx):
 
 
 # noinspection SpellCheckingInspection
-@bot.slash_command(description="Creates a new shortcut menu containing all buttons.")
-async def createshortcut(ctx):
-    global MENU_MESSAGE, MENU_CHANNEL, GUILD
-    if ctx.guild is None:
-        await ctx.respond("Can only be executed inside a guild")
-        return
-    if ctx.guild.id != GUILD and ctx.author.id != OWNER:
-        logging.info("Wrong server!")
-        await ctx.respond("Wrong server", ephemeral=True)
-        return
-
-    if ctx.author.guild_permissions.administrator or ctx.author.id in ADMINS or ctx.author.id == OWNER:
-        view = AccountingView()
-        msg = await ctx.send(view=view, embed=classes.EMBED_MENU_SHORTCUT)
-        connector.add_shortcut(msg.id, ctx.channel.id)
-        await ctx.respond("Shortcut menu posted", ephemeral=True)
-    else:
-        logging.info(f"User {ctx.author.id} is missing permissions to run the createshortcut command")
-        await ctx.respond("Missing permissions", ephemeral=True)
-
-
-# noinspection SpellCheckingInspection
-@bot.slash_command(description="Sets the current channel as the accounting log channel.")
-async def setlogchannel(ctx):
+@commands.slash_command(description="Sets the current channel as the accounting log channel.")
+async def setlogchannel(self, ctx):
     global ACCOUNTING_LOG
     logging.info("SetLogChannel command received.")
     if ctx.guild is None:
         logging.info("Command was send via DM!")
         await ctx.respond("Only available inside a guild")
         return
-    if ctx.guild.id != GUILD:
+    if ctx.guild.id != self.guild:
         logging.info("Wrong server!")
         await ctx.respond("Can only used inside the defined discord server", ephemeral=True)
         return
 
-    if ctx.author.id == OWNER or ctx.author.guild_permissions.administrator:
+    if ctx.author.id == self.owner or ctx.author.guild_permissions.administrator:
         logging.info("User Verified. Setting up channel...")
         ACCOUNTING_LOG = ctx.channel.id
         save_config()
@@ -382,32 +362,6 @@ async def setlogchannel(ctx):
     else:
         logging.info(f"User {ctx.author.id} is missing permissions to run the setlogchannel command")
         await ctx.respond("Missing permissions", ephemeral=True)
-
-
-# noinspection SpellCheckingInspection
-@bot.slash_command(description="Posts a menu with all available manufacturing roles.")
-async def indumenu(ctx, msg: Option(str, "Message ID", required=False, default=None)):
-    if msg is None:
-        logging.info("Sending role menu...")
-        await ctx.send(embeds=[classes.EMBED_INDU_MENU])
-        await ctx.respond("Neues Menü gesendet.", ephemeral=True)
-    else:
-        logging.info("Updating role menu " + str(msg))
-        msg = await ctx.channel.fetch_message(int(msg))
-        await msg.edit(embeds=[classes.EMBED_INDU_MENU])
-        await ctx.respond("Menü geupdated.", ephemeral=True)
-
-
-@bot.slash_command(description="Shuts down the discord bot, if set up properly, it will restart.")
-async def stop(ctx):
-    if ctx.author.id == OWNER:
-        logging.critical("Shutdown Command received, shutting down bot in 10 seconds")
-        await ctx.respond("Bot wird in 10 Sekunden gestoppt...")
-        connector.con.close()
-        time.sleep(10)
-        exit(0)
-    else:
-        await ctx.respond("Fehler! Berechtigungen fehlen.", ephemeral=True)
 
 
 def save_config():
