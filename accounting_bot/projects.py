@@ -246,6 +246,8 @@ class Project(object):
                     line = re.sub(" *[0-9.]+$", "", line.strip())  # Delete last column (Valuation, decimal)
                 item = re.sub(" +\\d+$", "", line)
                 quantity = line.replace(item, "").strip()
+                if len(quantity) == 0:
+                    continue
                 item = item.strip()
                 items.append(Project.Item(item, int(quantity)))
             Project.Item.sort_list(items, sheet.PROJECT_RESOURCES.copy())

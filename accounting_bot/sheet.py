@@ -249,7 +249,7 @@ async def load_project(project_name: str, log: [str], sheet: gspread_asyncio.Asy
                 log.append(f"  Found investment rows: {investments_cell.row + i + 1} until {payout_cell.row - 1}")
                 investments_range = (investments_cell.row + i + 1, payout_cell.row - 1)
                 project.investments_range = investments_range
-        if investments_range[0] is None:
+        if investments_range is None or investments_range[0] is None:
             logger.error("Investments area malformed, cell \"Gesamtanteile\" is missing")
             log.append("  ERROR: Investments area malformed, cell \"Gesamtanteile\" is missing")
             return

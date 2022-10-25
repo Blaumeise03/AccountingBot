@@ -11,7 +11,7 @@ logger = logging.getLogger("bot.commands")
 
 
 class BaseCommands(commands.Cog):
-    def __int__(self, guild, admins, owner, connector):
+    def __init__(self, guild, admins, owner, connector):
         self.guild = guild
         self.admins = admins
         self.owner = owner
