@@ -17,13 +17,18 @@ from accounting_bot.utils import string_to_file, list_to_string, send_exception,
 
 logger = logging.getLogger("bot.projects")
 logger.setLevel(logging.DEBUG)
+ADMINS = []
+OWNER = -1
 
 
 class ProjectCommands(commands.Cog):
     def __int__(self, bot, admins, owner):
+        global ADMINS, OWNER
         self.bot = bot
         self.admins = admins
+        ADMINS = admins
         self.owner = owner
+        OWNER = owner
 
     @commands.slash_command(
         name="loadprojects",
@@ -31,7 +36,7 @@ class ProjectCommands(commands.Cog):
     )
     @commands.cooldown(1, 5, commands.BucketType.default)
     async def load_projects(self, ctx: ApplicationContext, silent: Option(bool, "Execute command silently", required=False, default=True)):
-        if not (ctx.author.guild_permissions.administrator or ctx.author.id in self.admins or ctx.author.id == self.owner):
+        if not (ctx.author.guild_permissions.administrator or ctx.author.id in ADMINS or ctx.author.id == OWNER):
             await ctx.respond("Missing permissions", ephemeral=True)
             return
         await ctx.response.defer(ephemeral=True)
@@ -61,7 +66,7 @@ class ProjectCommands(commands.Cog):
     )
     @commands.cooldown(1, 5, commands.BucketType.default)
     async def insert_investments(self, ctx: ApplicationContext):
-        if ctx.author.guild_permissions.administrator or ctx.author.id in self.admins or ctx.author.id == self.owner:
+        if ctx.author.guild_permissions.administrator or ctx.author.id in ADMINS or ctx.author.id == OWNER:
             await ctx.response.send_modal(ListModal())
         else:
             await ctx.response.send_message("Fehlende Berechtigungen!", ephemeral=True)
@@ -78,6 +83,9 @@ class ConfirmView(View):
 
     @discord.ui.button(label="Eintragen", style=discord.ButtonStyle.green)
     async def btn_confirm_callback(self, button, interaction: Interaction):
+        if not (interaction.user.guild_permissions.administrator or interaction.user.id in ADMINS or interaction.user.id == OWNER):
+            await interaction.response.send_message("Missing permissions", ephemeral=True)
+            return
         await interaction.response.send_message("Bitte warten...", ephemeral=True)
 
         await interaction.message.edit(view=None)
@@ -113,6 +121,9 @@ class ListModal(Modal):
                                 required=True, style=InputTextStyle.long))
 
     async def callback(self, interaction: Interaction):
+        if not (interaction.user.guild_permissions.administrator or interaction.user.id in ADMINS or interaction.user.id == OWNER):
+            await interaction.response.send_message("Missing permissions", ephemeral=True)
+            return
         logger.debug("Insert Investments command received...")
         await interaction.response.send_message("Bitte warten, dies kann einige Sekunden dauern.", ephemeral=True)
         log = []
@@ -123,7 +134,7 @@ class ListModal(Modal):
             return
         log.append("Parsing list...")
         items = Project.Item.parse_list(self.children[1].value)
-        await interaction.followup.send("Lade Projekte, bitte warten...", ephemeral=True)
+        await interaction.followup.send("Eingabe verarbeitet, lade Projekte. Bitte warten, dies dauert nun einige Sekunden", ephemeral=True)
         log.append("Reloading projects...")
         await sheet.load_projects()
         log.append("Splitting contract...")
@@ -183,6 +194,8 @@ class Project(object):
             left = item.amount
             split[item.name] = []
             for project in reversed(project_list):  # type: Project
+                if project.exclude != Project.ExcludeSettings.none:
+                    continue
                 pending = project.get_pending_resource(item.name)
                 amount = min(pending, left)
                 if pending > 0 and amount > 0:

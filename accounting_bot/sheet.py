@@ -296,13 +296,12 @@ async def insert_investment(player: str, project_name: str, quantities: [int], l
             raise GoogleSheetException(
                 f"  Error while inserting investments for {player}, project sheet {project} not found!", log)
         if project.investments_range is None:
-            if project is None:
-                log.append(f"  Error, project sheet {project_name} has no investment range!")
-                raise GoogleSheetException(
-                    log,
-                    "Error while inserting investments for {player} in project sheet {project}:"
-                    " Investment range not found!"
-                )
+            log.append(f"  Error, project sheet {project_name} has no investment range!")
+            raise GoogleSheetException(
+                log,
+                f"Error while inserting investments for {player} in project sheet {project}:"
+                " Investment range not found!"
+            )
 
         # Loading all investment cells
         cells = await worksheet.range(f"{project.investments_range[0]}:{project.investments_range[1]}")
