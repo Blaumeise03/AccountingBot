@@ -1,11 +1,21 @@
 import difflib
 import io
+import json
 import logging
 import traceback
+from os.path import exists
 from typing import Union
 
 import discord
 from discord import Interaction
+from discord.ui import View
+
+logger = logging.getLogger("bot.utils")
+
+discord_users = {}
+if exists("discord_ids.json"):
+    with open("discord_ids.json") as json_file:
+        discord_users = json.load(json_file)
 
 
 def log_error(logger: logging.Logger, error):
@@ -50,3 +60,34 @@ def parse_player(string: str, users: [str]) -> (Union[str, None], bool):
             return str(names[0]), True
         return str(names[0]), False
     return None, False
+
+
+def get_discord_id(name: str):
+    if name in discord_users:
+        return discord_users[name]
+    else:
+        return None
+
+
+def save_discord_id(name: str, discord_id: int):
+    if name in discord_users and discord_users[name] == discord_id:
+        return
+    discord_users[name] = discord_id
+    save_discord_config()
+
+
+def save_discord_config():
+    with open("discord_ids.json", "w") as outfile:
+        json.dump(discord_users, outfile, indent=4)
+
+
+class AutoDisableView(View):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+
+    async def on_timeout(self) -> None:
+        logger.info("View %s timed out (%s).", self.id, self.message.id if self.message is not None else "None")
+        if self.message is not None:
+            await self.message.edit(view=None)
+        self.clear_items()
+        self.disable_all_items()

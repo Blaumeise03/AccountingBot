@@ -18,7 +18,8 @@ from accounting_bot.classes import AccountingView, Transaction, get_menu_embeds
 from accounting_bot.commands import BaseCommands
 from accounting_bot.database import DatabaseConnector
 from accounting_bot.discordLogger import PycordHandler
-from accounting_bot.utils import log_error
+from accounting_bot.exceptions import LoggedException
+from accounting_bot.utils import log_error, string_to_file
 
 log_filename = "logs/" + datetime.now().strftime("%Y-%m-%d_%H-%M-%S") + ".log"
 print("Logging outputs goes to: " + log_filename)
@@ -48,6 +49,7 @@ logging.info("Loading .env...")
 load_dotenv()
 TOKEN = os.getenv('DISCORD_TOKEN')
 GUILD = -1
+USER_ROLE = -1
 ACCOUNTING_LOG = -1
 MENU_MESSAGE = -1
 MENU_CHANNEL = -1
@@ -67,6 +69,7 @@ if exists("config.json"):
         logging.error("ERROR: Config is empty, please change the settings and restart!")
     else:
         GUILD = config["server"]
+        USER_ROLE = config["user_role"]
         ACCOUNTING_LOG = config["logChannel"]
         MENU_MESSAGE = config["menuMessage"]
         MENU_CHANNEL = config["menuChannel"]
@@ -78,6 +81,7 @@ if exists("config.json"):
 else:
     config = {
         "server": -1,
+        "user_role": -1,
         "logChannel": -1,
         "menuMessage": -1,
         "menuChannel": -1,
@@ -111,12 +115,14 @@ intents = discord.Intents.default()
 intents.message_content = True
 # noinspection PyUnresolvedReferences,PyDunderSlots
 intents.reactions = True
+# noinspection PyUnresolvedReferences,PyDunderSlots
+intents.members = True
 bot = commands.Bot(command_prefix=PREFIX, intents=intents, debug_guilds=[582649395149799491, GUILD])
 
 classes.set_up(connector, ADMINS, bot, ACCOUNTING_LOG, GUILD)
 
 bot.add_cog(BaseCommands(GUILD, ADMINS, OWNER, connector))
-bot.add_cog(projects.ProjectCommands(bot, ADMINS, OWNER))
+bot.add_cog(projects.ProjectCommands(bot, ADMINS, OWNER, GUILD, USER_ROLE))
 
 
 @bot.event
@@ -147,7 +153,11 @@ async def on_application_command_error(ctx, error):
                 "Error outside of guild in channel " + str(ctx.channel.id) +
                 ", sent by " + str(ctx.author.id) + ": " + ctx.author.name)
         log_error(logging.getLogger(), error)
-    await ctx.respond(f"Error: {str(error)}", ephemeral=True)
+    if isinstance(error, LoggedException):
+        await ctx.respond(f"Error: {str(error)}. \nFor more details, take a look at the log below.",
+                          file=string_to_file(error.get_log()), ephemeral=True)
+    else:
+        await ctx.respond(f"Error: {str(error)}", ephemeral=True)
 
 
 @bot.event

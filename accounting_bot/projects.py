@@ -1,4 +1,3 @@
-import io
 import logging
 import re
 from enum import Enum
@@ -8,40 +7,48 @@ import discord
 import pytz
 from discord import ApplicationContext, InputTextStyle, Interaction, Option
 from discord.ext import commands
-from discord.ext.commands import Cooldown
-from discord.ui import Modal, InputText, View
+from discord.ui import Modal, InputText
 
 from accounting_bot import sheet, utils
 from accounting_bot.exceptions import GoogleSheetException
-from accounting_bot.utils import string_to_file, list_to_string, send_exception, log_error
+from accounting_bot.project_utils import format_list
+from accounting_bot.utils import string_to_file, list_to_string, send_exception, log_error, AutoDisableView
 
 logger = logging.getLogger("bot.projects")
 logger.setLevel(logging.DEBUG)
 ADMINS = []
 OWNER = -1
+GUILD = -1
+USER_ROLE = -1
+BOT = None  # type: commands.Bot | None
 
 
 class ProjectCommands(commands.Cog):
-    def __int__(self, bot, admins, owner):
-        global ADMINS, OWNER
+    def __init__(self, bot, admins, owner, guild, user_role):
+        global ADMINS, BOT, OWNER, GUILD, USER_ROLE
         self.bot = bot
+        BOT = bot
         self.admins = admins
         ADMINS = admins
         self.owner = owner
         OWNER = owner
+        GUILD = guild
+        USER_ROLE = user_role
 
     @commands.slash_command(
         name="loadprojects",
         description="Loads and list all projects"
     )
     @commands.cooldown(1, 5, commands.BucketType.default)
-    async def load_projects(self, ctx: ApplicationContext, silent: Option(bool, "Execute command silently", required=False, default=True)):
+    async def load_projects(self, ctx: ApplicationContext,
+                            silent: Option(bool, "Execute command silently", required=False, default=True)):
         if not (ctx.author.guild_permissions.administrator or ctx.author.id in ADMINS or ctx.author.id == OWNER):
             await ctx.respond("Missing permissions", ephemeral=True)
             return
         await ctx.response.defer(ephemeral=True)
         log = await sheet.load_projects()
-        res = "Projectlist version: " + sheet.lastChanges.astimezone(pytz.timezone("Europe/Berlin")).strftime("%d.%m.%Y %H:%M") + "\n"
+        res = "Projectlist version: " + sheet.lastChanges.astimezone(pytz.timezone("Europe/Berlin")).strftime(
+            "%d.%m.%Y %H:%M") + "\n"
         for p in sheet.allProjects:
             res += p.to_string() + "\n\n"
 
@@ -53,8 +60,10 @@ class ProjectCommands(commands.Cog):
         name="listprojects",
         description="Lists all projects"
     )
-    async def list_projects(self, ctx: ApplicationContext, silent: Option(bool, "Execute command silently", required=False, default=True)):
-        res = "Projectlist version: " + sheet.lastChanges.astimezone(pytz.timezone("Europe/Berlin")).strftime("%d.%m.%Y %H:%M") + "\n"
+    async def list_projects(self, ctx: ApplicationContext,
+                            silent: Option(bool, "Execute command silently", required=False, default=True)):
+        res = "Projectlist version: " + sheet.lastChanges.astimezone(pytz.timezone("Europe/Berlin")).strftime(
+            "%d.%m.%Y %H:%M") + "\n"
         async with sheet.projects_lock:
             for p in sheet.allProjects:
                 res += p.to_string() + "\n\n"
@@ -72,18 +81,20 @@ class ProjectCommands(commands.Cog):
             await ctx.response.send_message("Fehlende Berechtigungen!", ephemeral=True)
 
 
-class ConfirmView(View):
-    def __init__(self, investments: Dict[str, List[int]], player: str, log=None):
-        super().__init__()
+class ConfirmView(AutoDisableView):
+    def __init__(self, investments: Dict[str, List[int]], player: str, log=None, split=None):
+        super().__init__(timeout=20)
         if log is None:
             log = []
         self.log = log
         self.investments = investments
         self.player = player
+        self.split = split
 
     @discord.ui.button(label="Eintragen", style=discord.ButtonStyle.green)
     async def btn_confirm_callback(self, button, interaction: Interaction):
-        if not (interaction.user.guild_permissions.administrator or interaction.user.id in ADMINS or interaction.user.id == OWNER):
+        if not (
+                interaction.user.guild_permissions.administrator or interaction.user.id in ADMINS or interaction.user.id == OWNER):
             await interaction.response.send_message("Missing permissions", ephemeral=True)
             return
         await interaction.response.send_message("Bitte warten...", ephemeral=True)
@@ -92,24 +103,112 @@ class ConfirmView(View):
         self.log.append("Inserting into sheet...")
         try:
             logger.info("Inserting investments for player %s: %s", self.player, self.investments)
-            log = await sheet.insert_investments(self.player, self.investments)
+            log, results = await sheet.insert_investments(self.player, self.investments)
             success = True
             self.log += log
         except GoogleSheetException as e:
             self.log += e.log
             self.log.append("Fatal error while processing list!")
+            results = e.log
             logger.error("Error while processing investments", exc_info=e)
             for s in self.log:
                 logger.error("[Log] %s", s)
             success = False
-        await interaction.followup.send(
-            ("An **ERROR** occurred during execution of the command" if not success else "Investition wurde eingetragen!"),
+        base_message = ("An **ERROR** occurred during execution of the command" if not success else
+                        "Investition wurde eingetragen!" +
+                        f"\n```\n{format_list(self.split, results)}\n```")
+        view = InformPlayerView(BOT, self.player, self.split, results, base_message)
+        await view.load_user()
+        view.message = await interaction.followup.send(
+            base_message + f"\n\nSoll der Nutzer <@{view.discord_id}> benachrichtigt werden?",
             file=string_to_file(list_to_string(self.log), "log.txt"),
-            ephemeral=False)
+            ephemeral=False, view=view)
 
     async def on_error(self, error: Exception, item, interaction):
-        logger.error(f"Error in ConfirmView: {error}", error)
+        logger.error("Error in ConfirmView: %s", error, exc_info=error)
         await send_exception(error, interaction)
+
+
+class InformPlayerView(AutoDisableView):
+    def __init__(self, bot: commands.Bot, user: str, split: {str: [(str, int)]}, results: {str, bool}, base_message):
+        super().__init__()
+        self.base_message = base_message
+        self.results = results
+        self.split = split
+        self.bot = bot
+        self.user = user
+        self.discord_id = utils.get_discord_id(user)
+
+    async def load_user(self):
+        if self.discord_id is None:
+            nicknames = dict(await self.bot.get_guild(GUILD)
+                             .fetch_members()
+                             .filter(lambda m: m.get_role(USER_ROLE) is not None)
+                             .map(lambda m: (m.nick if m.nick is not None else m.name, m.id))
+                             .flatten())
+            name, perfect = utils.parse_player(self.user, nicknames)
+            if name is not None:
+                self.discord_id = nicknames[name]
+
+    async def update_message(self):
+        await self.message.edit(self.base_message + f"\n\nSoll der Nutzer <@{self.discord_id}> benachrichtigt werden?")
+
+    @discord.ui.button(label="Senden", style=discord.ButtonStyle.green)
+    async def btn_send_callback(self, button, interaction: Interaction):
+        if not (
+                interaction.user.guild_permissions.administrator or interaction.user.id in ADMINS or interaction.user.id == OWNER):
+            await interaction.response.send_message("Missing permissions", ephemeral=True)
+            return
+        if self.discord_id is None:
+            await interaction.response.send_message("Kein Nutzer gefunden...", ephemeral=True)
+            return
+        user = await BOT.get_or_fetch_user(self.discord_id)
+        admin_name = interaction.user.nick if interaction.user.nick is not None else interaction.user.name
+        await user.send(f"Dein Investitionsvertrag wurde von {admin_name} angenommen und für {self.user} eingetragen:\n"
+                        f"```\n{format_list(self.split, self.results)}\n```")
+        await interaction.response.send_message(f"Nutzer <@{self.discord_id}> wurde informiert.", ephemeral=True)
+        utils.save_discord_id(self.user, self.discord_id)
+        await interaction.message.edit(view=None)
+
+    @discord.ui.button(label="Ändern", style=discord.ButtonStyle.blurple)
+    async def btn_change_callback(self, button, interaction: Interaction):
+        if not (
+                interaction.user.guild_permissions.administrator or interaction.user.id in ADMINS or interaction.user.id == OWNER):
+            await interaction.response.send_message("Missing permissions", ephemeral=True)
+            return
+        await interaction.response.send_modal(InformPlayerView.DiscordUserModal(self))
+
+    async def on_error(self, error: Exception, item, interaction):
+        logger.error("Error in InformPlayerView: %s", error, exc_info=error)
+        await send_exception(error, interaction)
+
+    class DiscordUserModal(Modal):
+        def __init__(self,
+                     view,  # type: InformPlayerView
+                     *args, **kwargs):
+            super().__init__(title="Discord Account hinzufügen/ändern...", *args, **kwargs)
+            self.view = view
+            self.add_item(InputText(label="Spielername", placeholder="Spielername", required=True))
+            self.add_item(InputText(label="Discord ID", placeholder="Discord User ID",
+                                    required=True, style=InputTextStyle.singleline))
+
+        async def callback(self, interaction: Interaction):
+            name = self.children[0].value
+            discord_id = self.children[1].value
+            matched_name, perfect = utils.parse_player(name, sheet.users)
+            if matched_name is not None:
+                matched_name = sheet.check_name_overwrites(matched_name)
+                utils.save_discord_id(matched_name, int(discord_id))
+                await interaction.response.send_message(f"Spieler {matched_name} wurde zur ID {discord_id} eingespeichert!\n",
+                                                        ephemeral=True)
+                self.view.discord_id = utils.get_discord_id(matched_name)
+                await self.view.update_message()
+            else:
+                await interaction.response.send_message(f"Fehler, Spieler {name} nicht gefunden!", ephemeral=True)
+
+        async def on_error(self, error: Exception, interaction: Interaction) -> None:
+            log_error(logger, error)
+            await send_exception(error, interaction)
 
 
 class ListModal(Modal):
@@ -121,7 +220,8 @@ class ListModal(Modal):
                                 required=True, style=InputTextStyle.long))
 
     async def callback(self, interaction: Interaction):
-        if not (interaction.user.guild_permissions.administrator or interaction.user.id in ADMINS or interaction.user.id == OWNER):
+        if not (
+                interaction.user.guild_permissions.administrator or interaction.user.id in ADMINS or interaction.user.id == OWNER):
             await interaction.response.send_message("Missing permissions", ephemeral=True)
             return
         logger.debug("Insert Investments command received...")
@@ -134,7 +234,8 @@ class ListModal(Modal):
             return
         log.append("Parsing list...")
         items = Project.Item.parse_list(self.children[1].value)
-        await interaction.followup.send("Eingabe verarbeitet, lade Projekte. Bitte warten, dies dauert nun einige Sekunden", ephemeral=True)
+        await interaction.followup.send(
+            "Eingabe verarbeitet, lade Projekte. Bitte warten, dies dauert nun einige Sekunden", ephemeral=True)
         log.append("Reloading projects...")
         await sheet.load_projects()
         log.append("Splitting contract...")
@@ -147,14 +248,16 @@ class ListModal(Modal):
             await interaction.followup.send(
                 f"Meintest du \"{player}\"? (Deine Eingabe war \"{self.children[0].value}\").\n"
                 f"Eingelesene items: \n```\n" + Project.Item.to_string(items) + "\n```\n"
-                "Willst du diese Liste als Investition eintragen?",
-                view=ConfirmView(investments, player, log),
+                                                                                "Willst du diese Liste als Investition eintragen?\n"
+                                                                                f"Sheet: `{sheet.sheet_name}`",
+                view=ConfirmView(investments, player, log, split),
                 ephemeral=False)
             return
         await interaction.followup.send(
             f"Willst du diese Liste als Investition für \"{player}\" eintragen?\n"
-            f"Eingelesene items: \n```\n" + Project.Item.to_string(items) + "\n```",
-            view=ConfirmView(investments, player, log),
+            f"Eingelesene items: \n```\n" + Project.Item.to_string(items) + "\n```\n"
+                                                                            f"Sheet: `{sheet.sheet_name}`",
+            view=ConfirmView(investments, player, log, split),
             ephemeral=False)
 
     async def on_error(self, error: Exception, interaction: Interaction) -> None:
@@ -189,8 +292,8 @@ class Project(object):
 
     @staticmethod
     def split_contract(items, project_list) -> {str: [(str, int)]}:
-        split = {}                                  # type: {str: [(str, int)]}
-        for item in items:                          # type: Project.Item
+        split = {}  # type: {str: [(str, int)]}
+        for item in items:  # type: Project.Item
             left = item.amount
             split[item.name] = []
             for project in reversed(project_list):  # type: Project
@@ -240,8 +343,8 @@ class Project(object):
             for line in raw.split("\n"):
                 if re.fullmatch("[a-zA-Z ]*", line):
                     continue
-                line = re.sub("\t", "    ", line.strip())      # Replace Tabs with spaces
-                line = re.sub("^\\d+ *", "", line.strip())     # Delete first column (numeric Index)
+                line = re.sub("\t", "    ", line.strip())  # Replace Tabs with spaces
+                line = re.sub("^\\d+ *", "", line.strip())  # Delete first column (numeric Index)
                 if len(re.findall("[0-9]+", line.strip())) > 1:
                     line = re.sub(" *[0-9.]+$", "", line.strip())  # Delete last column (Valuation, decimal)
                 item = re.sub(" +\\d+$", "", line)

@@ -108,3 +108,32 @@ def verify_batch_data(batch_data: [], log: []):
         log.append(f"  Unexpected length of investments: {len(batch_data[3])}")
         return False
     return True
+
+
+def format_list(split: {str: [(str, int)]}, success: {str, bool}):
+    res = ""
+    max_num = 0
+    max_project_size = 0
+    for item in split:
+        for (project, quantity) in split[item]:
+            if quantity > max_num:
+                max_num = quantity
+            if len(project) > max_project_size:
+                max_project_size = len(project)
+    max_size = min(len(str(max_num)), 10)
+
+    for item in split:
+        res += item + "\n"
+        for (project, quantity) in split[item]:
+            spaces = max(max_size - len(str(quantity)), 0)
+            res += f"    {quantity} {' ' * spaces}-> {project}"
+            spaces = max(max_project_size - len(str(project)), 0)
+            if project in success:
+                if success[project]:
+                    res += f"{' ' * spaces} (✓)"
+                else:
+                    res += f"{' ' * spaces} (FAILED)"
+            else:
+                res += f"{' ' * spaces} (NOT INSERTED)"
+            res += "\n"
+    return res

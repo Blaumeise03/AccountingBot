@@ -1,9 +1,10 @@
 logs/
 .idea/
 venv/
+python
 .env
 config.json
 user_overwrites.json
-python
+discord_ids.json
 credentials.json
 accounting-bot-*.json

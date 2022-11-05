@@ -545,7 +545,7 @@ class ShipyardModal(Modal):
             warnings += f"Warnung: Slotgebühr ist mit {slot_price} zu gering, sie wird nicht eingetragen."
         if builder is not None and slot_price >= 1000000:
             transaction_builder = Transaction(
-                name_from=buyer,
+                name_from="Buyback Program",
                 name_to=builder,
                 amount=slot_price,
                 purpose=f"Slotgebühr {ship}",

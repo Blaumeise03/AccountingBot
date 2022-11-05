@@ -24,6 +24,7 @@ SPREADSHEET_ID = ""
 SHEET_LOG_NAME = "Accounting Log"
 SHEET_ACCOUNTING_NAME = "Accounting"
 SHEET_OVERFLOW_NAME = "Projektüberlauf"
+sheet_name = "N/A"
 
 wkProjectNames = []  # type: [str]
 users = []
@@ -69,13 +70,14 @@ agcm = gspread_asyncio.AsyncioGspreadClientManager(get_creds)
 
 
 async def setup_sheet(sheet_id, project_resources):
-    global SPREADSHEET_ID, PROJECT_RESOURCES, users
+    global SPREADSHEET_ID, PROJECT_RESOURCES, users, sheet_name
     logger.info("Loading google sheet...")
     agc = await agcm.authorize()
     SPREADSHEET_ID = sheet_id
     PROJECT_RESOURCES = project_resources
     load_config()
     sheet = await agc.open_by_key(sheet_id)
+    sheet_name = sheet.title
     wk_accounting = await sheet.worksheet("Accounting")
     user_raw = await wk_accounting.get_values("A4:K", value_render_option=ValueRenderOption.unformatted)
     for u in user_raw:
@@ -264,15 +266,17 @@ async def load_project(project_name: str, log: [str], sheet: gspread_asyncio.Asy
 
 async def insert_investments(player: str, investments: {str: [int]}):
     log = []
+    success = {}
     for project in investments:
         log.append(f"Processing investment into {project} for player {player}")
         try:
-            await insert_investment(player, project, investments[project], log)
-        except GSpreadException as e:
+            success[project] = await insert_investment(player, project, investments[project], log)
+        except Exception as e:
             log.append("Error: " + str(e))
+            success[project] = False
             logger.exception("Error while inserting investments for player %s", player, exc_info=e)
             raise GoogleSheetException(log, f"Error while trying to insert investments for {player}")
-    return log
+    return log, success
 
 
 async def insert_investment(player: str, project_name: str, quantities: [int], log=None):
@@ -336,6 +340,7 @@ async def insert_investment(player: str, project_name: str, quantities: [int], l
         await worksheet.batch_update(changes, value_input_option=ValueInputOption.user_entered)
     logger.debug("Inserted investment for %s into %s!", player, project_name)
     log.append(f"Project {project_name} processed!")
+    return True
 
 
 async def insert_overflow(player: str, quantities: [int], log=None):
@@ -358,5 +363,5 @@ async def insert_overflow(player: str, quantities: [int], log=None):
     await s.append_rows(request, value_input_option=ValueInputOption.user_entered)
     log.append("Overflow inserted!")
     logger.debug("Inserted overflow for %s!", player)
-    return log
+    return True
 
