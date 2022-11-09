@@ -247,9 +247,9 @@ class ListModal(Modal):
         if not is_perfect:
             await interaction.followup.send(
                 f"Meintest du \"{player}\"? (Deine Eingabe war \"{self.children[0].value}\").\n"
-                f"Eingelesene items: \n```\n" + Project.Item.to_string(items) + "\n```\n"
-                                                                                "Willst du diese Liste als Investition eintragen?\n"
-                                                                                f"Sheet: `{sheet.sheet_name}`",
+                f"Eingelesene items: \n```\n{Project.Item.to_string(items)}\n```\n"
+                "Willst du diese Liste als Investition eintragen?\n"
+                f"Sheet: `{sheet.sheet_name}`",
                 view=ConfirmView(investments, player, log, split),
                 ephemeral=False)
             return
@@ -364,6 +364,6 @@ class Project(object):
             return res
 
     class ExcludeSettings(Enum):
-        none = 0  # Don't exclude the projects
+        none = 0  # Don't exclude the project
         investments = 1  # Exclude the project from investments
         all = 2  # Completely hides the project

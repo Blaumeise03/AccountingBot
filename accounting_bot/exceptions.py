@@ -24,3 +24,11 @@ class GoogleSheetException(LoggedException):
 
     def get_log(self) -> str:
         return utils.list_to_string(self.log)
+
+
+class ConfigException(Exception):
+    pass
+
+
+class ConfigDataTypeException(ConfigException):
+    pass

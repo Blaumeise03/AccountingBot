@@ -20,6 +20,7 @@ from accounting_bot.database import DatabaseConnector
 from accounting_bot.discordLogger import PycordHandler
 from accounting_bot.exceptions import LoggedException
 from accounting_bot.utils import log_error, string_to_file
+from accounting_bot.config import Config, ConfigTree
 
 log_filename = "logs/" + datetime.now().strftime("%Y-%m-%d_%H-%M-%S") + ".log"
 print("Logging outputs goes to: " + log_filename)
@@ -48,65 +49,50 @@ logging.getLogger().setLevel(logging.INFO)
 logging.info("Loading .env...")
 load_dotenv()
 TOKEN = os.getenv('DISCORD_TOKEN')
-GUILD = -1
-USER_ROLE = -1
-ACCOUNTING_LOG = -1
-MENU_MESSAGE = -1
-MENU_CHANNEL = -1
-LOG_CHANNEL = -1
-OWNER = -1
-ADMINS = []
-PREFIX = "§"
-PROJECT_RESOURCES = []
 
 # loading json config
 logging.info("Loading JSON Config...")
-config = None
-if exists("config.json"):
-    with open("config.json") as json_file:
-        config = json.load(json_file)
-    if config["server"] == -1:
-        logging.error("ERROR: Config is empty, please change the settings and restart!")
-    else:
-        GUILD = config["server"]
-        USER_ROLE = config["user_role"]
-        ACCOUNTING_LOG = config["logChannel"]
-        MENU_MESSAGE = config["menuMessage"]
-        MENU_CHANNEL = config["menuChannel"]
-        ADMINS = config["admins"]
-        OWNER = config["owner"]
-        LOG_CHANNEL = config["errorLogChannel"]
-        PREFIX = config["prefix"]
-        PROJECT_RESOURCES = config["project_resources"]
-else:
-    config = {
-        "server": -1,
-        "user_role": -1,
-        "logChannel": -1,
-        "menuMessage": -1,
-        "menuChannel": -1,
-        "errorLogChannel": -1,
-        "admins": [
-        ],
-        "db_user": "Username",
-        "db_password": "Password",
-        "db_port": 3306,
-        "db_host": "localhost",
-        "db_name": "accountingBot",
-        "google_sheet": "SHEET_ID",
-        "prefix": "§",
-        "project_resources": []
-    }
-    with open("config.json", "w") as outfile:
-        json.dump(config, outfile, indent=4)
-        logging.error("ERROR: Config not found, created new one. Please change the settings and restart!")
+config_structure = {
+    "prefix": (str, "§"),
+    "server": (int, -1),
+    "user_role": (int, -1),
+    "logChannel": (int, -1),
+    "menuMessage": (int, -1),
+    "menuChannel": (int, -1),
+    "owner": (int, -1),
+    "errorLogChannel": (int, -1),
+    "admins": (list, []),
+    "db": {
+        "user": (str, "N/A"),
+        "password": (str, "N/A"),
+        "port": (int, -1),
+        "host": (str, "N/A"),
+        "name": (str, "N/A")
+    },
+    "google_sheet": (str, "N/A"),
+    "project_resources": (list, [])
+}
+config = Config("config.json", ConfigTree(config_structure))
+config.load_config()
+logging.info("Config loaded")
+
+GUILD = config["server"]
+USER_ROLE = config["user_role"]
+ACCOUNTING_LOG = config["logChannel"]
+MENU_MESSAGE = config["menuMessage"]
+MENU_CHANNEL = config["menuChannel"]
+ADMINS = config["admins"]
+OWNER = config["owner"]
+LOG_CHANNEL = config["errorLogChannel"]
+PREFIX = config["prefix"]
+PROJECT_RESOURCES = config["project_resources"]
 
 connector = DatabaseConnector(
-    username=config["db_user"],
-    password=config["db_password"],
-    port=config["db_port"],
-    host=config["db_host"],
-    database=config["db_name"]
+    username=config["db.user"],
+    password=config["db.password"],
+    port=config["db.port"],
+    host=config["db.host"],
+    database=config["db.name"]
 )
 
 logging.info("Starting up bot...")
@@ -164,8 +150,6 @@ async def on_application_command_error(ctx, error):
 async def on_ready():
     logging.info("Logged in!")
 
-    logging.info("Starting Google sheets API...")
-    await sheet.setup_sheet(config["google_sheet"], PROJECT_RESOURCES)
     logging.info("Setting up channels...")
     # Basic setup
     if MENU_CHANNEL == -1:
@@ -246,6 +230,10 @@ async def on_ready():
         else:
             # Updating the message View, so it can be used by the users
             await msg.edit(view=classes.TransactionView())
+
+    logging.info("Starting Google sheets API...")
+    await sheet.setup_sheet(config["google_sheet"], PROJECT_RESOURCES)
+    logging.info("Google sheets API loaded.")
     # Setup completed
     logging.info("Setup complete.")
 
@@ -378,17 +366,11 @@ def save_config():
     """
     Saves the config
     """
-    logging.warning("Saving config...")
-    global outfile
     config["server"] = GUILD
     config["logChannel"] = ACCOUNTING_LOG
     config["menuMessage"] = MENU_MESSAGE
     config["menuChannel"] = MENU_CHANNEL
-    logging.info("Config dict updated. Writing to file...")
-    with open("config.json", "w") as outfile:
-        json.dump(config, outfile, indent=4)
-        logging.warning("Config saved!")
-    logging.info("Save completed.")
+    config.save_config()
 
 
 bot.run(TOKEN)
