@@ -83,7 +83,7 @@ class ProjectCommands(commands.Cog):
 
 class ConfirmView(AutoDisableView):
     def __init__(self, investments: Dict[str, List[int]], player: str, log=None, split=None):
-        super().__init__(timeout=20)
+        super().__init__()
         if log is None:
             log = []
         self.log = log
