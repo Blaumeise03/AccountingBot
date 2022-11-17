@@ -77,13 +77,13 @@ class ProjectCommands(commands.Cog):
         "skip_loading",
         description="Skip the reloading of the projects",
         required=False,
-        default=[]
+        default=False
     )
     @option(
         "priority_project",
-        description="Prioritize this project",
+        description="Prioritize this project, or multiple separated by a semicolon (;)",
         required=False,
-        default=str
+        default=""
     )
     @commands.cooldown(1, 5, commands.BucketType.default)
     async def insert_investments(self,
@@ -91,8 +91,12 @@ class ProjectCommands(commands.Cog):
                                  skip_loading: bool,
                                  priority_project: str
                                  ):
+        if ";" in priority_project:
+            priority_projects = priority_project.split(";")
+        else:
+            priority_projects = [priority_project]
         if ctx.author.guild_permissions.administrator or ctx.author.id in ADMINS or ctx.author.id == OWNER:
-            await ctx.response.send_modal(ListModal(skip_loading, [priority_project]))
+            await ctx.response.send_modal(ListModal(skip_loading, priority_projects))
         else:
             await ctx.response.send_message("Fehlende Berechtigungen!", ephemeral=True)
 
@@ -130,14 +134,19 @@ class ConfirmView(AutoDisableView):
             for s in self.log:
                 logger.error("[Log] %s", s)
             success = False
+        msg_list = format_list(self.split, results)
+        msg_files = [string_to_file(list_to_string(self.log), "log.txt")]
         base_message = (("An **ERROR** occurred during execution of the command" if not success else
-                        "Investition wurde eingetragen!") +
-                        f"\n```\n{format_list(self.split, results)}\n```")
+                        "Investition wurde eingetragen!"))
+        if len(base_message) + len(msg_list) <= 1980:
+            base_message += f"\n```\n{msg_list}\n```"
+        else:
+            msg_files.append(utils.string_to_file(msg_list, "split.txt"))
         view = InformPlayerView(BOT, self.player, self.split, results, base_message)
         await view.load_user()
         view.message = await interaction.followup.send(
             base_message + f"\n\nSoll der Nutzer <@{view.discord_id}> benachrichtigt werden?",
-            file=string_to_file(list_to_string(self.log), "log.txt"),
+            files=msg_files,
             ephemeral=False, view=view)
 
     async def on_error(self, error: Exception, item, interaction):
@@ -180,8 +189,14 @@ class InformPlayerView(AutoDisableView):
             return
         user = await BOT.get_or_fetch_user(self.discord_id)
         admin_name = interaction.user.nick if interaction.user.nick is not None else interaction.user.name
-        await user.send(f"Dein Investitionsvertrag wurde von {admin_name} angenommen und für {self.user} eingetragen:\n"
-                        f"```\n{format_list(self.split, self.results)}\n```")
+        message = f"Dein Investitionsvertrag wurde von {admin_name} angenommen und für {self.user} eingetragen:\n"
+        msg_list = f"```\n{format_list(self.split, self.results)}\n```"
+        msg_files = []
+        if len(message) + len(msg_list) < 90:
+            message += msg_list
+        else:
+            msg_files = [utils.string_to_file(msg_list, "split.txt")]
+        await user.send(message, files=msg_files)
         await interaction.response.send_message(f"Nutzer <@{self.discord_id}> wurde informiert.", ephemeral=True)
         utils.save_discord_id(self.user, self.discord_id)
         await interaction.message.edit(view=None)
@@ -265,23 +280,27 @@ class ListModal(Modal):
             split = Project.split_contract(items, sheet.allProjects, self.priority_projects)
         log.append("Calculating investments...")
         investments = Project.calc_investments(split)
+        message = ""
         if not is_perfect:
-            await interaction.followup.send(
-                f"Meintest du \"{player}\"? (Deine Eingabe war \"{self.children[0].value}\").\n"
-                f"Eingelesene items: \n```\n{Project.Item.to_string(items)}\n```\n"
-                "Willst du diese Liste als Investition eintragen:\n"
-                f"```\n{project_utils.format_list(split, [])}\n```\n"
-                f"Sheet: `{sheet.sheet_name}`",
-                view=ConfirmView(investments, player, log, split),
-                ephemeral=False)
-            return
+            message = f"Meintest du \"{player}\"? (Deine Eingabe war \"{self.children[0].value}\").\n"
+        msg_list = project_utils.format_list(split, [])
+        message += f"Eingelesene items: \n```\n{Project.Item.to_string(items)}\n```\n" \
+                   "Willst du diese Liste als Investition eintragen:\n" \
+                   f"Sheet: `{sheet.sheet_name}`"
+        msg_file = []
+        if len(message) + len(msg_list) >= 1980:
+            if len(msg_list) <= 1980:
+                await interaction.followup.send(f"Verteilung:\n```\n{msg_list}\n```")
+            else:
+                msg_file = [utils.string_to_file(msg_list, "split.txt")]
+        else:
+            message += f"\n```\n{msg_list}\n```"
         await interaction.followup.send(
-            f"Willst du diese Liste als Investition für \"{player}\" eintragen?\n"
-            f"Eingelesene items: \n```\n{Project.Item.to_string(items)}\n```\nVerteilung:\n"
-            f"```\n{project_utils.format_list(split, [])}\n```\n"
-            f"Sheet: `{sheet.sheet_name}`",
+            message,
             view=ConfirmView(investments, player, log, split),
+            files=msg_file,
             ephemeral=False)
+        return
 
     async def on_error(self, error: Exception, interaction: Interaction) -> None:
         log_error(logger, error)
