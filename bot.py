@@ -87,7 +87,7 @@ LOG_CHANNEL = config["errorLogChannel"]
 PREFIX = config["prefix"]
 PROJECT_RESOURCES = config["project_resources"]
 
-connector = DatabaseConnector(
+CONNECTOR = DatabaseConnector(
     username=config["db.user"],
     password=config["db.password"],
     port=config["db.port"],
@@ -105,9 +105,9 @@ intents.reactions = True
 intents.members = True
 bot = commands.Bot(command_prefix=PREFIX, intents=intents, debug_guilds=[582649395149799491, GUILD])
 
-classes.set_up(connector, ADMINS, bot, ACCOUNTING_LOG, GUILD)
+classes.set_up(CONNECTOR, ADMINS, bot, ACCOUNTING_LOG, GUILD)
 
-bot.add_cog(BaseCommands(GUILD, ADMINS, OWNER, connector))
+bot.add_cog(BaseCommands(GUILD, ADMINS, OWNER, CONNECTOR))
 bot.add_cog(projects.ProjectCommands(bot, ADMINS, OWNER, GUILD, USER_ROLE))
 
 
@@ -119,6 +119,10 @@ async def on_error(event_name, *args, **kwargs):
 
 @tasks.loop(seconds=10.0)
 async def log_loop():
+    """
+    Logging loop. Will send every 10 seconds all logs into a specified discord channel.
+    See :class:`accounting_bot.discordLogger.PycordHandler` for more details.
+    """
     await discord_handler.process_logs()
 
 log_loop.start()
@@ -126,23 +130,34 @@ log_loop.start()
 
 @bot.event
 async def on_application_command_error(ctx, error):
+    """
+    Exception handler for slash commands.
+
+    :param ctx:     Context
+    :param error:   the error that occurred
+    """
     silent = False
+    # Don't log command rate limit errors, but send a response to the interaction
     if isinstance(error, CommandOnCooldown):
         silent = True
     if not silent:
         if ctx.guild is not None:
+            # Error occurred inside a server
             logging.error(
                 "Error in guild " + str(ctx.guild.id) + " in channel " + str(ctx.channel.id) +
                 ", sent by " + str(ctx.author.id) + ": " + ctx.author.name + " while executing command " + ctx.command.name)
         else:
+            # Error occurred inside a direct message
             logging.error(
                 "Error outside of guild in channel " + str(ctx.channel.id) +
                 ", sent by " + str(ctx.author.id) + ": " + ctx.author.name)
         log_error(logging.getLogger(), error)
     if isinstance(error, LoggedException):
+        # Append additional log
         await ctx.respond(f"Error: {str(error)}. \nFor more details, take a look at the log below.",
                           file=string_to_file(error.get_log()), ephemeral=True)
     else:
+        # Normal error
         await ctx.respond(f"Error: {str(error)}", ephemeral=True)
 
 
@@ -167,7 +182,7 @@ async def on_ready():
                    embeds=get_menu_embeds(), content="")
 
     # Updating shortcut menus
-    shortcuts = connector.get_shortcuts()
+    shortcuts = CONNECTOR.get_shortcuts()
     logging.info(f"Found {len(shortcuts)} shortcut menus")
     for (m, c) in shortcuts:
         chan = bot.get_channel(c)
@@ -179,25 +194,25 @@ async def on_ready():
                            embed=classes.EMBED_MENU_SHORTCUT, content="")
         except discord.errors.NotFound as ignored:
             logging.warning(f"Message {m} in channel {c} not found, deleting it from DB")
-            connector.delete_shortcut(m)
+            CONNECTOR.delete_shortcut(m)
 
     # Basic setup completed
     activity = discord.Activity(name="IAK-JW", type=ActivityType.competing)
-    await bot.change_presence(status=discord.Status.online, activity=activity)
+    await bot.change_presence(status=discord.Status.idle, activity=activity)
 
     # Updating unverified accountinglog entries
     logging.info("Setting up unverified accounting log entries")
-    unverified = connector.get_unverified()
+    unverified = CONNECTOR.get_unverified()
     logging.info(f"Found {len(unverified)} unverified message(s)")
     for m in unverified:
         try:
             msg = await accounting_log.fetch_message(m)
         except discord.errors.NotFound:
-            connector.delete(m)
+            CONNECTOR.delete(m)
             continue
         if msg.content.startswith("Verifiziert von"):
             logging.warning(f"Transaction already verified but not inside database: {msg.id}: {msg.content}")
-            connector.set_verification(m, 1)
+            CONNECTOR.set_verification(m, 1)
             continue
         v = False  # Was transaction verified while the bot was offline?
         user = None  # User ID who verified the message
@@ -236,6 +251,7 @@ async def on_ready():
     logging.info("Google sheets API loaded.")
     # Setup completed
     logging.info("Setup complete.")
+    await bot.change_presence(status=discord.Status.online, activity=activity)
 
 
 @bot.event
@@ -245,10 +261,10 @@ async def on_message(message):
 
 async def save_embeds(msg, user_id):
     """
-    Saves a transaction to the sheet
+    Saves the transaction of a message into the sheet
 
-    :param msg:
-    :param user_id:
+    :param msg:     The message with the transaction embed
+    :param user_id: The user ID that verified the transaction
     """
     if len(msg.embeds) == 0:
         return
@@ -268,14 +284,14 @@ async def save_embeds(msg, user_id):
     user = await bot.get_or_fetch_user(user_id)
     logging.info(f"Verified transaction {msg.id} ({time_formatted}. Verified by {user.name} ({user.id}).")
     # Set message as verified
-    connector.set_verification(msg.id, verified=1)
+    CONNECTOR.set_verification(msg.id, verified=1)
     await msg.edit(content=f"Verifiziert von {user.name}", view=None)
 
 
 @bot.event
 async def on_raw_reaction_add(reaction):
     if reaction.emoji.name == "✅" and reaction.channel_id == ACCOUNTING_LOG and reaction.user_id in ADMINS:
-        is_verified = connector.is_unverified_transaction(message=reaction.message_id)
+        is_verified = CONNECTOR.is_unverified_transaction(message=reaction.message_id)
         if is_verified is None:
             return
         if not is_verified:
@@ -294,7 +310,7 @@ async def on_raw_reaction_add(reaction):
             await author.send(content="Hinweis: Diese Transaktion wurde bereits verifiziert, sie wurde nicht "
                                       "erneut im Sheet eingetragen. Bitte trage sie selbstständig ein, falls "
                                       "dies nötig ist.")
-            connector.set_verification(msg.id, True)
+            CONNECTOR.set_verification(msg.id, True)
             return
         else:
             # Save transaction
@@ -337,9 +353,10 @@ async def setup(ctx):
         await ctx.respond("Missing permissions", ephemeral=True)
 
 
-# noinspection SpellCheckingInspection
-@commands.slash_command(description="Sets the current channel as the accounting log channel.")
-async def setlogchannel(self, ctx):
+@commands.slash_command(
+    name="setlogchannel",
+    description="Sets the current channel as the accounting log channel.")
+async def set_log_channel(self, ctx):
     global ACCOUNTING_LOG
     logging.info("SetLogChannel command received.")
     if ctx.guild is None:
@@ -364,7 +381,7 @@ async def setlogchannel(self, ctx):
 
 def save_config():
     """
-    Saves the config
+    Saves the global variable into the config
     """
     config["server"] = GUILD
     config["logChannel"] = ACCOUNTING_LOG

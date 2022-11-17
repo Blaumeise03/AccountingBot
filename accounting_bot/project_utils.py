@@ -90,23 +90,27 @@ def calculate_changes(project_resources: [str], quantities: [int],
     return changes
 
 
-def verify_batch_data(batch_data: [], log: []):
+def verify_batch_data(batch_data: [], log: [str]):
+    """
+    Verifies the batch data of a project sheet.
+
+    :param batch_data: the batch data to verify
+    :param log: the log
+    :return: True if the data was verified
+    :raises exceptions.GoogleSheetException: if the data could not be verified
+    """
     if len(batch_data) != 4:
-        logger.error("Unexpected batch size: %s. Expected: 4", len(batch_data))
         log.append(f"  Unexpected batch size: {len(batch_data)}. Expected: 4")
-        return False
+        raise GoogleSheetException(log, f"Unexpected batch size: {len(batch_data)}. Expected: 4")
     if len(batch_data[0]) != 1:
-        logger.error("Unexpected length of item_names: %s. Expected: 1", len(batch_data[0]))
         log.append(f"  Unexpected length of item_names: {len(batch_data[0])}. Expected: 1")
-        return False
+        raise GoogleSheetException(log, f"Unexpected length of {len(batch_data[0])}. Expected: 1")
     if len(batch_data[1]) != 1:
-        logger.error("Unexpected length of item_quantities: %s. Expected: 1", len(batch_data[1]))
         log.append(f"  Unexpected length of item_quantities: {len(batch_data[1])}. Expected: 1")
-        return False
+        raise GoogleSheetException(log, f"Unexpected length of item_quantities: {len(batch_data[1])}. Expected: 1")
     if len(batch_data[3]) == 0:
-        logger.error("Unexpected length of investments: %s", len(batch_data[3]))
         log.append(f"  Unexpected length of investments: {len(batch_data[3])}")
-        return False
+        raise GoogleSheetException(log, f"Unexpected length of investments: {len(batch_data[3])}")
     return True
 
 

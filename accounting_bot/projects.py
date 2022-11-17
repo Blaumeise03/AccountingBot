@@ -109,13 +109,13 @@ class ConfirmView(AutoDisableView):
         except GoogleSheetException as e:
             self.log += e.log
             self.log.append("Fatal error while processing list!")
-            results = e.log
-            logger.error("Error while processing investments", exc_info=e)
+            results = e.progress
+            # logger.error("Error while processing investments", exc_info=e)
             for s in self.log:
                 logger.error("[Log] %s", s)
             success = False
-        base_message = ("An **ERROR** occurred during execution of the command" if not success else
-                        "Investition wurde eingetragen!" +
+        base_message = (("An **ERROR** occurred during execution of the command" if not success else
+                        "Investition wurde eingetragen!") +
                         f"\n```\n{format_list(self.split, results)}\n```")
         view = InformPlayerView(BOT, self.player, self.split, results, base_message)
         await view.load_user()

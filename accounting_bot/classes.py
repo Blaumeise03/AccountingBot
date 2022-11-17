@@ -9,33 +9,34 @@ import discord.ext
 import mariadb
 import pytz
 from discord import Embed, Interaction, Color, Message
-from discord.ui import Modal, View, InputText
+from discord.ui import Modal, InputText
 
 from accounting_bot import sheet, utils
-from accounting_bot .database import DatabaseConnector
+from accounting_bot.database import DatabaseConnector
+from accounting_bot.utils import send_exception, AutoDisableView
 
 logger = logging.getLogger("bot.classes")
 
 BOT = None  # type: discord.ext.commands.bot.Bot | None
 ACCOUNTING_LOG = None  # type: int | None
 SERVER = None  # type: int | None
+ADMINS = []  # type: [int]
+CONNECTOR = None  # type: DatabaseConnector | None
+
+# All embeds
 EMBED_MENU_INTERNAL = None  # type: Embed | None
 EMBED_MENU_EXTERNAL = None  # type: Embed | None
 EMBED_MENU_VCB = None  # type: Embed | None
 EMBED_MENU_SHORTCUT = None  # type: Embed | None
 EMBED_INDU_MENU = None  # type: Embed | None
 
-connector = None  # type: DatabaseConnector | None
-
-admins = []
-
 
 def set_up(new_connector: DatabaseConnector,
            new_admins: List[int],
            bot: discord.ext.commands.bot.Bot,
-           acc_log: int, server: int):
+           acc_log: int, server: int) -> None:
     """
-    Sets all the required variables.
+    Sets all the required variables and reloads the embeds.
 
     :param new_connector: the new DatabaseConnector
     :param new_admins: the list of the ids of all admins
@@ -43,10 +44,10 @@ def set_up(new_connector: DatabaseConnector,
     :param acc_log: the id of the accounting log channel
     :param server: the id of the server
     """
-    global connector, admins, BOT, ACCOUNTING_LOG, SERVER
+    global CONNECTOR, ADMINS, BOT, ACCOUNTING_LOG, SERVER
     global EMBED_MENU_INTERNAL, EMBED_MENU_EXTERNAL, EMBED_MENU_VCB, EMBED_MENU_SHORTCUT, EMBED_INDU_MENU
-    connector = new_connector
-    admins = new_admins
+    CONNECTOR = new_connector
+    ADMINS = new_admins
     BOT = bot
     ACCOUNTING_LOG = acc_log
     SERVER = server
@@ -61,7 +62,12 @@ def set_up(new_connector: DatabaseConnector,
         logger.info("Embeds loaded.")
 
 
-def get_menu_embeds():
+def get_menu_embeds() -> [Embed]:
+    """
+    Returns an array of all embeds for the main accounting bot menu.
+
+    :return: an array containing all three menu embeds.
+    """
     return [
         EMBED_MENU_INTERNAL,
         EMBED_MENU_EXTERNAL,
@@ -119,11 +125,6 @@ def parse_player(string: str) -> (Union[str, None], bool):
     return utils.parse_player(string, sheet.users)
 
 
-async def send_exception(error: Exception, interaction: Interaction):
-    interaction.response.send_message(f"An unexpected error occurred: \n{error.__class__.__name__}\n{str(error)}",
-                                      ephemeral=True)
-
-
 class Transaction:
     """
     Represents a transaction
@@ -138,11 +139,14 @@ class Transaction:
         the amount of the transaction
 
     """
+
+    # Transaction types
     NAMES = {
         0: "Transfer",
         1: "Einzahlen",
         2: "Auszahlen"
     }
+    # Embed colors
     COLORS = {
         0: Color.blue(),
         1: Color.green(),
@@ -177,7 +181,6 @@ class Transaction:
         """
         Detects the type of this transaction. 0 = Transfer, 1 = Deposit, 2 = Withdraw.
 
-
         :return: 0, 1 or 3 for transfer, deposit and withdraw or -1 if unknown type
         """
         if self.name_to is not None and self.name_from is not None:
@@ -190,7 +193,7 @@ class Transaction:
 
     def create_embed(self) -> Embed:
         """
-        Creates an :class:`Embed` out of this transaction.
+        Creates an :class:`Embed` representing this transaction.
 
         :rtype: Embed
         :return: the created embed
@@ -217,17 +220,19 @@ class Transaction:
     @staticmethod
     def from_modal(modal: Modal, author: str) -> ('Transaction', str):
         """
-        Creates a Transaction out of a :class:`Modal`. The Modal has to be filled out.
+        Creates a Transaction out of a :class:`Modal`, the Modal has to be filled out.
 
         All warnings that occurred during parsing the values will be returned as well.
 
         :param modal: the modal with the values for the transaction
         :param author: the author of this transaction
-        :return: A Tuple containing the transaction (or None if the data was incorrect), as well as all warnings.
+        :return: A Tuple containing the transaction (or None if the data was incorrect), as well as a string with all
+        warnings.
         """
         transaction = Transaction(author=author)
         warnings = ""
         for field in modal.children:
+            # Processing all fields of the modal
             name_type = -1
             if field.label.casefold() == "Von".casefold():
                 name_type = 0
@@ -309,14 +314,19 @@ async def send_transaction(embeds: List[Embed], interaction: Interaction, note="
             continue
         msg = await BOT.get_channel(ACCOUNTING_LOG).send(embeds=[embed], view=TransactionView())
         try:
-            connector.add_transaction(msg.id, interaction.user.id)
+            CONNECTOR.add_transaction(msg.id, interaction.user.id)
         except mariadb.Error as e:
             note += "\nFehler beim Eintragen in die Datenbank, die Transaktion wurde jedoch trotzdem im " \
                     "Accountinglog gepostet. Informiere bitte einen Admin, danke.\n{e}"
     await interaction.response.send_message("Transaktion gesendet!" + note, ephemeral=True)
 
 
-class AccountingView(View):
+class AccountingView(AutoDisableView):
+    """
+    A :class:`discord.ui.View` with four buttons: 'Transfer', 'Deposit', 'Withdraw', 'Shipyard' and a printer button.
+    The first 4 buttons will open the corresponding modal (see :class:`TransferModal` and :class:`ShipyardModal`),
+    the printer button responds with a list of all links to all unverified transactions.
+    """
     def __init__(self):
         super().__init__(timeout=None)
 
@@ -342,7 +352,7 @@ class AccountingView(View):
 
     @discord.ui.button(emoji="🖨️", style=discord.ButtonStyle.grey)
     async def btn_list_transactions_callback(self, button, interaction):
-        unverified = connector.get_unverified(include_user=True)
+        unverified = CONNECTOR.get_unverified(include_user=True)
         msg = "Unverifizierte Transaktionen:"
         if len(unverified) == 0:
             msg += "\nKeine"
@@ -355,17 +365,22 @@ class AccountingView(View):
         await send_exception(error, interaction)
 
 
-class TransactionView(View):
+class TransactionView(AutoDisableView):
+    """
+    A :class:`discord.ui.View` for transaction messages with two buttons: 'Delete' and 'Edit'. The 'Delete' button will
+    delete the message if the user is the author of the transaction, or an administrator. The 'Edit' button allows the
+    author and administrators to edit the transaction, see :class:`EditModal`.
+    """
     def __init__(self):
         super().__init__(timeout=None)
 
     @discord.ui.button(label="Löschen", style=discord.ButtonStyle.red)
     async def btn_delete_callback(self, button, interaction):
-        (owner, verified) = connector.get_owner(interaction.message.id)
-        if not verified and (owner == interaction.user.id or interaction.user.id in admins):
+        (owner, verified) = CONNECTOR.get_owner(interaction.message.id)
+        if not verified and (owner == interaction.user.id or interaction.user.id in ADMINS):
             await interaction.message.delete()
             await interaction.response.send_message("Transaktion Gelöscht!", ephemeral=True)
-            connector.delete(interaction.message.id)
+            CONNECTOR.delete(interaction.message.id)
         elif not owner == interaction.user.id:
             await interaction.response.send_message("Dies ist nicht deine Transaktion, wenn du ein Admin bist, lösche "
                                                     "die Nachricht bitte eigenständig.", ephemeral=True)
@@ -374,8 +389,8 @@ class TransactionView(View):
 
     @discord.ui.button(label="Bearbeiten", style=discord.ButtonStyle.blurple)
     async def btn_edit_callback(self, button, interaction):
-        (owner, verified) = connector.get_owner(interaction.message.id)
-        if not verified and (owner == interaction.user.id or interaction.user.id in admins):
+        (owner, verified) = CONNECTOR.get_owner(interaction.message.id)
+        if not verified and (owner == interaction.user.id or interaction.user.id in ADMINS):
             embed = interaction.message.embeds[0]
             await interaction.response.send_modal(EditModal(interaction.message, title=embed.title))
         elif not owner == interaction.user.id:
@@ -389,7 +404,11 @@ class TransactionView(View):
         await send_exception(error, interaction)
 
 
-class ConfirmView(View):
+class ConfirmView(AutoDisableView):
+    """
+    A :class:`discord.ui.View` for confirming new transactions. It adds one button 'Send', which will send all embeds of
+    the message into the accounting log channel.
+    """
     def __init__(self):
         super().__init__(timeout=None)
 
@@ -402,8 +421,22 @@ class ConfirmView(View):
         await send_exception(error, interaction)
 
 
-class ConfirmEditView(View):
+class ConfirmEditView(AutoDisableView):
+    """
+    A :class:`discord.ui.View` for confirming edited transactions. It adds one button 'Save', which will update the
+    embeds of the original message according to the edited embeds.
+
+    Attributes
+    ----------
+    message: discord.Message
+        the original message which should be edited.
+    """
     def __init__(self, message: Message):
+        """
+        Creates a new ConfirmEditView.
+
+        :param message: the original message which should be edited.
+        """
         super().__init__()
         self.message = message
 

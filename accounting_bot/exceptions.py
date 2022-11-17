@@ -4,6 +4,9 @@ from accounting_bot import utils
 
 
 class LoggedException(ABC, Exception):
+    """
+    An abstract exception that contains an error log that may be made public to the end user.
+    """
     def __init__(self, *args: object) -> None:
         super().__init__(*args)
 
@@ -13,7 +16,11 @@ class LoggedException(ABC, Exception):
 
 
 class GoogleSheetException(LoggedException):
-    def __init__(self, log=None, progress=None, *args: object) -> None:
+    """
+    An exception that got caused during the interaction with a Google Sheet, containing a dedicated log with more
+    details on what happened and the progress of.
+    """
+    def __init__(self, log=None, *args: object, progress=None,) -> None:
         super().__init__(*args)
         if log is None:
             log = []
