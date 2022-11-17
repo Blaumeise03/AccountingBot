@@ -5,11 +5,11 @@ from typing import Dict, List
 
 import discord
 import pytz
-from discord import ApplicationContext, InputTextStyle, Interaction, Option
+from discord import ApplicationContext, InputTextStyle, Interaction, Option, option
 from discord.ext import commands
 from discord.ui import Modal, InputText
 
-from accounting_bot import sheet, utils
+from accounting_bot import sheet, utils, project_utils
 from accounting_bot.exceptions import GoogleSheetException
 from accounting_bot.project_utils import format_list
 from accounting_bot.utils import string_to_file, list_to_string, send_exception, log_error, AutoDisableView
@@ -73,10 +73,26 @@ class ProjectCommands(commands.Cog):
         name="insertinvestment",
         description="Saves an investment into the sheet"
     )
+    @option(
+        "skip_loading",
+        description="Skip the reloading of the projects",
+        required=False,
+        default=[]
+    )
+    @option(
+        "priority_project",
+        description="Prioritize this project",
+        required=False,
+        default=str
+    )
     @commands.cooldown(1, 5, commands.BucketType.default)
-    async def insert_investments(self, ctx: ApplicationContext):
+    async def insert_investments(self,
+                                 ctx: ApplicationContext,
+                                 skip_loading: bool,
+                                 priority_project: str
+                                 ):
         if ctx.author.guild_permissions.administrator or ctx.author.id in ADMINS or ctx.author.id == OWNER:
-            await ctx.response.send_modal(ListModal())
+            await ctx.response.send_modal(ListModal(skip_loading, [priority_project]))
         else:
             await ctx.response.send_message("Fehlende Berechtigungen!", ephemeral=True)
 
@@ -213,8 +229,12 @@ class InformPlayerView(AutoDisableView):
 
 class ListModal(Modal):
     def __init__(self,
+                 skip_loading: bool,
+                 priority_projects: [str],
                  *args, **kwargs):
         super().__init__(title="Ingame List Parser", *args, **kwargs)
+        self.skip_loading = skip_loading
+        self.priority_projects = priority_projects
         self.add_item(InputText(label="Spielername", placeholder="Spielername", required=True))
         self.add_item(InputText(label="Ingame List", placeholder="Ingame liste hier einfügen",
                                 required=True, style=InputTextStyle.long))
@@ -234,29 +254,32 @@ class ListModal(Modal):
             return
         log.append("Parsing list...")
         items = Project.Item.parse_list(self.children[1].value)
-        await interaction.followup.send(
-            "Eingabe verarbeitet, lade Projekte. Bitte warten, dies dauert nun einige Sekunden", ephemeral=True)
-        log.append("Reloading projects...")
-        await sheet.load_projects()
+        if not self.skip_loading:
+            await interaction.followup.send(
+                "Eingabe verarbeitet, lade Projekte. Bitte warten, dies dauert nun einige Sekunden", ephemeral=True)
+            log.append("Reloading projects...")
+            await sheet.load_projects()
         log.append("Splitting contract...")
         async with sheet.projects_lock:
             logger.debug("Splitting contract for %s ", player)
-            split = Project.split_contract(items, sheet.allProjects)
+            split = Project.split_contract(items, sheet.allProjects, self.priority_projects)
         log.append("Calculating investments...")
         investments = Project.calc_investments(split)
         if not is_perfect:
             await interaction.followup.send(
                 f"Meintest du \"{player}\"? (Deine Eingabe war \"{self.children[0].value}\").\n"
                 f"Eingelesene items: \n```\n{Project.Item.to_string(items)}\n```\n"
-                "Willst du diese Liste als Investition eintragen?\n"
+                "Willst du diese Liste als Investition eintragen:\n"
+                f"```\n{project_utils.format_list(split, [])}\n```\n"
                 f"Sheet: `{sheet.sheet_name}`",
                 view=ConfirmView(investments, player, log, split),
                 ephemeral=False)
             return
         await interaction.followup.send(
             f"Willst du diese Liste als Investition für \"{player}\" eintragen?\n"
-            f"Eingelesene items: \n```\n" + Project.Item.to_string(items) + "\n```\n"
-                                                                            f"Sheet: `{sheet.sheet_name}`",
+            f"Eingelesene items: \n```\n{Project.Item.to_string(items)}\n```\nVerteilung:\n"
+            f"```\n{project_utils.format_list(split, [])}\n```\n"
+            f"Sheet: `{sheet.sheet_name}`",
             view=ConfirmView(investments, player, log, split),
             ephemeral=False)
 
@@ -291,12 +314,21 @@ class Project(object):
         return res
 
     @staticmethod
-    def split_contract(items, project_list) -> {str: [(str, int)]}:
+    def split_contract(items, project_list: ['Project'], priority_projects: [str] = None) -> {str: [(str, int)]}:
+        projects_ordered = project_list[::-1]  # Reverse the list
+        if priority_projects is None:
+            priority_projects = []
+        else:
+            for p_name in reversed(priority_projects):
+                for p in projects_ordered:  # type: Project
+                    if p.name == p_name:
+                        projects_ordered.remove(p)
+                        projects_ordered.insert(0, p)
         split = {}  # type: {str: [(str, int)]}
         for item in items:  # type: Project.Item
             left = item.amount
             split[item.name] = []
-            for project in reversed(project_list):  # type: Project
+            for project in projects_ordered:  # type: Project
                 if project.exclude != Project.ExcludeSettings.none:
                     continue
                 pending = project.get_pending_resource(item.name)
