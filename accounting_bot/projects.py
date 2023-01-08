@@ -138,16 +138,16 @@ class ConfirmView(AutoDisableView):
         msg_files = [string_to_file(list_to_string(self.log), "log.txt")]
         base_message = (("An **ERROR** occurred during execution of the command" if not success else
                         "Investition wurde eingetragen!"))
-        if len(base_message) + len(msg_list) <= 1980:
-            base_message += f"\n```\n{msg_list}\n```"
-        else:
-            msg_files.append(utils.string_to_file(msg_list, "split.txt"))
+
+        msg_files.append(utils.string_to_file(msg_list, "split.txt"))
         view = InformPlayerView(BOT, self.player, self.split, results, base_message)
         await view.load_user()
         view.message = await interaction.followup.send(
-            base_message + f"\n\nSoll der Nutzer <@{view.discord_id}> benachrichtigt werden?",
+            base_message,
             files=msg_files,
             ephemeral=False, view=view)
+        # To prevent pinging the user, the ping will be edited into the message instead
+        await view.update_message()
 
     async def on_error(self, error: Exception, item, interaction):
         logger.error("Error in ConfirmView: %s", error, exc_info=error)
@@ -197,7 +197,8 @@ class InformPlayerView(AutoDisableView):
         else:
             msg_files = [utils.string_to_file(msg_list, "split.txt")]
         await user.send(message, files=msg_files)
-        await interaction.response.send_message(f"Nutzer <@{self.discord_id}> wurde informiert.", ephemeral=True)
+        await interaction.response.send_message(
+            f"Nutzer {self.user}: {self.discord_id} wurde informiert.", ephemeral=True)
         utils.save_discord_id(self.user, self.discord_id)
         await interaction.message.edit(view=None)
 
@@ -285,16 +286,10 @@ class ListModal(Modal):
             message = f"Meintest du \"{player}\"? (Deine Eingabe war \"{self.children[0].value}\").\n"
         msg_list = project_utils.format_list(split, [])
         message += f"Eingelesene items: \n```\n{Project.Item.to_string(items)}\n```\n" \
-                   "Willst du diese Liste als Investition eintragen:\n" \
+                   f"Willst du diese Liste als Investition für {player} eintragen?\n" \
                    f"Sheet: `{sheet.sheet_name}`"
-        msg_file = []
-        if len(message) + len(msg_list) >= 1980:
-            if len(msg_list) <= 1980:
-                await interaction.followup.send(f"Verteilung:\n```\n{msg_list}\n```")
-            else:
-                msg_file = [utils.string_to_file(msg_list, "split.txt")]
-        else:
-            message += f"\n```\n{msg_list}\n```"
+        msg_file = [utils.string_to_file(msg_list, "split.txt")]
+
         await interaction.followup.send(
             message,
             view=ConfirmView(investments, player, log, split),

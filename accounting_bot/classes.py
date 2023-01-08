@@ -356,11 +356,17 @@ class AccountingView(AutoDisableView):
         msg = "Unverifizierte Transaktionen:"
         if len(unverified) == 0:
             msg += "\nKeine"
+        i = 0
         for (msgID, userID) in unverified:
-            msg += f"\nhttps://discord.com/channels/{SERVER}/{ACCOUNTING_LOG}/{msgID} von <@{userID}>"
+            if len(msg) < 1900 or True:
+                msg += f"\nhttps://discord.com/channels/{SERVER}/{ACCOUNTING_LOG}/{msgID} von <@{userID}>"
+                i += 1
+            else:
+                msg += f"\nUnd {len(unverified) - i} weitere..."
         await interaction.response.send_message(msg, ephemeral=True)
 
     async def on_error(self, error: Exception, item, interaction):
+        interaction.response.send("Error", ephemeral=True)
         logger.exception(f"Error in AccountingView: {error}")
         await send_exception(error, interaction)
 

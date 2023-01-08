@@ -126,9 +126,6 @@ async def add_transaction(transaction: 'classes.Transaction') -> None:
 
     :param transaction: the transaction to save
     """
-    agc = await agcm.authorize()
-    sheet = await agc.open_by_key(SPREADSHEET_ID)
-    wk_log = await sheet.worksheet("Accounting Log")
     if transaction is None:
         return
     # Get data from transaction
@@ -145,6 +142,9 @@ async def add_transaction(transaction: 'classes.Transaction') -> None:
 
     # Saving the data
     logger.info(f"Saving row [{time}; {user_f}; {user_t}; {amount}; {purpose}; {reference}]")
+    agc = await agcm.authorize()
+    sheet = await agc.open_by_key(SPREADSHEET_ID)
+    wk_log = await sheet.worksheet("Accounting Log")
     await wk_log.append_row([time, user_f, user_t, amount, purpose, reference],
                             value_input_option=ValueInputOption.user_entered)
     logger.debug("Saved row")
