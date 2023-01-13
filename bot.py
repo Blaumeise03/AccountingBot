@@ -1,19 +1,24 @@
-import json
+import asyncio
 import logging
 import os
+import random
+import shutil
+import string
 import sys
 from datetime import datetime
-from os.path import exists
+from threading import Thread
 
 import discord
 import mariadb
+import pytesseract.pytesseract
 import pytz as pytz
-from discord import ActivityType
+import requests
+from discord import ActivityType, Message, DMChannel
 from discord.ext import commands, tasks
 from discord.ext.commands import CommandOnCooldown
 from dotenv import load_dotenv
 
-from accounting_bot import classes, sheet, projects
+from accounting_bot import classes, sheet, projects, utils, corpmissionOCR
 from accounting_bot.classes import AccountingView, Transaction, get_menu_embeds
 from accounting_bot.commands import BaseCommands
 from accounting_bot.database import DatabaseConnector
@@ -21,6 +26,7 @@ from accounting_bot.discordLogger import PycordHandler
 from accounting_bot.exceptions import LoggedException
 from accounting_bot.utils import log_error, string_to_file
 from accounting_bot.config import Config, ConfigTree
+from accounting_bot.corpmissionOCR import CorporationMission
 
 log_filename = "logs/" + datetime.now().strftime("%Y-%m-%d_%H-%M-%S") + ".log"
 print("Logging outputs goes to: " + log_filename)
@@ -44,6 +50,8 @@ discord_handler.setFormatter(formatter)
 logging.getLogger().addHandler(discord_handler)
 # Root logger
 logging.getLogger().setLevel(logging.INFO)
+
+loop = asyncio.get_event_loop()
 
 # loading env
 logging.info("Loading .env...")
@@ -70,7 +78,8 @@ config_structure = {
         "name": (str, "N/A")
     },
     "google_sheet": (str, "N/A"),
-    "project_resources": (list, [])
+    "project_resources": (list, [],),
+    "pytesseract_cmd_path": (str, "N/A")
 }
 config = Config("config.json", ConfigTree(config_structure))
 config.load_config()
@@ -94,6 +103,19 @@ CONNECTOR = DatabaseConnector(
     host=config["db.host"],
     database=config["db.name"]
 )
+
+try:
+    if config["pytesseract_cmd_path"] != "N/A":
+        pytesseract.pytesseract.tesseract_cmd = config["pytesseract_cmd_path"]
+    else:
+        config.save_config()
+    tesseract_version = pytesseract.pytesseract.get_tesseract_version()
+    logging.info("Tesseract version " + str(tesseract_version) + " installed!")
+    corpmissionOCR.OCR_ENABLED = True
+except pytesseract.TesseractNotFoundError as error:
+    logging.warning("Tesseract is not installed, OCR will be disabled. Please add tesseract to the PATH or to the "
+                    "config.")
+
 
 logging.info("Starting up bot...")
 intents = discord.Intents.default()
@@ -126,6 +148,33 @@ async def log_loop():
     await discord_handler.process_logs()
 
 log_loop.start()
+
+
+@tasks.loop(seconds=3.0)
+async def ocr_result_loop():
+    mission_list = corpmissionOCR.return_missions
+    with mission_list.lock:
+        for i in range(len(mission_list.list)):  # type int, CorporationMission
+            if mission_list.list[i] is None:
+                continue
+            author, mission = mission_list.list[i]
+            mission_list.list[i] = None
+            user = await bot.get_or_fetch_user(author)
+            if not user:
+                logging.error("User " + author + " from OCR result list not found!")
+                continue
+            if isinstance(mission, Exception):
+                await user.send("An error occurred: " + str(mission))
+                continue
+            msg = f"Gültig: {str(mission.valid)}\nTitel: {mission.title}\nNutzername: {mission.username}\n" \
+                  f"Menge: {str(mission.amount)}\nErhalte ISK: {str(mission.pay_isk)}" \
+                  f"\nLimitiert: {str(mission.has_limit)}"
+            await user.send("Bild wurde verarbeitet: \n" + msg)
+        while None in mission_list.list:
+            mission_list.list.remove(None)
+
+
+ocr_result_loop.start()
 
 
 @bot.event
@@ -255,8 +304,24 @@ async def on_ready():
 
 
 @bot.event
-async def on_message(message):
+async def on_message(message: Message):
     await bot.process_commands(message)
+    if isinstance(message.channel, DMChannel):
+        for att in message.attachments:
+            if not att.content_type.startswith("image"):
+                continue
+            url = att.url
+            if not "://cdn.discordapp.com".casefold() in url.casefold():
+                return
+            thread = Thread(target=corpmissionOCR.handle_image, args=(url, att.content_type, message))
+            thread.start()
+            await message.reply("Processing image, please wait...")
+
+
+async def inform_player(transaction, discord_id):
+    user = bot.fetch_user(discord_id)
+    if user is not None:
+        user.send()
 
 
 async def save_embeds(msg, user_id):
@@ -286,6 +351,19 @@ async def save_embeds(msg, user_id):
     # Set message as verified
     CONNECTOR.set_verification(msg.id, verified=1)
     await msg.edit(content=f"Verifiziert von {user.name}", view=None)
+    """
+    # Find discord account
+    id_from = utils.get_discord_id(transaction.name_from)
+    if id_from is None:
+        name, perfect, nicknames = await utils.find_discord_id(bot, GUILD, USER_ROLE, transaction.name_from)
+        if perfect:
+            id_from = nicknames[name]
+    id_to = utils.get_discord_id(transaction.name_to)
+    if id_to is None:
+        name, perfect, nicknames = await utils.find_discord_id(bot, GUILD, USER_ROLE, transaction.name_to)
+        if perfect:
+            id_to = nicknames[name]
+    """
 
 
 @bot.event
@@ -390,4 +468,15 @@ def save_config():
     config.save_config()
 
 
-bot.run(TOKEN)
+async def run_bot():
+    try:
+        await bot.start(token=TOKEN)
+    except Exception:
+        await bot.close()
+
+
+async def main():
+    await asyncio.gather(#asyncio.to_thread(corpmissionOCR.ocr_worker()),
+                         run_bot())
+
+loop.run_until_complete(main())

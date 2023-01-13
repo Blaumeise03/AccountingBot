@@ -69,6 +69,16 @@ def get_discord_id(name: str):
         return None
 
 
+async def find_discord_id(bot, guild, user_role, player_name):
+    nicknames = dict(await bot.get_guild(guild)
+                     .fetch_members()
+                     .filter(lambda m: m.get_role(user_role) is not None)
+                     .map(lambda m: (m.nick if m.nick is not None else m.name, m.id))
+                     .flatten())
+    name, perfect = parse_player(player_name, nicknames)
+    return name, perfect, nicknames
+
+
 def save_discord_id(name: str, discord_id: int):
     if name in discord_users and discord_users[name] == discord_id:
         return

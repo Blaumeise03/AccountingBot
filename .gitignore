@@ -1,6 +1,7 @@
 logs/
 .idea/
 venv/
+images/
 python
 .env
 config.json

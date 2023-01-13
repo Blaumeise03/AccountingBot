@@ -166,12 +166,7 @@ class InformPlayerView(AutoDisableView):
 
     async def load_user(self):
         if self.discord_id is None:
-            nicknames = dict(await self.bot.get_guild(GUILD)
-                             .fetch_members()
-                             .filter(lambda m: m.get_role(USER_ROLE) is not None)
-                             .map(lambda m: (m.nick if m.nick is not None else m.name, m.id))
-                             .flatten())
-            name, perfect = utils.parse_player(self.user, nicknames)
+            name, perfect, nicknames = await utils.find_discord_id(self.bot, GUILD, USER_ROLE, self.user)
             if name is not None:
                 self.discord_id = nicknames[name]
 
