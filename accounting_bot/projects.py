@@ -187,7 +187,7 @@ class InformPlayerView(AutoDisableView):
         message = f"Dein Investitionsvertrag wurde von {admin_name} angenommen und für {self.user} eingetragen:\n"
         msg_list = f"```\n{format_list(self.split, self.results)}\n```"
         msg_files = []
-        if len(message) + len(msg_list) < 90:
+        if len(message) + len(msg_list) < 1500:
             message += msg_list
         else:
             msg_files = [utils.string_to_file(msg_list, "split.txt")]
