@@ -12,6 +12,7 @@ from discord import Embed, Interaction, Color, Message
 from discord.ui import Modal, InputText
 
 from accounting_bot import sheet, utils
+from accounting_bot.corpmissionOCR import CorporationMission
 from accounting_bot.database import DatabaseConnector
 from accounting_bot.utils import send_exception, AutoDisableView
 
@@ -22,6 +23,7 @@ ACCOUNTING_LOG = None  # type: int | None
 SERVER = None  # type: int | None
 ADMINS = []  # type: [int]
 CONNECTOR = None  # type: DatabaseConnector | None
+USER_ROLE = None  # type: int | None
 
 # All embeds
 EMBED_MENU_INTERNAL = None  # type: Embed | None
@@ -34,7 +36,7 @@ EMBED_INDU_MENU = None  # type: Embed | None
 def set_up(new_connector: DatabaseConnector,
            new_admins: List[int],
            bot: discord.ext.commands.bot.Bot,
-           acc_log: int, server: int) -> None:
+           acc_log: int, server: int, user_role: int) -> None:
     """
     Sets all the required variables and reloads the embeds.
 
@@ -43,14 +45,16 @@ def set_up(new_connector: DatabaseConnector,
     :param bot: the discord bot instance
     :param acc_log: the id of the accounting log channel
     :param server: the id of the server
+    :param user_role: the role id of users
     """
-    global CONNECTOR, ADMINS, BOT, ACCOUNTING_LOG, SERVER
+    global CONNECTOR, ADMINS, BOT, ACCOUNTING_LOG, SERVER, USER_ROLE
     global EMBED_MENU_INTERNAL, EMBED_MENU_EXTERNAL, EMBED_MENU_VCB, EMBED_MENU_SHORTCUT, EMBED_INDU_MENU
     CONNECTOR = new_connector
     ADMINS = new_admins
     BOT = bot
     ACCOUNTING_LOG = acc_log
     SERVER = server
+    USER_ROLE = user_role
     logger.info("Loading embed config...")
     with open("embeds.json", "r") as embed_file:
         embeds = json.load(embed_file)
@@ -123,6 +127,122 @@ def parse_player(string: str) -> (Union[str, None], bool):
     :return: (Playername: str or None, Perfect match: bool)
     """
     return utils.parse_player(string, sheet.users)
+
+
+async def inform_player(transaction, discord_id, receive):
+    user = await BOT.get_or_fetch_user(discord_id)
+    if user is not None:
+        await user.send(
+            "Du hast ISK auf Deinem Accounting erhalten:" if receive else "Es wurde ISK von deinem Konto abgebucht:",
+            embed=transaction.create_embed())
+    else:
+        time_formatted = transaction.timestamp.astimezone(pytz.timezone("Europe/Berlin")).strftime("%d.%m.%Y %H:%M")
+        logging.warning("Can't inform user " + str(discord_id) + " about about the transaction " +
+                        time_formatted)
+
+
+async def save_embeds(msg, user_id):
+    """
+    Saves the transaction of a message into the sheet
+
+    :param msg:     The message with the transaction embed
+    :param user_id: The user ID that verified the transaction
+    """
+    if len(msg.embeds) == 0:
+        return
+    elif len(msg.embeds) > 1:
+        logging.warning(f"Message {msg.id} has more than one embed ({msg.embeds})!")
+    # Getting embed of the message, should contain only one
+    embed = msg.embeds[0]
+    # Convert embed to Transaction
+    transaction = Transaction.from_embed(embed)
+    # Check if transaction is valid
+    if transaction.amount is None or (not transaction.name_from and not transaction.name_to) or not transaction.purpose:
+        logging.error(f"Invalid embed in message {msg.id}! Can't parse transaction data: {transaction}")
+        return
+    time_formatted = transaction.timestamp.astimezone(pytz.timezone("Europe/Berlin")).strftime("%d.%m.%Y %H:%M")
+    # Save transaction to sheet
+    await sheet.add_transaction(transaction=transaction)
+    user = await BOT.get_or_fetch_user(user_id)
+    logging.info(f"Verified transaction {msg.id} ({time_formatted}. Verified by {user.name} ({user.id}).")
+    # Set message as verified
+    CONNECTOR.set_verification(msg.id, verified=1)
+    await msg.edit(content=f"Verifiziert von {user.name}", view=None)
+
+    # Find discord account
+    if transaction.name_from:
+        id_from, _, perfect = await utils.get_or_find_discord_id(BOT, SERVER, USER_ROLE, transaction.name_from)
+        if not perfect:
+            id_from = None
+        await inform_player(transaction, id_from, receive=False)
+    if transaction.name_to:
+        id_to, _, perfect = await utils.get_or_find_discord_id(BOT, SERVER, USER_ROLE, transaction.name_to)
+        if not perfect:
+            id_to = None
+        await inform_player(transaction, id_to, receive=True)
+
+
+async def verify_transaction(user_id: int, message: Message, interaction: Interaction = None):
+    is_unverified = CONNECTOR.is_unverified_transaction(message=message.id)
+    if is_unverified is None:
+        if interaction:
+            await interaction.followup.send(content="Error: Transaction not found", ephemeral=True)
+        return
+    if len(message.embeds) == 0:
+        if interaction:
+            await interaction.followup.send(content="Error: Embeds not found", ephemeral=True)
+        return
+    transaction = Transaction.from_embed(message.embeds[0])
+    if not transaction:
+        if interaction:
+            await interaction.followup.send(content="Error: Couldn't parse embed", ephemeral=True)
+        return
+    has_permissions = user_id in ADMINS
+    if not has_permissions and transaction.name_from and transaction.name_to:
+        # Only transactions between two players can be self-verified
+        owner_id, _, _ = await utils.get_or_find_discord_id(player_name=transaction.name_from)
+        has_permissions = owner_id and user_id == owner_id
+        logger.info("User " + str(user_id) + " is owner of transaction " + transaction.__str__())
+
+    if not has_permissions:
+        if interaction:
+            await interaction.followup.send(content="Fehler: Du hast dazu keine Berechtigung. Nur der Kontoinhaber und "
+                                                    "Admins dürfen Transaktionen verifizieren.", ephemeral=True)
+        return
+
+    if not is_unverified:
+        # Message is already verified
+        author = await BOT.get_or_fetch_user(user_id)
+        msg = "Fehler: Diese Transaktion wurde bereits verifiziert, sie wurde nicht " \
+              "erneut im Sheet eingetragen. Bitte trage sie selbstständig ein, falls " \
+              "dies nötig ist."
+        if interaction:
+            await interaction.followup.send(content=msg, ephemeral=True)
+        else:
+            await author.send(content=msg)
+        return
+
+    if message.content.startswith("Verifiziert von"):
+        # Message was already verified, but due to an Error it got not updated in the SQL DB
+        author = await BOT.get_or_fetch_user(user_id)
+        msg = "Fehler: Diese Transaktion wurde bereits verifiziert, sie wurde nicht " \
+              "erneut im Sheet eingetragen. Bitte trage sie selbstständig ein, falls " \
+              "dies nötig ist."
+        if interaction:
+            await interaction.followup.send(content=msg, ephemeral=True)
+        else:
+            await author.send(content=msg)
+        logger.warning("Transaction %s was already verified (according to message content), but not marked as "
+                       "verified in the database.", transaction.__str__())
+        CONNECTOR.set_verification(message.id, True)
+        await message.edit(view=None)
+        return
+    else:
+        # Save transaction
+        await save_embeds(message, user_id)
+        if interaction:
+            await message.add_reaction("✅")
+            await interaction.followup.send("Transaktion verifiziert!", ephemeral=True)
 
 
 class Transaction:
@@ -218,7 +338,7 @@ class Transaction:
         return embed
 
     @staticmethod
-    def from_modal(modal: Modal, author: str) -> ('Transaction', str):
+    async def from_modal(modal: Modal, author: str, user: int = None) -> ('Transaction', str):
         """
         Creates a Transaction out of a :class:`Modal`, the Modal has to be filled out.
 
@@ -226,6 +346,7 @@ class Transaction:
 
         :param modal: the modal with the values for the transaction
         :param author: the author of this transaction
+        :param user: the discord id of the author
         :return: A Tuple containing the transaction (or None if the data was incorrect), as well as a string with all
         warnings.
         """
@@ -244,7 +365,7 @@ class Transaction:
                 if modal.title.casefold() == "Auszahlen".casefold():
                     name_type = 0
             if name_type != -1:
-                name, match = parse_player(field.value)
+                name, match = parse_player(field.value.strip())
                 if name is None:
                     warnings += f"Hinweis: Name \"{field.value}\" konnte nicht gefunden werden!\n"
                     return None, warnings
@@ -261,7 +382,7 @@ class Transaction:
                 amount, warn = parse_number(raw)
                 warnings += warn
                 if amount is None or amount < 1:
-                    warnings += "Fehler: Die eingegebene Menge ist keine Zahl > 0!"
+                    warnings += "Fehler: Die eingegebene Menge ist keine Zahl > 0!\n"
                     return None, warnings
                 transaction.amount = amount
                 continue
@@ -271,6 +392,14 @@ class Transaction:
             if field.label.casefold() == "Referenz".casefold():
                 transaction.reference = field.value.strip()
                 continue
+
+        # Check wallet ownership
+        if transaction.name_from:
+            user_id, _, _ = await utils.get_or_find_discord_id(player_name=transaction.name_from)
+            if user_id is None or user != user_id and user not in ADMINS:
+                warnings += "Fehler: Dieses Konto gehört dir nicht bzw. dein Discordaccount ist nicht " \
+                            "**verifiziert** (kontaktiere in diesem Fall einen Admin). Nur der Kontobesitzer darf " \
+                            "ISK von seinem Konto an andere senden."
         return transaction, warnings
 
     @staticmethod
@@ -296,14 +425,28 @@ class Transaction:
                 transaction.reference = field.value
         transaction.timestamp = embed.timestamp.astimezone(pytz.timezone("Europe/Berlin"))
         if embed.footer is not None:
-            transaction.author = embed.footer
+            transaction.author = embed.footer.text
+        return transaction
+
+    @staticmethod
+    def from_ocr(mission: CorporationMission, user_id: int):
+        transaction = Transaction()
+        if mission.pay_isk and mission.title == "Auszahlung":
+            transaction.name_from = mission.main_char
+            transaction.purpose = "Auszahlung Accounting"
+        elif not mission.pay_isk and mission.title == "Einzahlung":
+            transaction.name_to = mission.main_char
+            transaction.purpose = "Einzahlung Accounting"
+        else:
+            return None
+        transaction.amount = mission.amount
         return transaction
 
 
 async def send_transaction(embeds: List[Embed], interaction: Interaction, note=""):
     """
     Sends the embeds into the accounting log channel. Will send a response to the :class:`Interaction` containing the
-    noten and an error message in case any :class:`mariadb.Error` occurred.
+    note and an error message in case any :class:`mariadb.Error` occurred.
 
     :param embeds: the embeds to send
     :param interaction: discord interaction for the response
@@ -319,6 +462,10 @@ async def send_transaction(embeds: List[Embed], interaction: Interaction, note="
             note += "\nFehler beim Eintragen in die Datenbank, die Transaktion wurde jedoch trotzdem im " \
                     "Accountinglog gepostet. Informiere bitte einen Admin, danke.\n{e}"
     await interaction.response.send_message("Transaktion gesendet!" + note, ephemeral=True)
+    try:
+        await interaction.message.edit(view=None)
+    except discord.errors.NotFound:
+        pass
 
 
 class AccountingView(AutoDisableView):
@@ -327,6 +474,7 @@ class AccountingView(AutoDisableView):
     The first 4 buttons will open the corresponding modal (see :class:`TransferModal` and :class:`ShipyardModal`),
     the printer button responds with a list of all links to all unverified transactions.
     """
+
     def __init__(self):
         super().__init__(timeout=None)
 
@@ -377,8 +525,14 @@ class TransactionView(AutoDisableView):
     delete the message if the user is the author of the transaction, or an administrator. The 'Edit' button allows the
     author and administrators to edit the transaction, see :class:`EditModal`.
     """
+
     def __init__(self):
         super().__init__(timeout=None)
+
+    @discord.ui.button(label="Verifizieren", style=discord.ButtonStyle.green)
+    async def btn_verify_callback(self, button: discord.Button, interaction: Interaction):
+        await interaction.response.defer()
+        await verify_transaction(interaction.user.id, interaction.message, interaction)
 
     @discord.ui.button(label="Löschen", style=discord.ButtonStyle.red)
     async def btn_delete_callback(self, button, interaction):
@@ -415,6 +569,7 @@ class ConfirmView(AutoDisableView):
     A :class:`discord.ui.View` for confirming new transactions. It adds one button 'Send', which will send all embeds of
     the message into the accounting log channel.
     """
+
     def __init__(self):
         super().__init__(timeout=None)
 
@@ -423,7 +578,7 @@ class ConfirmView(AutoDisableView):
         await send_transaction(interaction.message.embeds, interaction)
 
     async def on_error(self, error: Exception, item, interaction):
-        logger.error(f"Error in ConfirmView: {error}", error)
+        logger.error(f"Error in ConfirmView: %s", error)
         await send_exception(error, interaction)
 
 
@@ -437,6 +592,7 @@ class ConfirmEditView(AutoDisableView):
     message: discord.Message
         the original message which should be edited.
     """
+
     def __init__(self, message: Message):
         """
         Creates a new ConfirmEditView.
@@ -453,6 +609,21 @@ class ConfirmEditView(AutoDisableView):
 
     async def on_error(self, error: Exception, item, interaction):
         logger.error(f"Error in ConfirmEditView: {error}", error)
+        await send_exception(error, interaction)
+
+
+class ConfirmOCRView(AutoDisableView):
+    def __init__(self, transaction: Transaction, note: str = ""):
+        super().__init__()
+        self.transaction = transaction
+        self.note = note
+
+    @discord.ui.button(label="Senden", style=discord.ButtonStyle.green)
+    async def btn_confirm_callback(self, button, interaction):
+        await send_transaction([self.transaction.create_embed()], interaction, self.note)
+
+    async def on_error(self, error: Exception, item, interaction):
+        logger.error(f"Error in ConfirmOCRView: {error}", error)
         await send_exception(error, interaction)
 
 
@@ -481,16 +652,13 @@ class TransferModal(Modal):
                                     value=reference))
 
     async def callback(self, interaction: Interaction):
-        transaction, warnings = Transaction.from_modal(self, interaction.user.name)
-        if transaction is not None and len(warnings) > 0:
-            await interaction.response.send_message(
-                warnings, embed=transaction.create_embed(),
-                ephemeral=True, view=ConfirmView())
-            return
+        transaction, warnings = await Transaction.from_modal(self, interaction.user.name, interaction.user.id)
         if transaction is None:
             await interaction.response.send_message(warnings, ephemeral=True)
             return
-        await send_transaction([transaction.create_embed()], interaction, warnings)
+        await interaction.response.send_message(
+            warnings, embed=transaction.create_embed(),
+            ephemeral=True, view=ConfirmView())
 
     async def on_error(self, error: Exception, interaction: Interaction) -> None:
         logger.error(f"Error on Transfer Modal: {error}", error)
@@ -506,7 +674,7 @@ class EditModal(TransferModal):
             self.add_item(InputText(label=field.name, required=True, value=field.value))
 
     async def callback(self, interaction: Interaction):
-        transaction, warnings = Transaction.from_modal(self, interaction.user.name)
+        transaction, warnings = await Transaction.from_modal(self, interaction.user.name, interaction.user.id)
         if transaction is not None and len(warnings) > 0:
             await interaction.response.send_message(
                 warnings, embed=transaction.create_embed(),

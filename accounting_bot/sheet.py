@@ -11,7 +11,7 @@ from google.oauth2.service_account import Credentials
 from gspread import GSpreadException
 from gspread.utils import ValueRenderOption, ValueInputOption
 
-from accounting_bot import projects
+from accounting_bot import projects, utils
 from accounting_bot.project_utils import find_player_row, calculate_changes, verify_batch_data, process_first_column
 from accounting_bot.exceptions import GoogleSheetException
 from accounting_bot.projects import Project
@@ -39,9 +39,11 @@ overwrites = {}
 allProjects = []  # type: [Project]
 lastChanges = datetime.datetime(1970, 1, 1)
 
-MEMBERS_AREA = "A4:K"  # The area of the member list
+MEMBERS_AREA = "A4:O"  # The area of the member list
 MEMBERS_NAME_INDEX = 0  # The column index of the name
 MEMBERS_ACTIVE_INDEX = 10  # The column index of the "active" column
+MEMBERS_RANK_INDEX = 8  # The column index of the "rank" column
+MEMBERS_NOTE_INDEX = 14  # The column containing notes for users
 
 # All resources that exist, will be used to verify the integrity of the received data
 PROJECT_RESOURCES = []
@@ -74,14 +76,16 @@ def get_creds() -> Credentials:
 agcm = gspread_asyncio.AsyncioGspreadClientManager(get_creds)
 
 
-async def setup_sheet(sheet_id: str, project_resources: [str]) -> None:
+async def setup_sheet(sheet_id: str, project_resources: [str], log_level) -> None:
     """
     Set-ups the Google Sheet API.
 
     :param sheet_id: the id of the Google Sheet
     :param project_resources: the array of the names of the available project resources
+    :param log_level: the loglevel for the logger
     """
     global SPREADSHEET_ID, PROJECT_RESOURCES, users, sheet_name
+    logger.setLevel(log_level)
     SPREADSHEET_ID = sheet_id
     PROJECT_RESOURCES = project_resources
     # Connect to API
@@ -90,20 +94,35 @@ async def setup_sheet(sheet_id: str, project_resources: [str]) -> None:
     load_config()
     sheet = await agc.open_by_key(sheet_id)
     sheet_name = sheet.title
+    logger.info("Loading usernames from sheet")
     # Load usernames
     wk_accounting = await sheet.worksheet("Accounting")
-    user_raw = await wk_accounting.get_values("A4:K", value_render_option=ValueRenderOption.unformatted)
+    user_raw = await wk_accounting.get_values(MEMBERS_AREA, value_render_option=ValueRenderOption.unformatted)
+    users.clear()
+    utils.ingame_twinks.clear()
+    utils.ingame_chars.clear()
+
     for u in user_raw:
+        # Check if main account
         if len(u) > MEMBERS_ACTIVE_INDEX and u[MEMBERS_ACTIVE_INDEX]:
             users.append(u[MEMBERS_NAME_INDEX])
+
+        # Check if in the corp (and therefore has a rank)
+        if len(u) > MEMBERS_RANK_INDEX and len(u[MEMBERS_RANK_INDEX].strip()) > 0:
+            utils.ingame_chars.append(u[MEMBERS_NAME_INDEX])
+
+            # Check if twink of a main account
+            if len(u) > MEMBERS_NOTE_INDEX and not u[MEMBERS_ACTIVE_INDEX]:
+                note = u[MEMBERS_NOTE_INDEX]  # type: str
+                if note.startswith("Twink von "):
+                    note = note.replace("Twink von ", "").strip()
+                    utils.ingame_twinks[u[MEMBERS_NAME_INDEX]] = note
     for u in overwrites.keys():
         u_2 = overwrites.get(u)
         if u_2 is None:
             users.append(u)
         else:
             users.append(u_2)
-    # Reload projects
-    await find_projects()
 
 
 def check_name_overwrites(name: str) -> str:

@@ -19,7 +19,7 @@ from discord.ext.commands import CommandOnCooldown
 from dotenv import load_dotenv
 
 from accounting_bot import classes, sheet, projects, utils, corpmissionOCR
-from accounting_bot.classes import AccountingView, Transaction, get_menu_embeds
+from accounting_bot.classes import AccountingView, Transaction, get_menu_embeds, ConfirmOCRView
 from accounting_bot.commands import BaseCommands
 from accounting_bot.database import DatabaseConnector
 from accounting_bot.discordLogger import PycordHandler
@@ -79,7 +79,10 @@ config_structure = {
     },
     "google_sheet": (str, "N/A"),
     "project_resources": (list, [],),
-    "pytesseract_cmd_path": (str, "N/A")
+    "pytesseract_cmd_path": (str, "N/A"),
+    "logger": {
+        "sheet": (str, "INFO")
+    }
 }
 config = Config("config.json", ConfigTree(config_structure))
 config.load_config()
@@ -127,7 +130,8 @@ intents.reactions = True
 intents.members = True
 bot = commands.Bot(command_prefix=PREFIX, intents=intents, debug_guilds=[582649395149799491, GUILD])
 
-classes.set_up(CONNECTOR, ADMINS, bot, ACCOUNTING_LOG, GUILD)
+classes.set_up(CONNECTOR, ADMINS, bot, ACCOUNTING_LOG, GUILD, USER_ROLE)
+utils.set_config(config, bot)
 
 bot.add_cog(BaseCommands(GUILD, ADMINS, OWNER, CONNECTOR))
 bot.add_cog(projects.ProjectCommands(bot, ADMINS, OWNER, GUILD, USER_ROLE))
@@ -154,22 +158,58 @@ log_loop.start()
 async def ocr_result_loop():
     mission_list = corpmissionOCR.return_missions
     with mission_list.lock:
-        for i in range(len(mission_list.list)):  # type int, CorporationMission
+        for i in range(len(mission_list.list)):
             if mission_list.list[i] is None:
                 continue
-            author, mission = mission_list.list[i]
+            channel_id, author, mission, img_id = mission_list.list[i]  # type: int, int, CorporationMission, str
             mission_list.list[i] = None
-            user = await bot.get_or_fetch_user(author)
-            if not user:
-                logging.error("User " + author + " from OCR result list not found!")
-                continue
+            user = await bot.get_or_fetch_user(author) if author is not None else None
+            channel = None
+            if not user and channel_id:
+                channel = bot.get_channel(channel_id)
+                if channel is None:
+                    channel = await bot.fetch_channel(channel_id)
+                if channel is None:
+                    logging.error("Channel " + str(channel_id) + " from OCR result list not found!")
+                    continue
             if isinstance(mission, Exception):
+                logging.error("OCR job for %s failed, img_id: %s, error: %s", author, img_id, str(mission))
                 await user.send("An error occurred: " + str(mission))
                 continue
             msg = f"Gültig: {str(mission.valid)}\nTitel: {mission.title}\nNutzername: {mission.username}\n" \
-                  f"Menge: {str(mission.amount)}\nErhalte ISK: {str(mission.pay_isk)}" \
-                  f"\nLimitiert: {str(mission.has_limit)}"
-            await user.send("Bild wurde verarbeitet: \n" + msg)
+                  f"Main Char: {mission.main_char}\nMenge: {str(mission.amount)}\nErhalte ISK: {str(mission.pay_isk)}" \
+                  f"\nLimitiert: {str(mission.has_limit)}\nLabel korrekt: {mission.label}\n\n"
+            if not mission.label:
+                msg += "**Fehler**: Das Label wurde nicht erkannt. Für die Mission muss das Label \"Accounting\" " \
+                       "ausgewählt werden.\n"
+            if not mission.has_limit:
+                msg += "**Fehler**: Das Limit wurde nicht erkannt. Bei der Mission muss ein \"Total Times\"-Limit" \
+                       "eingestellt sein.\n"
+            if not mission.title or mission.title == "Transfer":
+                msg += "**Fehler**: Der Titel wurde nicht erkannt. Er muss \"Einzahlung\" oder \"Auszahlung\" lauten.\n"
+            if not mission.main_char:
+                msg += "**Fehler**: Der Spielername wurde nicht erkannt.\n"
+            if not mission.amount:
+                msg += "**Fehler**: Die ISK-Menge wurde nicht erkannt.\n"
+            if not mission.valid:
+                msg += "\n**Fehlgeschlagen!** Die Mission ist nicht korrekt, bzw. es gab einen Fehler beim Einlesen. " \
+                       "Wenn die Mission nicht korrekt erstellt wurde, lösche sie bitte und erstelle sie bitte " \
+                       "entsprechend der Anleitung im Leitfaden neu. Wenn sie korrekt ist, aber nicht richtig erkannt" \
+                       " wurde, so musst Du sie manuell im Accountinglog posten.\n"
+            if user is not None:
+                await user.send("Bild wurde verarbeitet: \n" + msg)
+            #if channel is not None:
+                #await channel.send("Bild wurde verarbeitet: \n" + msg)
+            if not mission.valid:
+                return
+            if user is None:
+                logging.warning("User for OCR image %s with discord ID %s not found!", img_id, author)
+                return
+            transaction = Transaction.from_ocr(mission, author)
+            if transaction:
+                ocr_view = ConfirmOCRView(transaction)
+                await user.send("Willst du diese Transaktion senden?", view=ocr_view)
+
         while None in mission_list.list:
             mission_list.list.remove(None)
 
@@ -249,6 +289,10 @@ async def on_ready():
     activity = discord.Activity(name="IAK-JW", type=ActivityType.competing)
     await bot.change_presence(status=discord.Status.idle, activity=activity)
 
+    logging.info("Starting Google sheets API...")
+    await sheet.setup_sheet(config["google_sheet"], PROJECT_RESOURCES, config["logger.sheet"])
+    logging.info("Google sheets API loaded.")
+
     # Updating unverified accountinglog entries
     logging.info("Setting up unverified accounting log entries")
     unverified = CONNECTOR.get_unverified()
@@ -286,7 +330,7 @@ async def on_ready():
             # Message was verified
             try:
                 # Saving transaction to google sheet
-                await save_embeds(msg, user)
+                await classes.save_embeds(msg, user)
             except mariadb.Error as e:
                 pass
             # Removing the View
@@ -295,9 +339,8 @@ async def on_ready():
             # Updating the message View, so it can be used by the users
             await msg.edit(view=classes.TransactionView())
 
-    logging.info("Starting Google sheets API...")
-    await sheet.setup_sheet(config["google_sheet"], PROJECT_RESOURCES)
-    logging.info("Google sheets API loaded.")
+    # Reload projects
+    await sheet.find_projects()
     # Setup completed
     logging.info("Setup complete.")
     await bot.change_presence(status=discord.Status.online, activity=activity)
@@ -313,86 +356,21 @@ async def on_message(message: Message):
             url = att.url
             if not "://cdn.discordapp.com".casefold() in url.casefold():
                 return
-            thread = Thread(target=corpmissionOCR.handle_image, args=(url, att.content_type, message))
+            channel = message.author.id
+            thread = Thread(
+                target=corpmissionOCR.handle_image,
+                args=(url, att.content_type, message, channel, message.author.id))
             thread.start()
-            await message.reply("Processing image, please wait...")
-
-
-async def inform_player(transaction, discord_id):
-    user = bot.fetch_user(discord_id)
-    if user is not None:
-        user.send()
-
-
-async def save_embeds(msg, user_id):
-    """
-    Saves the transaction of a message into the sheet
-
-    :param msg:     The message with the transaction embed
-    :param user_id: The user ID that verified the transaction
-    """
-    if len(msg.embeds) == 0:
-        return
-    elif len(msg.embeds) > 1:
-        logging.warning(f"Message {msg.id} has more than one embed ({msg.embeds})!")
-    # Getting embed of the message, should contain only one
-    embed = msg.embeds[0]
-    # Convert embed to Transaction
-    transaction = Transaction.from_embed(embed)
-    # Check if transaction is valid
-    if transaction.amount is None or (not transaction.name_from and not transaction.name_to) or not transaction.purpose:
-        logging.error(f"Invalid embed in message {msg.id}! Can't parse transaction data: {transaction}")
-        return
-    time_formatted = transaction.timestamp.astimezone(pytz.timezone("Europe/Berlin")).strftime("%d.%m.%Y %H:%M")
-    # Save transaction to sheet
-    await sheet.add_transaction(transaction=transaction)
-    user = await bot.get_or_fetch_user(user_id)
-    logging.info(f"Verified transaction {msg.id} ({time_formatted}. Verified by {user.name} ({user.id}).")
-    # Set message as verified
-    CONNECTOR.set_verification(msg.id, verified=1)
-    await msg.edit(content=f"Verifiziert von {user.name}", view=None)
-    """
-    # Find discord account
-    id_from = utils.get_discord_id(transaction.name_from)
-    if id_from is None:
-        name, perfect, nicknames = await utils.find_discord_id(bot, GUILD, USER_ROLE, transaction.name_from)
-        if perfect:
-            id_from = nicknames[name]
-    id_to = utils.get_discord_id(transaction.name_to)
-    if id_to is None:
-        name, perfect, nicknames = await utils.find_discord_id(bot, GUILD, USER_ROLE, transaction.name_to)
-        if perfect:
-            id_to = nicknames[name]
-    """
+            await message.reply("Verarbeite Bild, bitte warten. Dies dauert einige Sekunden.")
 
 
 @bot.event
 async def on_raw_reaction_add(reaction):
-    if reaction.emoji.name == "✅" and reaction.channel_id == ACCOUNTING_LOG and reaction.user_id in ADMINS:
-        is_verified = CONNECTOR.is_unverified_transaction(message=reaction.message_id)
-        if is_verified is None:
-            return
-        if not is_verified:
-            # Message is already verified
-            author = await bot.get_or_fetch_user(reaction.user_id)
-            await author.send(content="Hinweis: Diese Transaktion wurde bereits verifiziert, sie wurde nicht "
-                                      "erneut im Sheet eingetragen. Bitte trage sie selbstständig ein, falls "
-                                      "dies nötig ist.")
-            return
+    if reaction.emoji.name == "✅" and reaction.channel_id == ACCOUNTING_LOG:
         # Message is not verified
         channel = bot.get_channel(ACCOUNTING_LOG)
         msg = await channel.fetch_message(reaction.message_id)
-        if msg.content.startswith("Verifiziert von"):
-            # Message was already verified, but due to an Error it got not updated in the SQL DB
-            author = await bot.get_or_fetch_user(reaction.user_id)
-            await author.send(content="Hinweis: Diese Transaktion wurde bereits verifiziert, sie wurde nicht "
-                                      "erneut im Sheet eingetragen. Bitte trage sie selbstständig ein, falls "
-                                      "dies nötig ist.")
-            CONNECTOR.set_verification(msg.id, True)
-            return
-        else:
-            # Save transaction
-            await save_embeds(msg, reaction.user_id)
+        await classes.verify_transaction(reaction.user_id, msg)
 
 
 @bot.event
@@ -431,22 +409,22 @@ async def setup(ctx):
         await ctx.respond("Missing permissions", ephemeral=True)
 
 
-@commands.slash_command(
+@bot.slash_command(
     name="setlogchannel",
     description="Sets the current channel as the accounting log channel.")
-async def set_log_channel(self, ctx):
+async def set_log_channel(ctx):
     global ACCOUNTING_LOG
     logging.info("SetLogChannel command received.")
     if ctx.guild is None:
         logging.info("Command was send via DM!")
         await ctx.respond("Only available inside a guild")
         return
-    if ctx.guild.id != self.guild:
+    if ctx.guild.id != GUILD:
         logging.info("Wrong server!")
         await ctx.respond("Can only used inside the defined discord server", ephemeral=True)
         return
 
-    if ctx.author.id == self.owner or ctx.author.guild_permissions.administrator:
+    if ctx.author.id == OWNER or ctx.author.guild_permissions.administrator:
         logging.info("User Verified. Setting up channel...")
         ACCOUNTING_LOG = ctx.channel.id
         save_config()

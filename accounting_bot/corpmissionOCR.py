@@ -1,5 +1,6 @@
 import difflib
 import logging
+import os
 import queue
 import random
 import re
@@ -7,6 +8,7 @@ import shutil
 import string
 import threading
 import time
+from pathlib import Path
 
 import cv2
 import numpy
@@ -14,9 +16,12 @@ import requests
 from PIL import Image
 from pytesseract import pytesseract
 
+from accounting_bot import utils
+
 logger = logging.getLogger("bot.projects")
 WORKING_DIR = "images"
 OCR_ENABLED = False
+Path(WORKING_DIR + "/download").mkdir(parents=True, exist_ok=True)
 
 
 def preprocess_text(img, debug=False):
@@ -112,20 +117,22 @@ class CorporationMission:
         self.valid = False  # type: bool
         self.title = None  # type: str  | None
         self.username = None  # type: str  | None
+        self.main_char = None  # type: str  | None
         self.pay_isk = None  # type: bool | None
         self.amount = None  # type: int  | None
         self.has_limit = False  # type: bool
+        self.label = False  # type: bool
 
     def validate(self):
         self.valid = False
-        if self.amount and self.has_limit and self.title:
+        if self.amount and self.has_limit and self.title and self.label and self.main_char:
             title = self.title.casefold()
             if title == "Einzahlung".casefold() and not self.pay_isk:
                 self.valid = True
             if title == "Auszahlung".casefold() and self.pay_isk:
                 self.valid = True
             if title == "Transfer".casefold():
-                self.valid = True
+                self.valid = False
 
     @staticmethod
     def from_text(text: ({int}, str), width, height, usernames):
@@ -160,14 +167,20 @@ class CorporationMission:
                 title_line = (rel_cords["y1"] + rel_cords["y2"]) / 2
                 continue
 
+            # Get the label
+            label_acc = difflib.SequenceMatcher(None, "Accounting", t).ratio()
+            if label_acc > 0.75:
+                mission.label = True
+
         if len(isk_pay_lines) > 0 and len(isk_get_lines) > 0:
             raise Exception("Found both pay and get lines!")
 
         mission.pay_isk = len(isk_pay_lines) > 0
         mission.amount = None
         isk_lines = isk_pay_lines if mission.pay_isk else isk_get_lines
+        name_match = -1
 
-        # Get isk
+        # Get isk and name
         for cords, txt in text:  # type: dict, str
             rel_cords = to_relative_cords(cords, width, height)
             rel_y = (rel_cords["y1"] + rel_cords["y2"]) / 2
@@ -177,14 +190,15 @@ class CorporationMission:
                 if best_line is None or (abs(rel_y - l) < abs(rel_y - best_line)):
                     best_line = l
 
-            if title_line and rel_cords["x1"] > 0.6 and abs(rel_y - title_line) < 0.05:
+            if title_line and rel_cords["x1"] > 0.6 and abs(rel_y - title_line) < 0.05 and len(txt) > 3:
                 name_raw = txt.split("\n")[0].strip()
-                if usernames is not None:
-                    matches = difflib.get_close_matches(name_raw, usernames, 1)
-                    if len(matches) > 0:
-                        mission.username = matches[0]
-                else:
-                    mission.username = name_raw
+                main_char, parsed_name, _ = utils.get_main_account(name_raw)
+                if main_char:
+                    match = difflib.SequenceMatcher(None, parsed_name, name_raw).ratio()
+                    if match > name_match:
+                        mission.main_char = main_char
+                        mission.username = parsed_name
+                        name_match = match
                 continue
 
             if abs(rel_y - best_line) < 0.05 and rel_cords["x1"] < 0.66:
@@ -247,35 +261,37 @@ class ThreadSafeList:
 return_missions = ThreadSafeList()
 
 
-def handle_image(url, content_type, message):
+def handle_image(url, content_type, message, channel, author):
+    img_id = None
     try:
         img_id = "".join(random.choice(string.ascii_uppercase) for i in range(10))
         res = requests.get(url, stream=True)
         logging.info("Received image (" + content_type + "), ID " + img_id)
-        file_name = "images/download/" + str(message.author.id) + "_" + img_id + "." + content_type.replace("image/",
-                                                                                                            "")
+        file_name = WORKING_DIR + "/download/" + str(message.author.id) + "_" + img_id + "." + content_type.replace("image/", "")
+
         if res.status_code == 200:
             with open(file_name, "wb") as f:
                 shutil.copyfileobj(res.raw, f)
             logging.info("Image successfully downloaded from %s (%s): %s", message.author.name, message.author.id,
                          file_name)
         else:
-            logging.info("Image successfully downloaded from %s (%s): %s", message.author.name, message.author.id,
-                         file_name)
+            logging.warning("Image download from %s (%s) failed!", message.author.name, message.author.id)
 
         image = Image.open(file_name)
         image.thumbnail((1000, 4000), Image.LANCZOS)
-        image.save("image_rescaled.png", "PNG")
-        img = cv2.imread("image_rescaled.png")
+        image.save(WORKING_DIR + "/" + img_id + "_rescaled.png", "PNG")
+        img = cv2.imread(WORKING_DIR + "/" + img_id + "_rescaled.png")
         dilation, img_lut = preprocess_text(img, debug=True)
         text = extract_text(dilation, img_lut)
         height, width, _ = img.shape
         mission = CorporationMission.from_text(text, width, height, None)
-        return_missions.append((message.author.id, mission))
+        return_missions.append((channel, author, mission, img_id))
+        if os.path.exists(WORKING_DIR + "/" + img_id + "_rescaled.png"):
+            os.remove(WORKING_DIR + "/" + img_id + "_rescaled.png")
     except Exception as e:
         logging.error("OCR job failed!")
         logging.exception(e)
-        return_missions.append((message.author.id, e))
+        return_missions.append((message.author.id, author, e, img_id))
 
 
 class OCRException(Exception):
