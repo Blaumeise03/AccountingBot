@@ -16,9 +16,6 @@ from accounting_bot import projects, utils
 from accounting_bot.project_utils import find_player_row, calculate_changes, verify_batch_data, process_first_column
 from accounting_bot.exceptions import GoogleSheetException
 from accounting_bot.projects import Project
-from typing import TYPE_CHECKING
-if TYPE_CHECKING:
-    from accounting_bot import classes
 
 logger = logging.getLogger("bot.sheet")
 logger.setLevel(logging.DEBUG)
@@ -155,7 +152,7 @@ async def add_transaction(transaction: 'classes.Transaction') -> None:
     # Get data from transaction
     user_f = transaction.name_from if transaction.name_from is not None else ""
     user_t = transaction.name_to if transaction.name_to is not None else ""
-    time = transaction.timestamp.astimezone(pytz.timezone("Europe/Berlin")).strftime("%d.%m.%Y %H:%M")
+    transaction_time = transaction.timestamp.astimezone(pytz.timezone("Europe/Berlin")).strftime("%d.%m.%Y %H:%M")
     amount = transaction.amount
     purpose = transaction.purpose if transaction.purpose is not None else ""
     reference = transaction.reference if transaction.reference is not None else ""
@@ -165,11 +162,11 @@ async def add_transaction(transaction: 'classes.Transaction') -> None:
     user_t = check_name_overwrites(user_t)
 
     # Saving the data
-    logger.info(f"Saving row [{time}; {user_f}; {user_t}; {amount}; {purpose}; {reference}]")
+    logger.info(f"Saving row [{transaction_time}; {user_f}; {user_t}; {amount}; {purpose}; {reference}]")
     agc = await agcm.authorize()
     sheet = await agc.open_by_key(SPREADSHEET_ID)
     wk_log = await sheet.worksheet("Accounting Log")
-    await wk_log.append_row([time, user_f, user_t, amount, purpose, reference],
+    await wk_log.append_row([transaction_time, user_f, user_t, amount, purpose, reference],
                             value_input_option=ValueInputOption.user_entered)
     logger.debug("Saved row")
 

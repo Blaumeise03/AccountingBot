@@ -1,6 +1,7 @@
 import json
 import logging
 import re
+from asyncio import Lock
 from datetime import datetime
 from typing import Union, List
 
@@ -9,21 +10,29 @@ import discord.ext
 import mariadb
 import pytz
 from discord import Embed, Interaction, Color, Message
+from discord.ext.commands import Bot
 from discord.ui import Modal, InputText
 
 from accounting_bot import sheet, utils
-from accounting_bot.corpmissionOCR import CorporationMission
+from accounting_bot.config import Config
 from accounting_bot.database import DatabaseConnector
 from accounting_bot.utils import send_exception, AutoDisableView
+
+from typing import TYPE_CHECKING
+if TYPE_CHECKING:
+    from bot import BotState
+    from accounting_bot.corpmissionOCR import CorporationMission
 
 logger = logging.getLogger("bot.classes")
 
 BOT = None  # type: discord.ext.commands.bot.Bot | None
+CONFIG = None  # type: Config | None
 ACCOUNTING_LOG = None  # type: int | None
 SERVER = None  # type: int | None
 ADMINS = []  # type: [int]
 CONNECTOR = None  # type: DatabaseConnector | None
 USER_ROLE = None  # type: int | None
+STATE = None  # type: bot.BotState | None
 
 # All embeds
 EMBED_MENU_INTERNAL = None  # type: Embed | None
@@ -32,29 +41,33 @@ EMBED_MENU_VCB = None  # type: Embed | None
 EMBED_MENU_SHORTCUT = None  # type: Embed | None
 EMBED_INDU_MENU = None  # type: Embed | None
 
+# Database lock
+database_lock = Lock()
 
-def set_up(new_connector: DatabaseConnector,
-           new_admins: List[int],
-           bot: discord.ext.commands.bot.Bot,
-           acc_log: int, server: int, user_role: int) -> None:
+
+def set_up(config: Config,
+           new_connector: DatabaseConnector,
+           bot: Bot,
+           state: 'BotState'
+           ) -> None:
     """
     Sets all the required variables and reloads the embeds.
 
+    :param config: the configurations
     :param new_connector: the new DatabaseConnector
-    :param new_admins: the list of the ids of all admins
     :param bot: the discord bot instance
-    :param acc_log: the id of the accounting log channel
-    :param server: the id of the server
-    :param user_role: the role id of users
+    :param state: the global state of the bot
     """
-    global CONNECTOR, ADMINS, BOT, ACCOUNTING_LOG, SERVER, USER_ROLE
+    global CONNECTOR, CONFIG, BOT, ACCOUNTING_LOG, SERVER, USER_ROLE, STATE, ADMINS
     global EMBED_MENU_INTERNAL, EMBED_MENU_EXTERNAL, EMBED_MENU_VCB, EMBED_MENU_SHORTCUT, EMBED_INDU_MENU
     CONNECTOR = new_connector
-    ADMINS = new_admins
+    CONFIG = config
     BOT = bot
-    ACCOUNTING_LOG = acc_log
-    SERVER = server
-    USER_ROLE = user_role
+    ACCOUNTING_LOG = config["logChannel"]
+    SERVER = config["server"]
+    USER_ROLE = config["user_role"]
+    ADMINS = config["admins"]
+    STATE = state
     logger.info("Loading embed config...")
     with open("embeds.json", "r") as embed_file:
         embeds = json.load(embed_file)
@@ -134,12 +147,17 @@ async def inform_player(transaction, discord_id, receive):
     if user is not None:
         await user.send(
             ("Du hast ISK auf Deinem Accounting erhalten." if receive else "Es wurde ISK von deinem Konto abgebucht.") +
-            "\nDein Kontostand beträgt " +
-            str(sheet.get_balance(transaction.name_to if receive else transaction.name_from)),
+            "\nDein Kontostand beträgt `" +
+            "{:,} ISK".format(sheet.get_balance(transaction.name_to if receive else transaction.name_from)) + "`",
             embed=transaction.create_embed())
     else:
         time_formatted = transaction.timestamp.astimezone(pytz.timezone("Europe/Berlin")).strftime("%d.%m.%Y %H:%M")
-        logging.warning("Can't inform user " + str(discord_id) + " about about the transaction " +
+        logging.warning("Can't inform user %s (%s) about about the transaction %s -> %s: %s (%s)",
+                        transaction.name_to if receive else transaction.name_from,
+                        discord_id,
+                        transaction.name_from,
+                        transaction.name_to,
+                        "{:,} ISK".format(transaction.amount),
                         time_formatted)
 
 
@@ -163,20 +181,27 @@ async def save_embeds(msg, user_id):
         logging.error(f"Invalid embed in message {msg.id}! Can't parse transaction data: {transaction}")
         return
     time_formatted = transaction.timestamp.astimezone(pytz.timezone("Europe/Berlin")).strftime("%d.%m.%Y %H:%M")
-    # Save transaction to sheet
-    await sheet.add_transaction(transaction=transaction)
-    user = await BOT.get_or_fetch_user(user_id)
-    logging.info(f"Verified transaction {msg.id} ({time_formatted}. Verified by {user.name} ({user.id}).")
-    # Set message as verified
-    CONNECTOR.set_verification(msg.id, verified=1)
+
+    async with database_lock:
+        is_unverified = CONNECTOR.is_unverified_transaction(msg.id)
+        if not is_unverified:
+            logger.warning(
+                f"Attempted to verify an already verified transaction {msg.id} ({time_formatted}), user: {user_id}.")
+            return
+        # Save transaction to sheet
+        await sheet.add_transaction(transaction=transaction)
+        user = await BOT.get_or_fetch_user(user_id)
+        logging.info(f"Verified transaction {msg.id} ({time_formatted}. Verified by {user.name} ({user.id}).")
+        # Set message as verified
+        CONNECTOR.set_verification(msg.id, verified=1)
     await msg.edit(content=f"Verifiziert von {user.name}", view=None)
 
     # Update wallets
-    await sheet.load_wallets()
     if transaction.name_from and transaction.name_from in sheet.wallets:
         sheet.wallets[transaction.name_from] = sheet.wallets[transaction.name_from] + transaction.amount
     if transaction.name_to and transaction.name_to in sheet.wallets:
         sheet.wallets[transaction.name_to] = sheet.wallets[transaction.name_to] + transaction.amount
+    await sheet.load_wallets()
 
     # Find discord account
     if transaction.name_from:
@@ -438,7 +463,7 @@ class Transaction:
         return transaction
 
     @staticmethod
-    def from_ocr(mission: CorporationMission, user_id: int):
+    def from_ocr(mission: 'CorporationMission', user_id: int):
         transaction = Transaction()
         if mission.pay_isk and mission.title == "Auszahlung":
             transaction.name_from = mission.main_char
@@ -469,7 +494,7 @@ async def send_transaction(embeds: List[Embed], interaction: Interaction, note="
             CONNECTOR.add_transaction(msg.id, interaction.user.id)
         except mariadb.Error as e:
             note += "\nFehler beim Eintragen in die Datenbank, die Transaktion wurde jedoch trotzdem im " \
-                    "Accountinglog gepostet. Informiere bitte einen Admin, danke.\n{e}"
+                    f"Accountinglog gepostet. Informiere bitte einen Admin, danke.\n{e}"
     await interaction.response.send_message("Transaktion gesendet!" + note, ephemeral=True)
     try:
         await interaction.message.edit(view=None)
@@ -477,6 +502,7 @@ async def send_transaction(embeds: List[Embed], interaction: Interaction, note="
         pass
 
 
+# noinspection PyUnusedLocal
 class AccountingView(AutoDisableView):
     """
     A :class:`discord.ui.View` with four buttons: 'Transfer', 'Deposit', 'Withdraw', 'Shipyard' and a printer button.
@@ -528,6 +554,7 @@ class AccountingView(AutoDisableView):
         await send_exception(error, interaction)
 
 
+# noinspection PyUnusedLocal
 class TransactionView(AutoDisableView):
     """
     A :class:`discord.ui.View` for transaction messages with two buttons: 'Delete' and 'Edit'. The 'Delete' button will
@@ -573,6 +600,7 @@ class TransactionView(AutoDisableView):
         await send_exception(error, interaction)
 
 
+# noinspection PyUnusedLocal
 class ConfirmView(AutoDisableView):
     """
     A :class:`discord.ui.View` for confirming new transactions. It adds one button 'Send', which will send all embeds of
@@ -591,6 +619,7 @@ class ConfirmView(AutoDisableView):
         await send_exception(error, interaction)
 
 
+# noinspection PyUnusedLocal
 class ConfirmEditView(AutoDisableView):
     """
     A :class:`discord.ui.View` for confirming edited transactions. It adds one button 'Save', which will update the
@@ -621,6 +650,7 @@ class ConfirmEditView(AutoDisableView):
         await send_exception(error, interaction)
 
 
+# noinspection PyUnusedLocal
 class ConfirmOCRView(AutoDisableView):
     def __init__(self, transaction: Transaction, note: str = ""):
         super().__init__()

@@ -1,8 +1,7 @@
 import json
 import logging
-from enum import Enum
 from os.path import exists
-from typing import Union, Optional
+from typing import Optional
 
 from accounting_bot.exceptions import ConfigException, ConfigDataTypeException
 
@@ -62,7 +61,8 @@ class ConfigTree:
                 val.value = value
                 return True
 
-    def load_from_dict(self, raw_dict: dict):
+    def load_from_dict(self, raw_dict: dict) -> bool:
+        missing_entry = False
         for key in self.tree:
             value = self.tree[key]
             if key in raw_dict:
@@ -81,6 +81,8 @@ class ConfigTree:
                         f"Expected {value.data_type}, but got {type(raw_value)} for entry {self.path}{key}")
             else:
                 logger.warning("Config entry missing: %s. Using default, please exchange the value.", (self.path + key))
+                missing_entry = True
+        return missing_entry
 
     def to_dict(self):
         res = {}

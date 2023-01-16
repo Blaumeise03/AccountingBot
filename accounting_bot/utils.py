@@ -8,13 +8,14 @@ from typing import Union
 
 import discord
 from discord import Interaction
+from discord.ext.commands import Bot
 from discord.ui import View
 
 from accounting_bot.config import Config
 
 logger = logging.getLogger("bot.utils")
-CONFIG = None
-BOT = None
+CONFIG = None  # type: Config | None
+BOT = None  # type: Bot | None
 
 
 def set_config(config: Config, bot):
@@ -32,12 +33,13 @@ if exists("discord_ids.json"):
         discord_users = json.load(json_file)
 
 
+# noinspection PyShadowingNames
 def log_error(logger: logging.Logger, error):
     full_error = traceback.format_exception(type(error), error, error.__traceback__)
     for line in full_error:
-        for l in line.split("\n"):
-            if len(l.strip()) > 0:
-                logger.exception(l, exc_info=False)
+        for line2 in line.split("\n"):
+            if len(line2.strip()) > 0:
+                logger.exception(line2, exc_info=False)
 
 
 async def send_exception(error: Exception, interaction: Interaction):
@@ -51,9 +53,9 @@ def string_to_file(text: str, filename="message.txt"):
     return discord.File(fp=data, filename=filename)
 
 
-def list_to_string(l: [str]):
+def list_to_string(line: [str]):
     res = ""
-    for s in l:
+    for s in line:
         res += s + "\n"
     return res
 

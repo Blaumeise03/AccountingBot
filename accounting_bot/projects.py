@@ -101,6 +101,7 @@ class ProjectCommands(commands.Cog):
             await ctx.response.send_message("Fehlende Berechtigungen!", ephemeral=True)
 
 
+# noinspection PyUnusedLocal
 class ConfirmView(AutoDisableView):
     def __init__(self, investments: Dict[str, List[int]], player: str, log=None, split=None):
         super().__init__()
@@ -154,6 +155,7 @@ class ConfirmView(AutoDisableView):
         await send_exception(error, interaction)
 
 
+# noinspection PyUnusedLocal
 class InformPlayerView(AutoDisableView):
     def __init__(self, bot: commands.Bot, user: str, split: {str: [(str, int)]}, results: {str, bool}, base_message):
         super().__init__()
