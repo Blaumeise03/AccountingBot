@@ -147,6 +147,10 @@ bot.add_cog(projects.ProjectCommands(bot, config["admins"], config["owner"], con
 # noinspection PyUnusedLocal
 @bot.event
 async def on_error(event_name, *args, **kwargs):
+    info = sys.exc_info()
+    if info and len(info) > 2 and info[0] == discord.errors.NotFound:
+        logging.warning("discord.errors.NotFound Error in %s: %s", event_name, str(info[1]))
+        return
     logging.exception("An Error occurred: %s", event_name)
     pass
 

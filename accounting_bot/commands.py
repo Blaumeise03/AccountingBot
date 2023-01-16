@@ -1,7 +1,7 @@
 import asyncio
 import logging
 
-from discord import Option
+from discord import Option, User, ApplicationContext
 from discord.ext import commands
 
 from accounting_bot import accounting, sheet, utils
@@ -96,20 +96,26 @@ class BaseCommands(commands.Cog):
         name="balance",
         description="Get your current accounting balance."
     )
-    async def get_balance(self, ctx, force: Option(bool, "Force sheet reload", required=False, default=False)):
+    async def get_balance(self, ctx: ApplicationContext,
+                          force: Option(bool, "Force sheet reload", required=False, default=False),
+                          user: Option(User, "The user to look up", required=False, default=None)):
+        await ctx.defer(ephemeral=True)
         await sheet.load_wallets(force)
-        user_id = ctx.author.id
+        if not user:
+            user_id = ctx.author.id
+        else:
+            user_id = user.id
+
         name = utils.get_main_account(discord_id=user_id)
         if name is None:
-            await ctx.respond("This discord account is not connected to any ingame account!", ephemeral=True)
+            await ctx.followup.send("This discord account is not connected to any ingame account!", ephemeral=True)
             return
         name = sheet.check_name_overwrites(name)
         balance = sheet.get_balance(name)
         if balance is None:
-            await ctx.respond("Wallet not found!", ephemeral=True)
+            await ctx.followup.send("Konto nicht gefunden!", ephemeral=True)
             return
-        balance = "{:,} ISK".format(balance)
-        await ctx.respond(f"Dein Kontostand beträgt : `{balance}`", ephemeral=True)
+        await ctx.followup.send("Der Kontostand von {} beträgt `{:,} ISK`.".format(name, balance), ephemeral=True)
 
     # noinspection SpellCheckingInspection
     @commands.slash_command(description="Posts a menu with all available manufacturing roles.")
