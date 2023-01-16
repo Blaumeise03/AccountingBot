@@ -1,26 +1,30 @@
 import difflib
 import logging
 import os
-import queue
 import random
 import re
 import shutil
 import string
 import threading
-import time
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import cv2
 import numpy
 import requests
 from PIL import Image
+from discord.ext import tasks
 from pytesseract import pytesseract
 
 from accounting_bot import utils
+from accounting_bot.accounting import Transaction, ConfirmOCRView
+
+if TYPE_CHECKING:
+    from bot import BotState
 
 logger = logging.getLogger("bot.projects")
 WORKING_DIR = "images"
-OCR_ENABLED = False
+STATE = None  # type: BotState | None
 Path(WORKING_DIR + "/download").mkdir(parents=True, exist_ok=True)
 
 
@@ -54,7 +58,7 @@ def preprocess_text(img, debug=False):
 
 
 def extract_text(dilation, image):
-    if not OCR_ENABLED:
+    if not STATE.ocr:
         raise OCRException("OCR is not enabled!")
     contours, hierarchy = cv2.findContours(dilation, cv2.RETR_EXTERNAL,
                                            cv2.CHAIN_APPROX_NONE)
@@ -68,10 +72,10 @@ def extract_text(dilation, image):
         if h < 10 or w < 5 or w > 300 or h > 100:
             continue
         # print(f"Original: ({x}, {y}), ({x + w}, {y + h}), size: {w}x{h}")
-        x = max(0, x - 6)
-        y = max(0, y - 6)
-        w = min(w + 5, width - (x + w))
-        h = min(h + 5, height - (y + h))
+        x = max(0, x - 9)
+        y = max(0, y - 9)
+        w = min(w + 8, width - (x + w))
+        h = min(h + 8, height - (y + h))
         # Draw the bounding box on the text area
         rect = cv2.rectangle(rect,
                              (x, y),
@@ -135,7 +139,7 @@ class CorporationMission:
                 self.valid = False
 
     @staticmethod
-    def from_text(text: ({int}, str), width, height, usernames):
+    def from_text(text: ({int}, str), width, height):
         mission = CorporationMission()
         isk_get_lines = []
         isk_pay_lines = []
@@ -145,8 +149,10 @@ class CorporationMission:
         for cords, t in text:  # type: (dict, str)
             rel_cords = to_relative_cords(cords, width, height)
             # Get transaction direction and y-level of the ISK quantity
-            pay = difflib.SequenceMatcher(None, "Corporation pays", t).ratio()
-            get = difflib.SequenceMatcher(None, "Corporation erhält", t).ratio()
+            pay = max(difflib.SequenceMatcher(None, "Corporation pays", t).ratio(),
+                      difflib.SequenceMatcher(None, "pays", t).ratio())
+            get = max(difflib.SequenceMatcher(None, "Corporation gets", t).ratio(),
+                      difflib.SequenceMatcher(None, "gets", t).ratio())
             if rel_cords["x1"] < 0.3 and (pay > 0.8 or get > 0.8):
                 if pay > get:
                     isk_pay_lines.append((rel_cords["y1"] + rel_cords["y2"]) / 2)
@@ -156,6 +162,7 @@ class CorporationMission:
 
             # Check the "Total Times"-Setting
             if rel_cords["x1"] > 0.45 and max(difflib.SequenceMatcher(None, "Total Times", t).ratio(),
+                                              difflib.SequenceMatcher(None, "Times", t).ratio(),
                                               difflib.SequenceMatcher(None, "Gesamthäufigkeit", t).ratio()) > 0.7:
                 mission.has_limit = True
                 continue
@@ -186,9 +193,9 @@ class CorporationMission:
             rel_y = (rel_cords["y1"] + rel_cords["y2"]) / 2
             best_line = None
 
-            for l in isk_lines:
-                if best_line is None or (abs(rel_y - l) < abs(rel_y - best_line)):
-                    best_line = l
+            for line in isk_lines:
+                if best_line is None or (abs(rel_y - line) < abs(rel_y - best_line)):
+                    best_line = line
 
             if title_line and rel_cords["x1"] > 0.6 and abs(rel_y - title_line) < 0.05 and len(txt) > 3:
                 name_raw = txt.split("\n")[0].strip()
@@ -201,7 +208,7 @@ class CorporationMission:
                         name_match = match
                 continue
 
-            if abs(rel_y - best_line) < 0.05 and rel_cords["x1"] < 0.66:
+            if best_line and abs(rel_y - best_line) < 0.05 and rel_cords["x1"] < 0.66:
                 # Remove comas and the Z
                 txt = re.sub("[,.;zZ\n ]", "", txt)
                 # Fix numbers
@@ -264,7 +271,7 @@ return_missions = ThreadSafeList()
 def handle_image(url, content_type, message, channel, author):
     img_id = None
     try:
-        img_id = "".join(random.choice(string.ascii_uppercase) for i in range(10))
+        img_id = "".join(random.choice(string.ascii_uppercase) for _ in range(10))
         res = requests.get(url, stream=True)
         logging.info("Received image (" + content_type + "), ID " + img_id)
         file_name = WORKING_DIR + "/download/" + str(message.author.id) + "_" + img_id + "." + content_type.replace("image/", "")
@@ -278,13 +285,13 @@ def handle_image(url, content_type, message, channel, author):
             logging.warning("Image download from %s (%s) failed!", message.author.name, message.author.id)
 
         image = Image.open(file_name)
-        image.thumbnail((1000, 4000), Image.LANCZOS)
+        image.thumbnail((1500, 4000), Image.LANCZOS)
         image.save(WORKING_DIR + "/" + img_id + "_rescaled.png", "PNG")
         img = cv2.imread(WORKING_DIR + "/" + img_id + "_rescaled.png")
         dilation, img_lut = preprocess_text(img, debug=True)
         text = extract_text(dilation, img_lut)
         height, width, _ = img.shape
-        mission = CorporationMission.from_text(text, width, height, None)
+        mission = CorporationMission.from_text(text, width, height)
         return_missions.append((channel, author, mission, img_id))
         if os.path.exists(WORKING_DIR + "/" + img_id + "_rescaled.png"):
             os.remove(WORKING_DIR + "/" + img_id + "_rescaled.png")
@@ -292,6 +299,65 @@ def handle_image(url, content_type, message, channel, author):
         logging.error("OCR job failed!")
         logging.exception(e)
         return_missions.append((message.author.id, author, e, img_id))
+
+
+@tasks.loop(seconds=3.0)
+async def ocr_result_loop():
+    with return_missions.lock:
+        for i in range(len(return_missions.list)):
+            if return_missions.list[i] is None:
+                continue
+            channel_id, author, mission, img_id = return_missions.list[i]  # type: int, int, CorporationMission, str
+            return_missions.list[i] = None
+            user = await STATE.bot.get_or_fetch_user(author) if author is not None else None
+            if not user and channel_id:
+                channel = STATE.bot.get_channel(channel_id)
+                if channel is None:
+                    channel = await STATE.bot.fetch_channel(channel_id)
+                if channel is None:
+                    logging.error("Channel " + str(channel_id) + " from OCR result list not found!")
+                    continue
+            if isinstance(mission, Exception):
+                logging.error("OCR job for %s failed, img_id: %s, error: %s", author, img_id, str(mission))
+                await user.send("An error occurred: " + str(mission))
+                continue
+            msg = f"Gültig: {str(mission.valid)}\nTitel: {mission.title}\nNutzername: {mission.username}\n" \
+                  f"Main Char: {mission.main_char}\nMenge: {str(mission.amount)}\nErhalte ISK: {str(mission.pay_isk)}" \
+                  f"\nLimitiert: {str(mission.has_limit)}\nLabel korrekt: {mission.label}\n\n"
+            if not mission.label:
+                msg += "**Fehler**: Das Label wurde nicht erkannt. Für die Mission muss das Label \"Accounting\" " \
+                       "ausgewählt werden.\n"
+            if not mission.has_limit:
+                msg += "**Fehler**: Das Limit wurde nicht erkannt. Bei der Mission muss ein \"Total Times\"-Limit " \
+                       "eingestellt sein.\n"
+            if not mission.title or mission.title == "Transfer":
+                msg += "**Fehler**: Der Titel wurde nicht erkannt. Er muss \"Einzahlung\" oder \"Auszahlung\" lauten.\n"
+            if not mission.main_char:
+                msg += "**Fehler**: Der Spielername wurde nicht erkannt.\n"
+            if not mission.amount:
+                msg += "**Fehler**: Die ISK-Menge wurde nicht erkannt.\n"
+            if not mission.valid:
+                msg += "\n**Fehlgeschlagen!** Die Mission ist nicht korrekt, bzw. es gab einen Fehler beim Einlesen. " \
+                       "Wenn die Mission nicht korrekt erstellt wurde, lösche sie bitte und erstelle sie bitte " \
+                       "entsprechend der Anleitung im Leitfaden neu. Wenn sie korrekt ist, aber nicht richtig erkannt" \
+                       " wurde, so musst Du sie manuell im Accountinglog posten.\n"
+            if user is not None:
+                await user.send("Bild wurde verarbeitet: \n" + msg)
+            # if channel is not None:
+            # await channel.send("Bild wurde verarbeitet: \n" + msg)
+            if not mission.valid:
+                return
+            if user is None:
+                logging.warning("User for OCR image %s with discord ID %s not found!", img_id, author)
+                return
+            transaction = Transaction.from_ocr(mission, author)
+            transaction.author = user.name
+            if transaction:
+                ocr_view = ConfirmOCRView(transaction)
+                await user.send("Willst du diese Transaktion senden?", view=ocr_view, embed=transaction.create_embed())
+
+        while None in return_missions.list:
+            return_missions.list.remove(None)
 
 
 class OCRException(Exception):
