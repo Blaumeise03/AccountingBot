@@ -19,11 +19,12 @@ from accounting_bot.database import DatabaseConnector
 from accounting_bot.utils import send_exception, AutoDisableView
 
 from typing import TYPE_CHECKING
+
 if TYPE_CHECKING:
     from bot import BotState
     from accounting_bot.corpmissionOCR import CorporationMission
 
-logger = logging.getLogger("bot.classes")
+logger = logging.getLogger("bot.accounting")
 
 BOT = None  # type: discord.ext.commands.bot.Bot | None
 CONFIG = None  # type: Config | None
@@ -191,7 +192,7 @@ async def save_embeds(msg, user_id):
         # Save transaction to sheet
         await sheet.add_transaction(transaction=transaction)
         user = await BOT.get_or_fetch_user(user_id)
-        logging.info(f"Verified transaction {msg.id} ({time_formatted}. Verified by {user.name} ({user.id}).")
+        logger.info(f"Verified transaction {msg.id} ({time_formatted}). Verified by {user.name} ({user.id}).")
         # Set message as verified
         CONNECTOR.set_verification(msg.id, verified=1)
     await msg.edit(content=f"Verifiziert von {user.name}", view=None)
@@ -235,8 +236,24 @@ async def verify_transaction(user_id: int, message: Message, interaction: Intera
     if not has_permissions and transaction.name_from and transaction.name_to:
         # Only transactions between two players can be self-verified
         owner_id, _, _ = await utils.get_or_find_discord_id(player_name=transaction.name_from)
-        has_permissions = owner_id and user_id == owner_id
-        logger.info("User " + str(user_id) + " is owner of transaction " + transaction.__str__())
+        if owner_id and user_id == owner_id:
+            # Check if balance is sufficient
+            await sheet.load_wallets()
+            bal = sheet.get_balance(transaction.name_from)
+            if not bal:
+                if interaction:
+                    await interaction.followup.send(content="Dein Kontostand konnte nicht gepüft werden.", ephemeral=True)
+                return
+            if bal < transaction.amount:
+                if interaction:
+                    await interaction.followup.send(content="Fehler: Dein Konto (`{:,} ISK`) reicht nicht aus, um diese "
+                                                            "Transaktion (`{:,} ISK`) zu decken."
+                                                    .format(bal, transaction.amount),
+                                                    ephemeral=True)
+                return
+            has_permissions = True
+            logger.info("User " + str(user_id) + " is owner of transaction " + transaction.__str__() + " and has "
+                        "sufficient balance")
 
     if not has_permissions:
         if interaction:
@@ -416,7 +433,7 @@ class Transaction:
                 amount, warn = parse_number(raw)
                 warnings += warn
                 if amount is None or amount < 1:
-                    warnings += "Fehler: Die eingegebene Menge ist keine Zahl > 0!\n"
+                    warnings += "**Fehler**: Die eingegebene Menge ist keine Zahl > 0!\n"
                     return None, warnings
                 transaction.amount = amount
                 continue
@@ -427,13 +444,20 @@ class Transaction:
                 transaction.reference = field.value.strip()
                 continue
 
-        # Check wallet ownership
+        # Check wallet ownership and balance
         if transaction.name_from:
             user_id, _, _ = await utils.get_or_find_discord_id(player_name=transaction.name_from)
+            await sheet.load_wallets()
             if user_id is None or user != user_id and user not in ADMINS:
-                warnings += "Fehler: Dieses Konto gehört dir nicht bzw. dein Discordaccount ist nicht " \
+                warnings += "**Fehler**: Dieses Konto gehört dir nicht bzw. dein Discordaccount ist nicht " \
                             "**verifiziert** (kontaktiere in diesem Fall einen Admin). Nur der Kontobesitzer darf " \
-                            "ISK von seinem Konto an andere senden."
+                            "ISK von seinem Konto an andere senden.\n"
+            bal = sheet.get_balance(transaction.name_from)
+            if not bal:
+                warnings += "Warnung: Dein Kontostand konnte nicht geprüft werden.\n"
+            elif bal < transaction.amount:
+                warnings += "Warnung: Dein Kontostand (`{:,} ISK`) reicht nicht aus, um diese Transaktion zu decken. " \
+                            "Nur Admins können diese Transaktion autorisieren.".format(bal)
         return transaction, warnings
 
     @staticmethod
@@ -549,7 +573,6 @@ class AccountingView(AutoDisableView):
         await interaction.response.send_message(msg, ephemeral=True)
 
     async def on_error(self, error: Exception, item, interaction):
-        interaction.response.send("Error", ephemeral=True)
         logger.exception(f"Error in AccountingView: {error}")
         await send_exception(error, interaction)
 

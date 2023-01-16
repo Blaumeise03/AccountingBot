@@ -58,7 +58,7 @@ class BotState:
     def __init__(self) -> None:
         self.state = State.online
         self.ocr = False
-        self.bot = None
+        self.bot = None  # type: commands.Bot | None
 
 
 STATE = BotState()
@@ -102,7 +102,7 @@ config = Config("config.json", ConfigTree(config_structure))
 config.load_config()
 config.save_config()
 logging.info("Config loaded")
-
+ACCOUNTING_LOG = config["logChannel"]
 
 CONNECTOR = DatabaseConnector(
     username=config["db.user"],
@@ -293,12 +293,17 @@ async def on_ready():
 @bot.event
 async def on_message(message: Message):
     await bot.process_commands(message)
-    if isinstance(message.channel, DMChannel):
+    if isinstance(message.channel, DMChannel) or message.channel.id == ACCOUNTING_LOG:
         for att in message.attachments:
             if not att.content_type.startswith("image"):
                 continue
             url = att.url
             if not "://cdn.discordapp.com".casefold() in url.casefold():
+                return
+            if not isinstance(message.channel, DMChannel):
+                await message.author.send("Du hast ein Bild im Accountinglog gepostet. Wenn es sich um eine "
+                                          "Corporationsmission handelt, musst Du sie mir hier per Direktnachricht "
+                                          "schicken, um sie per Texterkennung automatisch verarbeiten zu lassen.")
                 return
             channel = message.author.id
             thread = Thread(
@@ -306,6 +311,7 @@ async def on_message(message: Message):
                 args=(url, att.content_type, message, channel, message.author.id))
             thread.start()
             await message.reply("Verarbeite Bild, bitte warten. Dies dauert einige Sekunden.")
+
 
 
 @bot.event
