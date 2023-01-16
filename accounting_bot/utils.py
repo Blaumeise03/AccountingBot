@@ -58,23 +58,31 @@ def list_to_string(l: [str]):
     return res
 
 
-def get_main_account(string: str) -> (Union[str, None], Union[str, None], bool):
+def get_main_account(name: str = None, discord_id: int = None) -> (Union[str, None], Union[str, None], bool):
     """
     Finds the closest playername match for a given string. And returns the main account of this player, together with
     the parsed input name and the information, whether it was a perfect match.
+    Alternatively searches for the character name belonging to the discord account.
 
-    :param string: the string which should be looked up
+    :param name: the string which should be looked up or
+    :param discord_id: the id to search for
     :return:    Main Char: str or None,
                 Char name: str or None,
                 Perfect match: bool
     """
-    names = difflib.get_close_matches(string, ingame_chars, 1)
+    if name is None and discord_id is None:
+        return None, None, False
+    if discord_id is not None:
+        for main_char, d_id in discord_users.items():
+            if d_id == discord_id:
+                return main_char
+    names = difflib.get_close_matches(name, ingame_chars, 1)
     if len(names) > 0:
         name = str(names[0])
         main_char = name
         if main_char in ingame_twinks:
             main_char = ingame_twinks[main_char]
-        if name.casefold() == string.casefold():
+        if name.casefold() == name.casefold():
             return main_char, name, True
         return main_char, name, False
     return None, None, False

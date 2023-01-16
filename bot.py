@@ -13,7 +13,7 @@ import mariadb
 import pytesseract.pytesseract
 import pytz as pytz
 import requests
-from discord import ActivityType, Message, DMChannel
+from discord import ActivityType, Message, DMChannel, Option
 from discord.ext import commands, tasks
 from discord.ext.commands import CommandOnCooldown
 from dotenv import load_dotenv
@@ -433,6 +433,26 @@ async def set_log_channel(ctx):
     else:
         logging.info(f"User {ctx.author.id} is missing permissions to run the setlogchannel command")
         await ctx.respond("Missing permissions", ephemeral=True)
+
+
+@bot.slash_command(
+    name="balance",
+    description="Get your current accounting balance."
+)
+async def get_balance(ctx, force: Option(bool, "Force sheet reload", required=False, default=False)):
+    await sheet.load_wallets(force)
+    user_id = ctx.author.id
+    name = utils.get_main_account(discord_id=user_id)
+    if name is None:
+        await ctx.respond("This discord account is not connected to any ingame account!", ephemeral=True)
+        return
+    name = sheet.check_name_overwrites(name)
+    balance = sheet.get_balance(name)
+    if balance is None:
+        await ctx.respond("Wallet not found!", ephemeral=True)
+        return
+    balance = "{:,} ISK".format(balance)
+    await ctx.respond(f"Dein Kontostand beträgt : `{balance}`", ephemeral=True)
 
 
 def save_config():

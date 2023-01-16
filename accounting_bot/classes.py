@@ -133,7 +133,9 @@ async def inform_player(transaction, discord_id, receive):
     user = await BOT.get_or_fetch_user(discord_id)
     if user is not None:
         await user.send(
-            "Du hast ISK auf Deinem Accounting erhalten:" if receive else "Es wurde ISK von deinem Konto abgebucht:",
+            ("Du hast ISK auf Deinem Accounting erhalten." if receive else "Es wurde ISK von deinem Konto abgebucht.") +
+            "\nDein Kontostand beträgt " +
+            str(sheet.get_balance(transaction.name_to if receive else transaction.name_from)),
             embed=transaction.create_embed())
     else:
         time_formatted = transaction.timestamp.astimezone(pytz.timezone("Europe/Berlin")).strftime("%d.%m.%Y %H:%M")
@@ -168,6 +170,13 @@ async def save_embeds(msg, user_id):
     # Set message as verified
     CONNECTOR.set_verification(msg.id, verified=1)
     await msg.edit(content=f"Verifiziert von {user.name}", view=None)
+
+    # Update wallets
+    await sheet.load_wallets()
+    if transaction.name_from and transaction.name_from in sheet.wallets:
+        sheet.wallets[transaction.name_from] = sheet.wallets[transaction.name_from] + transaction.amount
+    if transaction.name_to and transaction.name_to in sheet.wallets:
+        sheet.wallets[transaction.name_to] = sheet.wallets[transaction.name_to] + transaction.amount
 
     # Find discord account
     if transaction.name_from:

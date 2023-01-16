@@ -3,6 +3,7 @@ import datetime
 import json
 import logging
 import re
+import time
 from os.path import exists
 
 import gspread_asyncio
@@ -39,6 +40,10 @@ overwrites = {}
 allProjects = []  # type: [Project]
 lastChanges = datetime.datetime(1970, 1, 1)
 
+wallets = {}
+wallets_last_reload = 0
+MEMBERS_WALLET_INDEX = 2  # The column index of the balance
+MEMBERS_AREA_LITE = "A4:C"  # The reduced area of the member list
 MEMBERS_AREA = "A4:O"  # The area of the member list
 MEMBERS_NAME_INDEX = 0  # The column index of the name
 MEMBERS_ACTIVE_INDEX = 10  # The column index of the "active" column
@@ -167,6 +172,30 @@ async def add_transaction(transaction: 'classes.Transaction') -> None:
     await wk_log.append_row([time, user_f, user_t, amount, purpose, reference],
                             value_input_option=ValueInputOption.user_entered)
     logger.debug("Saved row")
+
+
+async def load_wallets(force=False):
+    global wallets, wallets_last_reload
+    t = time.time()
+    if (t - wallets_last_reload) < 60*60*5 and not force:
+        return
+    wallets_last_reload = t
+    wallets.clear()
+    agc = await agcm.authorize()
+    sheet = await agc.open_by_key(SPREADSHEET_ID)
+    wk_accounting = await sheet.worksheet("Accounting")
+    user_raw = await wk_accounting.get_values(MEMBERS_AREA_LITE, value_render_option=ValueRenderOption.unformatted)
+    for u in user_raw:
+        if len(u) >= 3:
+            bal = u[MEMBERS_WALLET_INDEX]
+            if type(bal) == int:
+                wallets[u[MEMBERS_NAME_INDEX]] = bal
+
+
+def get_balance(name: str):
+    if name in wallets:
+        return wallets[name]
+    return None
 
 
 async def find_projects():
