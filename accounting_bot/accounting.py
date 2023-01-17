@@ -199,7 +199,7 @@ async def save_embeds(msg, user_id):
 
     # Update wallets
     if transaction.name_from and transaction.name_from in sheet.wallets:
-        sheet.wallets[transaction.name_from] = sheet.wallets[transaction.name_from] + transaction.amount
+        sheet.wallets[transaction.name_from] = sheet.wallets[transaction.name_from] - transaction.amount
     if transaction.name_to and transaction.name_to in sheet.wallets:
         sheet.wallets[transaction.name_to] = sheet.wallets[transaction.name_to] + transaction.amount
     await sheet.load_wallets()
