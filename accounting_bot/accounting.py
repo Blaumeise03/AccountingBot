@@ -16,7 +16,7 @@ from discord.ui import Modal, InputText
 from accounting_bot import sheet, utils
 from accounting_bot.config import Config
 from accounting_bot.database import DatabaseConnector
-from accounting_bot.utils import send_exception, AutoDisableView
+from accounting_bot.utils import send_exception, AutoDisableView, log_error
 
 from typing import TYPE_CHECKING
 
@@ -578,7 +578,7 @@ class AccountingView(AutoDisableView):
         await interaction.response.send_message(msg, ephemeral=True)
 
     async def on_error(self, error: Exception, item, interaction):
-        logger.exception("Error in AccountingView", error)
+        log_error(logger, error, self.__class__)
         await send_exception(error, interaction)
 
 
@@ -624,7 +624,7 @@ class TransactionView(AutoDisableView):
             await interaction.response.send_message("Bereits verifiziert!", ephemeral=True)
 
     async def on_error(self, error: Exception, item, interaction):
-        logger.exception("Error in TransactionView", error)
+        log_error(logger, error, self.__class__)
         await send_exception(error, interaction)
 
 
@@ -643,7 +643,7 @@ class ConfirmView(AutoDisableView):
         await send_transaction(interaction.message.embeds, interaction)
 
     async def on_error(self, error: Exception, item, interaction):
-        logger.error("Error in ConfirmView", error)
+        log_error(logger, error, self.__class__)
         await send_exception(error, interaction)
 
 
@@ -674,7 +674,7 @@ class ConfirmEditView(AutoDisableView):
         await interaction.response.send_message("Transaktion bearbeitet!", ephemeral=True)
 
     async def on_error(self, error: Exception, item, interaction):
-        logger.exception("Error in ConfirmEditView", error)
+        log_error(logger, error, self.__class__)
         await send_exception(error, interaction)
 
 
@@ -690,7 +690,7 @@ class ConfirmOCRView(AutoDisableView):
         await send_transaction([self.transaction.create_embed()], interaction, self.note)
 
     async def on_error(self, error: Exception, item, interaction):
-        logger.exception("Error in ConfirmOCRView", error)
+        log_error(logger, error, self.__class__)
         await send_exception(error, interaction)
 
 
@@ -728,7 +728,7 @@ class TransferModal(Modal):
             ephemeral=True, view=ConfirmView())
 
     async def on_error(self, error: Exception, interaction: Interaction) -> None:
-        logger.exception("Error on Transfer Modal", error)
+        log_error(logger, error, self.__class__)
         await send_exception(error, interaction)
 
 
@@ -833,5 +833,5 @@ class ShipyardModal(Modal):
             await send_transaction(embeds, interaction, "")
 
     async def on_error(self, error: Exception, interaction: Interaction) -> None:
-        logger.exception("Error on Shipyard Modal", error)
+        log_error(logger, error, self.__class__)
         await send_exception(error, interaction)

@@ -151,7 +151,7 @@ class ConfirmView(AutoDisableView):
         await view.update_message()
 
     async def on_error(self, error: Exception, item, interaction):
-        logger.error("Error in ConfirmView: %s", error, exc_info=error)
+        log_error(logger, error, self.__class__)
         await send_exception(error, interaction)
 
 
@@ -211,7 +211,7 @@ class InformPlayerView(AutoDisableView):
         await interaction.response.send_modal(InformPlayerView.DiscordUserModal(self))
 
     async def on_error(self, error: Exception, item, interaction):
-        logger.error("Error in InformPlayerView: %s", error, exc_info=error)
+        log_error(logger, error, self.__class__)
         await send_exception(error, interaction)
 
     class DiscordUserModal(Modal):
@@ -240,7 +240,7 @@ class InformPlayerView(AutoDisableView):
                 await interaction.response.send_message(f"Fehler, Spieler {name} nicht gefunden!", ephemeral=True)
 
         async def on_error(self, error: Exception, interaction: Interaction) -> None:
-            log_error(logger, error)
+            log_error(logger, error, self.__class__)
             await send_exception(error, interaction)
 
 
@@ -299,7 +299,7 @@ class ListModal(Modal):
         return
 
     async def on_error(self, error: Exception, interaction: Interaction) -> None:
-        log_error(logger, error)
+        log_error(logger, error, in_class=self.__class__)
         await send_exception(error, interaction)
 
 

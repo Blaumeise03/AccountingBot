@@ -35,8 +35,10 @@ if exists("discord_ids.json"):
 
 
 # noinspection PyShadowingNames
-def log_error(logger: logging.Logger, error):
+def log_error(logger: logging.Logger, error, in_class=None):
     full_error = traceback.format_exception(type(error), error, error.__traceback__)
+    if in_class:
+        logger.error("An error occurred in class %s", in_class.__name__)
     for line in full_error:
         for line2 in line.split("\n"):
             if len(line2.strip()) > 0:
