@@ -1,7 +1,8 @@
 import asyncio
 import logging
 
-from discord import Option, User, ApplicationContext
+import discord
+from discord import Option, User, ApplicationContext, AutocompleteContext, option, Role
 from discord.ext import commands
 
 from accounting_bot import accounting, sheet, utils
@@ -12,6 +13,10 @@ from accounting_bot.database import DatabaseConnector
 logger = logging.getLogger("bot.commands")
 
 
+def main_char_autocomplete(self: AutocompleteContext):
+    return filter(lambda n: self.value is None or n.startswith(self.value.strip()), utils.main_chars)
+
+
 class BaseCommands(commands.Cog):
     def __init__(self, config: Config, connector: DatabaseConnector):
         self.config = config
@@ -19,6 +24,10 @@ class BaseCommands(commands.Cog):
         self.admins = config["admins"]
         self.owner = config["owner"]
         self.connector = connector
+
+    def has_permissions(self, ctx: ApplicationContext):
+        return (ctx.guild and self.guild == ctx.guild.id and ctx.author.guild_permissions.administrator) \
+            or ctx.author.id in self.admins or ctx.author.id == self.owner
 
     @commands.slash_command(description="Creates the main menu for the bot and sets all required settings.")
     async def setup(self, ctx):
@@ -116,6 +125,76 @@ class BaseCommands(commands.Cog):
             await ctx.followup.send("Konto nicht gefunden!", ephemeral=True)
             return
         await ctx.followup.send("Der Kontostand von {} beträgt `{:,} ISK`.".format(name, balance), ephemeral=True)
+
+    @commands.slash_command(
+        name="registeruser",
+        description="Registers a user to a discord ID"
+    )
+    @option("ingame_name", description="The main character name of the user", required=True,
+            autocomplete=main_char_autocomplete)
+    @option("user", description="The user to register", required=True)
+    async def register_user(self, ctx: ApplicationContext, ingame_name: str, user: User):
+        if not self.has_permissions(ctx):
+            await ctx.respond("You don't have the permission to use this command.", ephemeral=True)
+            return
+        if user is None:
+            await ctx.respond("Either a user is required.", ephemeral=True)
+            return
+        user_id = user.id
+        if ingame_name is None or ingame_name == "":
+            await ctx.respond("Ingame name is required!", ephemeral=True)
+            return
+        matched_name, _, _ = utils.get_main_account(ingame_name)
+
+        if matched_name is not None:
+            old_id = utils.get_discord_id(matched_name)
+            utils.save_discord_id(matched_name, int(user_id))
+            logger.info("(%s) Saved discord id %s to player %s, old id %s", ctx.user.id, user_id, matched_name, old_id)
+            await ctx.response.send_message(
+                f"Spieler `{matched_name}` wurde zur ID `{user_id}` (<@{user_id}>) eingespeichert!\n" +
+                ("" if not old_id else f"Die alte ID war `{old_id}` (<@{old_id}>)."),
+                ephemeral=True)
+        else:
+            await ctx.response.send_message(f"Fehler, Spieler {ingame_name} nicht gefunden!", ephemeral=True)
+
+    # noinspection SpellCheckingInspection
+    @commands.slash_command(
+        name="listunregusers",
+        description="Lists all unregistered users of the discord"
+    )
+    @option("role", description="The role to check", required=True)
+    async def find_unregistered_users(self, ctx: ApplicationContext, role: Role):
+        if not self.has_permissions(ctx):
+            await ctx.respond("You don't have the permission to use this command.", ephemeral=True)
+            return
+        await ctx.defer(ephemeral=True)
+        users = await ctx.guild \
+                         .fetch_members() \
+                         .filter(lambda m: m.get_role(role.id) is not None) \
+                         .map(lambda m: (m.nick if m.nick is not None else m.name, m)) \
+                         .flatten()
+        unreg_users = []
+        old_users = []
+        for name, user in users:  # type: str, discord.Member
+            if user.id not in utils.discord_users.values():
+                unreg_users.append(user)
+            elif utils.get_main_account(discord_id=user.id) not in utils.main_chars:
+                old_users.append((utils.get_main_account(discord_id=user.id), user))
+
+        msg = f"Found {len(unreg_users)} unregistered users that have the specified role.\n"
+        for user in unreg_users:
+            msg += f"<@{user.id}> ({user.name})\n"
+            if len(msg) > 1900:
+                msg += "**Truncated**\n"
+                break
+        if len(old_users) > 0:
+            msg += f"Found {len(old_users)} users that have no active (main) character inside the corp.\n"
+            for name, user in old_users:
+                msg += f"<@{user.id}> ({user.name}): Ingame: {name}\n"
+                if len(msg) > 1900:
+                    msg += "**Truncated**\n"
+                    break
+        await ctx.followup.send(msg, ephemeral=True)
 
     # noinspection SpellCheckingInspection
     @commands.slash_command(description="Posts a menu with all available manufacturing roles.")

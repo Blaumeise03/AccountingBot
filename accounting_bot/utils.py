@@ -24,9 +24,10 @@ def set_config(config: Config, bot):
     BOT = bot
 
 
-discord_users = {}
+discord_users = {}  # type: {str: int} | None
 ingame_twinks = {}
 ingame_chars = []
+main_chars = []
 
 if exists("discord_ids.json"):
     with open("discord_ids.json") as json_file:
@@ -146,6 +147,11 @@ async def find_discord_id(bot, guild, user_role, player_name):
 def save_discord_id(name: str, discord_id: int):
     if name in discord_users and discord_users[name] == discord_id:
         return
+    while discord_id in discord_users.values():
+        for k, v in list(discord_users.items()):
+            if v == discord_id:
+                logger.warning("Deleted discord id %s (user: %s)", v, k)
+                del discord_users[k]
     discord_users[name] = discord_id
     save_discord_config()
 

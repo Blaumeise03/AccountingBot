@@ -144,22 +144,25 @@ def parse_player(string: str) -> (Union[str, None], bool):
 
 
 async def inform_player(transaction, discord_id, receive):
+    time_formatted = transaction.timestamp.astimezone(pytz.timezone("Europe/Berlin")).strftime("%d.%m.%Y %H:%M")
+    if not discord_id:
+        logger.warning("Didn't received an ID for %s (receive=%s)", str(transaction), str(receive))
+        return
     user = await BOT.get_or_fetch_user(discord_id)
     if user is not None:
         await user.send(
             ("Du hast ISK auf Deinem Accounting erhalten." if receive else "Es wurde ISK von deinem Konto abgebucht.") +
             "\nDein Kontostand beträgt `" +
-            "{:,} ISK".format(sheet.get_balance(transaction.name_to if receive else transaction.name_from)) + "`",
+            "{:,} ISK".format(sheet.get_balance(transaction.name_to if receive else transaction.name_from, safe=True)) + "`",
             embed=transaction.create_embed())
-    else:
-        time_formatted = transaction.timestamp.astimezone(pytz.timezone("Europe/Berlin")).strftime("%d.%m.%Y %H:%M")
-        logging.warning("Can't inform user %s (%s) about about the transaction %s -> %s: %s (%s)",
-                        transaction.name_to if receive else transaction.name_from,
-                        discord_id,
-                        transaction.name_from,
-                        transaction.name_to,
-                        "{:,} ISK".format(transaction.amount),
-                        time_formatted)
+    elif discord_id > 0:
+        logger.warning("Can't inform user %s (%s) about about the transaction %s -> %s: %s (%s)",
+                       transaction.name_to if receive else transaction.name_from,
+                       discord_id,
+                       transaction.name_from,
+                       transaction.name_to,
+                       "{:,} ISK".format(transaction.amount),
+                       time_formatted)
 
 
 async def save_embeds(msg, user_id):
@@ -242,18 +245,20 @@ async def verify_transaction(user_id: int, message: Message, interaction: Intera
             bal = sheet.get_balance(transaction.name_from)
             if not bal:
                 if interaction:
-                    await interaction.followup.send(content="Dein Kontostand konnte nicht gepüft werden.", ephemeral=True)
+                    await interaction.followup.send(content="Dein Kontostand konnte nicht gepüft werden.",
+                                                    ephemeral=True)
                 return
             if bal < transaction.amount:
                 if interaction:
-                    await interaction.followup.send(content="Fehler: Dein Konto (`{:,} ISK`) reicht nicht aus, um diese "
-                                                            "Transaktion (`{:,} ISK`) zu decken."
-                                                    .format(bal, transaction.amount),
-                                                    ephemeral=True)
+                    await interaction.followup.send(
+                        content="Fehler: Dein Konto (`{:,} ISK`) reicht nicht aus, um diese "
+                                "Transaktion (`{:,} ISK`) zu decken."
+                        .format(bal, transaction.amount),
+                        ephemeral=True)
                 return
             has_permissions = True
             logger.info("User " + str(user_id) + " is owner of transaction " + transaction.__str__() + " and has "
-                        "sufficient balance")
+                                                                                                       "sufficient balance")
 
     if not has_permissions:
         if interaction:
@@ -573,7 +578,7 @@ class AccountingView(AutoDisableView):
         await interaction.response.send_message(msg, ephemeral=True)
 
     async def on_error(self, error: Exception, item, interaction):
-        logger.exception(f"Error in AccountingView: {error}")
+        logger.exception("Error in AccountingView", error)
         await send_exception(error, interaction)
 
 
@@ -619,7 +624,7 @@ class TransactionView(AutoDisableView):
             await interaction.response.send_message("Bereits verifiziert!", ephemeral=True)
 
     async def on_error(self, error: Exception, item, interaction):
-        logger.exception(f"Error in TransactionView: {error}", error)
+        logger.exception("Error in TransactionView", error)
         await send_exception(error, interaction)
 
 
@@ -638,7 +643,7 @@ class ConfirmView(AutoDisableView):
         await send_transaction(interaction.message.embeds, interaction)
 
     async def on_error(self, error: Exception, item, interaction):
-        logger.error(f"Error in ConfirmView: %s", error)
+        logger.error("Error in ConfirmView", error)
         await send_exception(error, interaction)
 
 
@@ -669,7 +674,7 @@ class ConfirmEditView(AutoDisableView):
         await interaction.response.send_message("Transaktion bearbeitet!", ephemeral=True)
 
     async def on_error(self, error: Exception, item, interaction):
-        logger.error(f"Error in ConfirmEditView: {error}", error)
+        logger.exception("Error in ConfirmEditView", error)
         await send_exception(error, interaction)
 
 
@@ -685,7 +690,7 @@ class ConfirmOCRView(AutoDisableView):
         await send_transaction([self.transaction.create_embed()], interaction, self.note)
 
     async def on_error(self, error: Exception, item, interaction):
-        logger.error(f"Error in ConfirmOCRView: {error}", error)
+        logger.exception("Error in ConfirmOCRView", error)
         await send_exception(error, interaction)
 
 
@@ -723,7 +728,7 @@ class TransferModal(Modal):
             ephemeral=True, view=ConfirmView())
 
     async def on_error(self, error: Exception, interaction: Interaction) -> None:
-        logger.error(f"Error on Transfer Modal: {error}", error)
+        logger.exception("Error on Transfer Modal", error)
         await send_exception(error, interaction)
 
 
@@ -828,5 +833,5 @@ class ShipyardModal(Modal):
             await send_transaction(embeds, interaction, "")
 
     async def on_error(self, error: Exception, interaction: Interaction) -> None:
-        logger.error(f"Error on Shipyard Modal: {error}", error)
+        logger.exception("Error on Shipyard Modal", error)
         await send_exception(error, interaction)

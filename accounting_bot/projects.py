@@ -168,7 +168,10 @@ class InformPlayerView(AutoDisableView):
 
     async def load_user(self):
         if self.discord_id is None:
-            name, perfect, nicknames = await utils.find_discord_id(self.bot, GUILD, USER_ROLE, self.user)
+            main_char = utils.get_main_account(name=self.user)
+            if main_char is None:
+                main_char = self.user
+            name, perfect, nicknames = await utils.find_discord_id(self.bot, GUILD, USER_ROLE, main_char)
             if name is not None:
                 self.discord_id = nicknames[name]
 
@@ -224,7 +227,8 @@ class InformPlayerView(AutoDisableView):
         async def callback(self, interaction: Interaction):
             name = self.children[0].value
             discord_id = self.children[1].value
-            matched_name, perfect = utils.parse_player(name, sheet.users)
+            matched_name, _, perfect = utils.get_main_account(name)
+
             if matched_name is not None:
                 matched_name = sheet.check_name_overwrites(matched_name)
                 utils.save_discord_id(matched_name, int(discord_id))

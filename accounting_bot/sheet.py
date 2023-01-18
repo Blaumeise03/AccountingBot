@@ -103,11 +103,13 @@ async def setup_sheet(sheet_id: str, project_resources: [str], log_level) -> Non
     users.clear()
     utils.ingame_twinks.clear()
     utils.ingame_chars.clear()
+    utils.main_chars.clear()
 
     for u in user_raw:
         # Check if main account
         if len(u) > MEMBERS_ACTIVE_INDEX and u[MEMBERS_ACTIVE_INDEX]:
             users.append(u[MEMBERS_NAME_INDEX])
+            utils.main_chars.append(u[MEMBERS_NAME_INDEX])
 
         # Check if in the corp (and therefore has a rank)
         if len(u) > MEMBERS_RANK_INDEX and len(u[MEMBERS_RANK_INDEX].strip()) > 0:
@@ -119,12 +121,17 @@ async def setup_sheet(sheet_id: str, project_resources: [str], log_level) -> Non
                 if note.startswith("Twink von "):
                     note = note.replace("Twink von ", "").strip()
                     utils.ingame_twinks[u[MEMBERS_NAME_INDEX]] = note
+
     for u in overwrites.keys():
         u_2 = overwrites.get(u)
         if u_2 is None:
             users.append(u)
         else:
             users.append(u_2)
+    logger.info("Loaded %s main chars, %s active chars and %s twinks.",
+                len(utils.main_chars),
+                len(utils.ingame_chars),
+                len(utils.ingame_twinks))
 
 
 def check_name_overwrites(name: str) -> str:
@@ -189,10 +196,10 @@ async def load_wallets(force=False):
                 wallets[u[MEMBERS_NAME_INDEX]] = bal
 
 
-def get_balance(name: str):
+def get_balance(name: str, safe=False):
     if name in wallets:
         return wallets[name]
-    return None
+    return None if not safe else -1
 
 
 async def find_projects():

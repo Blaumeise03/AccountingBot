@@ -6,6 +6,6 @@ python
 .env
 config.json
 user_overwrites.json
-discord_ids.json
+discord_ids*.json
 credentials.json
 accounting-bot-*.json
