@@ -51,6 +51,7 @@ MEMBERS_NOTE_INDEX = 14  # The column containing notes for users
 PROJECT_RESOURCES = []
 
 projects_lock = asyncio.Lock()
+wallet_lock = asyncio.Lock()
 
 
 def load_config() -> None:
@@ -183,23 +184,25 @@ async def load_wallets(force=False):
     t = time.time()
     if (t - wallets_last_reload) < 60*60*5 and not force:
         return
-    wallets_last_reload = t
-    wallets.clear()
-    agc = await agcm.authorize()
-    sheet = await agc.open_by_key(SPREADSHEET_ID)
-    wk_accounting = await sheet.worksheet("Accounting")
-    user_raw = await wk_accounting.get_values(MEMBERS_AREA_LITE, value_render_option=ValueRenderOption.unformatted)
-    for u in user_raw:
-        if len(u) >= 3:
-            bal = u[MEMBERS_WALLET_INDEX]
-            if type(bal) == int:
-                wallets[u[MEMBERS_NAME_INDEX]] = bal
+    async with wallet_lock:
+        wallets_last_reload = t
+        wallets.clear()
+        agc = await agcm.authorize()
+        sheet = await agc.open_by_key(SPREADSHEET_ID)
+        wk_accounting = await sheet.worksheet("Accounting")
+        user_raw = await wk_accounting.get_values(MEMBERS_AREA_LITE, value_render_option=ValueRenderOption.unformatted)
+        for u in user_raw:
+            if len(u) >= 3:
+                bal = u[MEMBERS_WALLET_INDEX]
+                if type(bal) == int:
+                    wallets[u[MEMBERS_NAME_INDEX]] = bal
 
 
-def get_balance(name: str, safe=False):
-    if name in wallets:
-        return wallets[name]
-    return None if not safe else -1
+async def get_balance(name: str, safe=False):
+    async with wallet_lock:
+        if name in wallets:
+            return wallets[name]
+        return None if not safe else -1
 
 
 async def find_projects():

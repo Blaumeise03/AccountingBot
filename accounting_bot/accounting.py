@@ -153,7 +153,7 @@ async def inform_player(transaction, discord_id, receive):
         await user.send(
             ("Du hast ISK auf Deinem Accounting erhalten." if receive else "Es wurde ISK von deinem Konto abgebucht.") +
             "\nDein Kontostand beträgt `" +
-            "{:,} ISK".format(sheet.get_balance(transaction.name_to if receive else transaction.name_from, safe=True)) + "`",
+            "{:,} ISK".format(await sheet.get_balance(transaction.name_to if receive else transaction.name_from, safe=True)) + "`",
             embed=transaction.create_embed())
     elif discord_id > 0:
         logger.warning("Can't inform user %s (%s) about about the transaction %s -> %s: %s (%s)",
@@ -242,7 +242,7 @@ async def verify_transaction(user_id: int, message: Message, interaction: Intera
         if owner_id and user_id == owner_id:
             # Check if balance is sufficient
             await sheet.load_wallets()
-            bal = sheet.get_balance(transaction.name_from)
+            bal = await sheet.get_balance(transaction.name_from)
             if not bal:
                 if interaction:
                     await interaction.followup.send(content="Dein Kontostand konnte nicht gepüft werden.",
@@ -457,7 +457,7 @@ class Transaction:
                 warnings += "**Fehler**: Dieses Konto gehört dir nicht bzw. dein Discordaccount ist nicht " \
                             "**verifiziert** (kontaktiere in diesem Fall einen Admin). Nur der Kontobesitzer darf " \
                             "ISK von seinem Konto an andere senden.\n"
-            bal = sheet.get_balance(transaction.name_from)
+            bal = await sheet.get_balance(transaction.name_from)
             if not bal:
                 warnings += "Warnung: Dein Kontostand konnte nicht geprüft werden.\n"
             elif bal < transaction.amount:

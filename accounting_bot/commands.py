@@ -120,7 +120,7 @@ class BaseCommands(commands.Cog):
             await ctx.followup.send("This discord account is not connected to any ingame account!", ephemeral=True)
             return
         name = sheet.check_name_overwrites(name)
-        balance = sheet.get_balance(name)
+        balance = await sheet.get_balance(name)
         if balance is None:
             await ctx.followup.send("Konto nicht gefunden!", ephemeral=True)
             return
