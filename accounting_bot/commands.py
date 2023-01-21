@@ -1,5 +1,6 @@
 import asyncio
 import logging
+from typing import TYPE_CHECKING
 
 import discord
 from discord import Option, User, ApplicationContext, AutocompleteContext, option, Role
@@ -9,6 +10,10 @@ from accounting_bot import accounting, sheet, utils
 from accounting_bot.accounting import AccountingView
 from accounting_bot.config import Config
 from accounting_bot.database import DatabaseConnector
+from accounting_bot.utils import State
+
+if TYPE_CHECKING:
+    from bot import BotState
 
 logger = logging.getLogger("bot.commands")
 
@@ -18,12 +23,13 @@ def main_char_autocomplete(self: AutocompleteContext):
 
 
 class BaseCommands(commands.Cog):
-    def __init__(self, config: Config, connector: DatabaseConnector):
+    def __init__(self, config: Config, connector: DatabaseConnector, state: 'BotState'):
         self.config = config
         self.guild = config["server"]
         self.admins = config["admins"]
         self.owner = config["owner"]
         self.connector = connector
+        self.state = state
 
     def has_permissions(self, ctx: ApplicationContext):
         return (ctx.guild and self.guild == ctx.guild.id and ctx.author.guild_permissions.administrator) \
@@ -210,12 +216,24 @@ class BaseCommands(commands.Cog):
             await ctx.respond("Menü geupdated.", ephemeral=True)
 
     @commands.slash_command(description="Shuts down the discord bot, if set up properly, it will restart.")
-    async def stop(self, ctx):
+    async def stop(self, ctx: ApplicationContext):
         if ctx.author.id == self.owner:
             logger.critical("Shutdown Command received, shutting down bot in 10 seconds")
             await ctx.respond("Bot wird in 10 Sekunden gestoppt...")
+            self.state.state = State.offline
+            logger.warning("Disabling discord commands...")
+            ctx.bot.remove_cog('BaseCommands')
+            ctx.bot.remove_cog('ProjectCommands')
+            # Wait for all pending interactions to complete
+            await asyncio.sleep(5)
+            logger.warning("Closing SQL connection...")
             self.connector.con.close()
-            await asyncio.sleep(10)
-            exit(0)
+            logger.warning("Closing bot...")
+            await ctx.bot.close()
+            await asyncio.sleep(15)
+            # Closing the connection should end the event loop directly, causing the program to exit
+            # Should this not happen within 15 seconds, the program will be terminated anyways
+            logger.error("Force closing process...")
+            exit(1)
         else:
             await ctx.respond("Fehler! Berechtigungen fehlen.", ephemeral=True)

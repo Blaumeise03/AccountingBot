@@ -16,7 +16,8 @@ from discord.ui import Modal, InputText
 from accounting_bot import sheet, utils
 from accounting_bot.config import Config
 from accounting_bot.database import DatabaseConnector
-from accounting_bot.utils import send_exception, AutoDisableView, log_error
+from accounting_bot.exceptions import BotOfflineException
+from accounting_bot.utils import send_exception, AutoDisableView, log_error, State
 
 from typing import TYPE_CHECKING
 
@@ -33,7 +34,7 @@ SERVER = None  # type: int | None
 ADMINS = []  # type: [int]
 CONNECTOR = None  # type: DatabaseConnector | None
 USER_ROLE = None  # type: int | None
-STATE = None  # type: bot.BotState | None
+STATE = None  # type: BotState | None
 
 # All embeds
 EMBED_MENU_INTERNAL = None  # type: Embed | None
@@ -172,6 +173,8 @@ async def save_embeds(msg, user_id):
     :param msg:     The message with the transaction embed
     :param user_id: The user ID that verified the transaction
     """
+    if STATE.state < State.starting:
+        raise BotOfflineException("Can't verify transactions when the bot is not online")
     if len(msg.embeds) == 0:
         return
     elif len(msg.embeds) > 1:

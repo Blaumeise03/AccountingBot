@@ -39,3 +39,7 @@ class ConfigException(Exception):
 
 class ConfigDataTypeException(ConfigException):
     pass
+
+
+class BotOfflineException(Exception):
+    pass

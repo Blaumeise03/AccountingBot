@@ -10,9 +10,14 @@ from discord.ext import commands
 from discord.ui import Modal, InputText
 
 from accounting_bot import sheet, utils, project_utils
-from accounting_bot.exceptions import GoogleSheetException
+from accounting_bot.exceptions import GoogleSheetException, BotOfflineException
 from accounting_bot.project_utils import format_list
-from accounting_bot.utils import string_to_file, list_to_string, send_exception, log_error, AutoDisableView
+from accounting_bot.utils import string_to_file, list_to_string, send_exception, log_error, AutoDisableView, State
+
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from bot import BotState
 
 logger = logging.getLogger("bot.projects")
 logger.setLevel(logging.DEBUG)
@@ -21,6 +26,7 @@ OWNER = -1
 GUILD = -1
 USER_ROLE = -1
 BOT = None  # type: commands.Bot | None
+STATE = None  # type: BotState | None
 
 
 class ProjectCommands(commands.Cog):
@@ -118,6 +124,8 @@ class ConfirmView(AutoDisableView):
                 interaction.user.guild_permissions.administrator or interaction.user.id in ADMINS or interaction.user.id == OWNER):
             await interaction.response.send_message("Missing permissions", ephemeral=True)
             return
+        if STATE.state < State.online:
+            raise BotOfflineException("Can't insert transactions when the bot is not online")
         await interaction.response.send_message("Bitte warten...", ephemeral=True)
 
         await interaction.message.edit(view=None)
@@ -171,9 +179,9 @@ class InformPlayerView(AutoDisableView):
             main_char = utils.get_main_account(name=self.user)
             if main_char is None:
                 main_char = self.user
-            name, perfect, nicknames = await utils.find_discord_id(self.bot, GUILD, USER_ROLE, main_char)
-            if name is not None:
-                self.discord_id = nicknames[name]
+            discord_id, name, perfect = await utils.get_or_find_discord_id(self.bot, GUILD, USER_ROLE, main_char)
+            if discord_id is not None:
+                self.discord_id = discord_id
 
     async def update_message(self):
         await self.message.edit(self.base_message + f"\n\nSoll der Nutzer <@{self.discord_id}> benachrichtigt werden?")

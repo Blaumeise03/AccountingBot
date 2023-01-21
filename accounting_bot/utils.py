@@ -3,8 +3,9 @@ import io
 import json
 import logging
 import traceback
+from enum import Enum
 from os.path import exists
-from typing import Union
+from typing import Union, Tuple, Optional
 
 import discord
 from discord import Interaction
@@ -35,7 +36,10 @@ if exists("discord_ids.json"):
 
 
 # noinspection PyShadowingNames
-def log_error(logger: logging.Logger, error, in_class=None):
+def log_error(logger: logging.Logger, error: Exception, in_class=None):
+    if error and error.__class__ == discord.errors.NotFound:
+        logging.warning("discord.errors.NotFound Error in %s: %s", in_class.__name__, str(error))
+        return
     full_error = traceback.format_exception(type(error), error, error.__traceback__)
     if in_class:
         logger.error("An error occurred in class %s", in_class.__name__)
@@ -112,7 +116,7 @@ def parse_player(string: str, users: [str]) -> (Union[str, None], bool):
     return None, False
 
 
-async def get_or_find_discord_id(bot=None, guild=None, user_role=None, player_name=""):
+async def get_or_find_discord_id(bot=None, guild=None, user_role=None, player_name="") -> Tuple[Optional[int], Optional[str], Optional[bool]]:
     if bot is None:
         bot = BOT
     if guild is None:
@@ -173,3 +177,10 @@ class AutoDisableView(View):
             await self.message.edit(view=None)
         self.clear_items()
         self.disable_all_items()
+
+
+class State(Enum):
+    offline = 0
+    preparing = 1
+    starting = 2
+    online = 3

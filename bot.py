@@ -21,7 +21,7 @@ from accounting_bot.config import Config, ConfigTree
 from accounting_bot.database import DatabaseConnector
 from accounting_bot.discordLogger import PycordHandler
 from accounting_bot.exceptions import LoggedException
-from accounting_bot.utils import log_error, string_to_file
+from accounting_bot.utils import log_error, string_to_file, State
 
 log_filename = "logs/" + datetime.now().strftime("%Y-%m-%d_%H-%M-%S") + ".log"
 print("Logging outputs goes to: " + log_filename)
@@ -45,13 +45,6 @@ discord_handler.setFormatter(formatter)
 logging.getLogger().addHandler(discord_handler)
 # Root logger
 logging.getLogger().setLevel(logging.INFO)
-
-
-class State(Enum):
-    offline = 0
-    preparing = 1
-    starting = 2
-    online = 3
 
 
 class BotState:
@@ -140,7 +133,7 @@ STATE.bot = bot
 accounting.set_up(config, CONNECTOR, bot, STATE)
 utils.set_config(config, bot)
 
-bot.add_cog(BaseCommands(config, CONNECTOR))
+bot.add_cog(BaseCommands(config, CONNECTOR, STATE))
 bot.add_cog(projects.ProjectCommands(bot, config["admins"], config["owner"], config["server"], config["user_role"]))
 
 
@@ -233,7 +226,8 @@ async def on_ready():
             logging.warning(f"Message {m} in channel {c} not found, deleting it from DB")
             CONNECTOR.delete_shortcut(m)
 
-    # Basic setup completed
+    # Basic setup completed, bot is operational
+    STATE.state = State.online
     activity = discord.Activity(name="IAK-JW", type=ActivityType.competing)
     await bot.change_presence(status=discord.Status.idle, activity=activity)
 
@@ -315,7 +309,6 @@ async def on_message(message: Message):
                 args=(url, att.content_type, message, channel, message.author.id))
             thread.start()
             await message.reply("Verarbeite Bild, bitte warten. Dies dauert einige Sekunden.")
-
 
 
 @bot.event
