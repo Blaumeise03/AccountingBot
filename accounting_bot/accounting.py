@@ -173,7 +173,7 @@ async def save_embeds(msg, user_id):
     :param msg:     The message with the transaction embed
     :param user_id: The user ID that verified the transaction
     """
-    if STATE.state < State.starting:
+    if STATE.state.value < State.starting.value:
         raise BotOfflineException("Can't verify transactions when the bot is not online")
     if len(msg.embeds) == 0:
         return

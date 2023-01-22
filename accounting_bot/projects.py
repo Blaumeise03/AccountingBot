@@ -124,7 +124,7 @@ class ConfirmView(AutoDisableView):
                 interaction.user.guild_permissions.administrator or interaction.user.id in ADMINS or interaction.user.id == OWNER):
             await interaction.response.send_message("Missing permissions", ephemeral=True)
             return
-        if STATE.state < State.online:
+        if STATE.state.value < State.online.value:
             raise BotOfflineException("Can't insert transactions when the bot is not online")
         await interaction.response.send_message("Bitte warten...", ephemeral=True)
 
