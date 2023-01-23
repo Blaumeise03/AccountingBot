@@ -2,19 +2,19 @@ import logging
 import re
 from enum import Enum
 from typing import Dict, List
+from typing import TYPE_CHECKING
 
 import discord
 import pytz
 from discord import ApplicationContext, InputTextStyle, Interaction, Option, option
 from discord.ext import commands
-from discord.ui import Modal, InputText
+from discord.ui import InputText
 
 from accounting_bot import sheet, utils, project_utils
 from accounting_bot.exceptions import GoogleSheetException, BotOfflineException
 from accounting_bot.project_utils import format_list
-from accounting_bot.utils import string_to_file, list_to_string, send_exception, log_error, AutoDisableView, State
-
-from typing import TYPE_CHECKING
+from accounting_bot.utils import string_to_file, list_to_string, AutoDisableView, State, \
+    ErrorHandledModal
 
 if TYPE_CHECKING:
     from bot import BotState
@@ -158,10 +158,6 @@ class ConfirmView(AutoDisableView):
         # To prevent pinging the user, the ping will be edited into the message instead
         await view.update_message()
 
-    async def on_error(self, error: Exception, item, interaction):
-        log_error(logger, error, self.__class__)
-        await send_exception(error, interaction)
-
 
 # noinspection PyUnusedLocal
 class InformPlayerView(AutoDisableView):
@@ -218,11 +214,7 @@ class InformPlayerView(AutoDisableView):
             return
         await interaction.response.send_modal(InformPlayerView.DiscordUserModal(self))
 
-    async def on_error(self, error: Exception, item, interaction):
-        log_error(logger, error, self.__class__)
-        await send_exception(error, interaction)
-
-    class DiscordUserModal(Modal):
+    class DiscordUserModal(ErrorHandledModal):
         def __init__(self,
                      view,  # type: InformPlayerView
                      *args, **kwargs):
@@ -247,12 +239,8 @@ class InformPlayerView(AutoDisableView):
             else:
                 await interaction.response.send_message(f"Fehler, Spieler {name} nicht gefunden!", ephemeral=True)
 
-        async def on_error(self, error: Exception, interaction: Interaction) -> None:
-            log_error(logger, error, self.__class__)
-            await send_exception(error, interaction)
 
-
-class ListModal(Modal):
+class ListModal(ErrorHandledModal):
     def __init__(self,
                  skip_loading: bool,
                  priority_projects: [str],
@@ -305,10 +293,6 @@ class ListModal(Modal):
             files=msg_file,
             ephemeral=False)
         return
-
-    async def on_error(self, error: Exception, interaction: Interaction) -> None:
-        log_error(logger, error, in_class=self.__class__)
-        await send_exception(error, interaction)
 
 
 class Project(object):

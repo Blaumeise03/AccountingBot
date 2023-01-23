@@ -9,7 +9,7 @@ from threading import Thread
 import discord
 import mariadb
 import pytesseract.pytesseract
-from discord import ActivityType, Message, DMChannel
+from discord import ActivityType, Message, DMChannel, ApplicationContext
 from discord.ext import commands, tasks
 from discord.ext.commands import CommandOnCooldown
 from dotenv import load_dotenv
@@ -21,7 +21,7 @@ from accounting_bot.config import Config, ConfigTree
 from accounting_bot.database import DatabaseConnector
 from accounting_bot.discordLogger import PycordHandler
 from accounting_bot.exceptions import LoggedException
-from accounting_bot.utils import log_error, string_to_file, State
+from accounting_bot.utils import log_error, string_to_file, State, send_exception
 
 log_filename = "logs/" + datetime.now().strftime("%Y-%m-%d_%H-%M-%S") + ".log"
 print("Logging outputs goes to: " + log_filename)
@@ -158,7 +158,7 @@ async def log_loop():
 
 
 @bot.event
-async def on_application_command_error(ctx, err):
+async def on_application_command_error(ctx: ApplicationContext, err):
     """
     Exception handler for slash commands.
 
@@ -170,25 +170,8 @@ async def on_application_command_error(ctx, err):
     if isinstance(err, CommandOnCooldown):
         silent = True
     if not silent:
-        if ctx.guild is not None:
-            # Error occurred inside a server
-            logging.error(
-                "Error in guild " + str(ctx.guild.id) + " in channel " + str(ctx.channel.id) +
-                ", sent by " + str(
-                    ctx.author.id) + ": " + ctx.author.name + " while executing command " + ctx.command.name)
-        else:
-            # Error occurred inside a direct message
-            logging.error(
-                "Error outside of guild in channel " + str(ctx.channel.id) +
-                ", sent by " + str(ctx.author.id) + ": " + ctx.author.name)
-        log_error(logging.getLogger(), err)
-    if isinstance(err, LoggedException):
-        # Append additional log
-        await ctx.respond(f"Error: {str(err)}.\nFor more details, take a look at the log below.",
-                          file=string_to_file(err.get_log()), ephemeral=True)
-    else:
-        # Normal error
-        await ctx.respond(f"Error: {str(err)}", ephemeral=True)
+        log_error(logging.getLogger(), err, ctx=ctx)
+    await send_exception(err, ctx)
 
 
 @bot.event

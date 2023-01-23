@@ -8,11 +8,12 @@ from os.path import exists
 from typing import Union, Tuple, Optional
 
 import discord
-from discord import Interaction
+from discord import Interaction, ApplicationContext, InteractionResponded
 from discord.ext.commands import Bot
-from discord.ui import View
+from discord.ui import View, Modal
 
 from accounting_bot.config import Config
+from accounting_bot.exceptions import LoggedException
 
 logger = logging.getLogger("bot.utils")
 CONFIG = None  # type: Config | None
@@ -36,22 +37,67 @@ if exists("discord_ids.json"):
 
 
 # noinspection PyShadowingNames
-def log_error(logger: logging.Logger, error: Exception, in_class=None):
+def log_error(logger: logging.Logger, error: Exception, in_class=None,
+              ctx: Union[ApplicationContext, Interaction] = None):
     if error and error.__class__ == discord.errors.NotFound:
         logging.warning("discord.errors.NotFound Error in %s: %s", in_class.__name__, str(error))
         return
     full_error = traceback.format_exception(type(error), error, error.__traceback__)
-    if in_class:
-        logger.error("An error occurred in class %s", in_class.__name__)
+    class_name = in_class.__name__ if in_class else "N/A"
+
+    if isinstance(ctx, ApplicationContext):
+        if ctx.guild is not None:
+            # Error occurred inside a server
+            err_msg = "An error occurred in class {} in guild {} in channel {}, sent by {}:{} during execution of command \"{}\"" \
+                .format(class_name, ctx.guild.id, ctx.channel_id, ctx.author.id, ctx.author.name,
+                        ctx.command.name)
+        else:
+            # Error occurred inside a direct message
+            err_msg = "An error occurred in class {} outside of a guild in channel {}, sent by {}:{} during execution of command \"%s\"" \
+                .format(class_name, ctx.channel_id, ctx.author.id, ctx.author.name,
+                        ctx.command.name)
+    elif isinstance(ctx, Interaction):
+        err_msg = "An error occurred in class {} during interaction in guild {} in channel {}, user %s: {}" \
+            .format(class_name, ctx.guild_id, ctx.channel_id, ctx.user.id, ctx.user.name)
+    else:
+        err_msg = "An error occurred in class {}".format(class_name)
+
+    logger.error(err_msg)
     for line in full_error:
         for line2 in line.split("\n"):
             if len(line2.strip()) > 0:
                 logger.exception(line2, exc_info=False)
 
 
-async def send_exception(error: Exception, interaction: Interaction):
-    await interaction.followup.send(f"An unexpected error occurred: \n{error.__class__.__name__}\n{str(error)}",
+async def send_exception(error: Exception, ctx: Union[ApplicationContext, Interaction]):
+    if not isinstance(ctx, Interaction) and not isinstance(ctx, ApplicationContext):
+        raise TypeError(f"Expected Interaction or ApplicationContext, got {type(ctx)}")
+    try:
+        try:
+            # Defer interaction to ensure we can use a followup
+            await ctx.response.defer(ephemeral=True)
+        except InteractionResponded:
+            pass
+        if isinstance(error, LoggedException):
+            # Append additional log
+            await ctx.followup.send(f"Error: {str(error)}.\nFor more details, take a look at the log below.",
+                                    file=string_to_file(error.get_log()), ephemeral=True)
+        else:
+            await ctx.followup.send(f"An unexpected error occurred: \n{error.__class__.__name__}\n{str(error)}",
                                     ephemeral=True)
+    except discord.NotFound:
+        try:
+            await ctx.author.send(f"An unexpected error occurred: \n{error.__class__.__name__}\n{str(error)}")
+        except discord.Forbidden:
+            pass
+        if isinstance(ctx, Interaction):
+            location = "interaction in channel {} in guild {}, user {}" \
+                .format(ctx.channel_id, ctx.guild_id, ctx.user.id)
+        else:
+            location = "command in channel {} in guild {}, user {}:{}" \
+                .format(ctx.channel_id, ctx.guild_id, ctx.user.id, ctx.user.name)
+        logger.warning("Can't send error message for \"%s\", caused by %s: NotFound", error.__class__.__name__,
+                       location)
 
 
 def string_to_file(text: str, filename="message.txt"):
@@ -116,7 +162,8 @@ def parse_player(string: str, users: [str]) -> (Union[str, None], bool):
     return None, False
 
 
-async def get_or_find_discord_id(bot=None, guild=None, user_role=None, player_name="") -> Tuple[Optional[int], Optional[str], Optional[bool]]:
+async def get_or_find_discord_id(bot=None, guild=None, user_role=None, player_name="") \
+                                 -> Tuple[Optional[int], Optional[str], Optional[bool]]:
     if bot is None:
         bot = BOT
     if guild is None:
@@ -167,7 +214,25 @@ def save_discord_config():
         json.dump(discord_users, outfile, indent=4)
 
 
-class AutoDisableView(View):
+class ErrorHandledModal(Modal):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+
+    async def on_error(self, error: Exception, interaction: Interaction) -> None:
+        log_error(logger, error, self.__class__, ctx=interaction)
+        await send_exception(error, interaction)
+
+
+class ErrorHandledView(View):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+
+    async def on_error(self, error: Exception, item, interaction):
+        log_error(logger, error, self.__class__, ctx=interaction)
+        await send_exception(error, interaction)
+
+
+class AutoDisableView(ErrorHandledView):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
 

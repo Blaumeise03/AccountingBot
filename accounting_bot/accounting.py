@@ -3,6 +3,7 @@ import logging
 import re
 from asyncio import Lock
 from datetime import datetime
+from typing import TYPE_CHECKING
 from typing import Union, List
 
 import discord
@@ -17,9 +18,7 @@ from accounting_bot import sheet, utils
 from accounting_bot.config import Config
 from accounting_bot.database import DatabaseConnector
 from accounting_bot.exceptions import BotOfflineException
-from accounting_bot.utils import send_exception, AutoDisableView, log_error, State
-
-from typing import TYPE_CHECKING
+from accounting_bot.utils import AutoDisableView, State, ErrorHandledModal
 
 if TYPE_CHECKING:
     from bot import BotState
@@ -580,10 +579,6 @@ class AccountingView(AutoDisableView):
                 msg += f"\nUnd {len(unverified) - i} weitere..."
         await interaction.response.send_message(msg, ephemeral=True)
 
-    async def on_error(self, error: Exception, item, interaction):
-        log_error(logger, error, self.__class__)
-        await send_exception(error, interaction)
-
 
 # noinspection PyUnusedLocal
 class TransactionView(AutoDisableView):
@@ -626,10 +621,6 @@ class TransactionView(AutoDisableView):
         else:
             await interaction.response.send_message("Bereits verifiziert!", ephemeral=True)
 
-    async def on_error(self, error: Exception, item, interaction):
-        log_error(logger, error, self.__class__)
-        await send_exception(error, interaction)
-
 
 # noinspection PyUnusedLocal
 class ConfirmView(AutoDisableView):
@@ -644,10 +635,6 @@ class ConfirmView(AutoDisableView):
     @discord.ui.button(label="Senden", style=discord.ButtonStyle.green)
     async def btn_confirm_callback(self, button, interaction):
         await send_transaction(interaction.message.embeds, interaction)
-
-    async def on_error(self, error: Exception, item, interaction):
-        log_error(logger, error, self.__class__)
-        await send_exception(error, interaction)
 
 
 # noinspection PyUnusedLocal
@@ -676,10 +663,6 @@ class ConfirmEditView(AutoDisableView):
         await self.message.edit(embeds=interaction.message.embeds)
         await interaction.response.send_message("Transaktion bearbeitet!", ephemeral=True)
 
-    async def on_error(self, error: Exception, item, interaction):
-        log_error(logger, error, self.__class__)
-        await send_exception(error, interaction)
-
 
 # noinspection PyUnusedLocal
 class ConfirmOCRView(AutoDisableView):
@@ -692,12 +675,8 @@ class ConfirmOCRView(AutoDisableView):
     async def btn_confirm_callback(self, button, interaction):
         await send_transaction([self.transaction.create_embed()], interaction, self.note)
 
-    async def on_error(self, error: Exception, item, interaction):
-        log_error(logger, error, self.__class__)
-        await send_exception(error, interaction)
 
-
-class TransferModal(Modal):
+class TransferModal(ErrorHandledModal):
     def __init__(self, color: Color, special: bool = False,
                  name_from: str = None,
                  name_to: str = None,
@@ -730,10 +709,6 @@ class TransferModal(Modal):
             warnings, embed=transaction.create_embed(),
             ephemeral=True, view=ConfirmView())
 
-    async def on_error(self, error: Exception, interaction: Interaction) -> None:
-        log_error(logger, error, self.__class__)
-        await send_exception(error, interaction)
-
 
 class EditModal(TransferModal):
     def __init__(self, message: Message, *args, **kwargs):
@@ -757,7 +732,7 @@ class EditModal(TransferModal):
         await interaction.response.send_message(f"Transaktionen wurde editiert!\n{warnings}", ephemeral=True)
 
 
-class ShipyardModal(Modal):
+class ShipyardModal(ErrorHandledModal):
     def __init__(self, color: Color, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.color = color
@@ -834,7 +809,3 @@ class ShipyardModal(Modal):
             await interaction.response.send_message(warnings, embeds=embeds, ephemeral=True, view=ConfirmView())
         else:
             await send_transaction(embeds, interaction, "")
-
-    async def on_error(self, error: Exception, interaction: Interaction) -> None:
-        log_error(logger, error, self.__class__)
-        await send_exception(error, interaction)
