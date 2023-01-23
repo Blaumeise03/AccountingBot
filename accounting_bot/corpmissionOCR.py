@@ -150,9 +150,9 @@ class CorporationMission:
             rel_cords = to_relative_cords(cords, width, height)
             # Get transaction direction and y-level of the ISK quantity
             pay = max(difflib.SequenceMatcher(None, "Corporation pays", t).ratio(),
-                      difflib.SequenceMatcher(None, "pays", t).ratio())
+                      difflib.SequenceMatcher(None, "pays", t.replace("|", "").strip()).ratio())
             get = max(difflib.SequenceMatcher(None, "Corporation gets", t).ratio(),
-                      difflib.SequenceMatcher(None, "gets", t).ratio())
+                      difflib.SequenceMatcher(None, "gets", t.replace("|", "").strip()).ratio())
             if rel_cords["x1"] < 0.3 and (pay > 0.8 or get > 0.8):
                 if pay > get:
                     isk_pay_lines.append((rel_cords["y1"] + rel_cords["y2"]) / 2)
