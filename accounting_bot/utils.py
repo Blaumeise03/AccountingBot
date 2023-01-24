@@ -87,7 +87,10 @@ async def send_exception(error: Exception, ctx: Union[ApplicationContext, Intera
                                     ephemeral=True)
     except discord.NotFound:
         try:
-            await ctx.author.send(f"An unexpected error occurred: \n{error.__class__.__name__}\n{str(error)}")
+            if isinstance(ctx, Interaction) and ctx.user:
+                await ctx.user.send(f"An unexpected error occurred: \n{error.__class__.__name__}\n{str(error)}")
+            elif isinstance(ctx, ApplicationContext) and ctx.author:
+                await ctx.author.send(f"An unexpected error occurred: \n{error.__class__.__name__}\n{str(error)}")
         except discord.Forbidden:
             pass
         if isinstance(ctx, Interaction):
