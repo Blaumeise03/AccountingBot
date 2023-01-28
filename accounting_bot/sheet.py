@@ -179,7 +179,7 @@ async def add_transaction(transaction: 'classes.Transaction') -> None:
     logger.debug("Saved row")
 
 
-async def load_wallets(force=False):
+async def load_wallets(force=False, validate=False):
     global wallets, wallets_last_reload
     t = time.time()
     if (t - wallets_last_reload) < 60*60*5 and not force:
@@ -194,8 +194,10 @@ async def load_wallets(force=False):
         for u in user_raw:
             if len(u) >= 3:
                 bal = u[MEMBERS_WALLET_INDEX]
-                if type(bal) == int:
-                    wallets[u[MEMBERS_NAME_INDEX]] = bal
+                if type(bal) == int or type(bal) == float:
+                    if validate and type(bal) == float:
+                        logger.warning("Balance for %s is a float: %s", u[MEMBERS_NAME_INDEX], bal)
+                    wallets[u[MEMBERS_NAME_INDEX]] = int(bal)
 
 
 async def get_balance(name: str, safe=False):

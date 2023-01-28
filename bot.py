@@ -132,6 +132,7 @@ STATE.bot = bot
 
 accounting.set_up(config, CONNECTOR, bot, STATE)
 utils.set_config(config, bot)
+projects.STATE = STATE
 
 bot.add_cog(BaseCommands(config, CONNECTOR, STATE))
 bot.add_cog(projects.ProjectCommands(bot, config["admins"], config["owner"], config["server"], config["user_role"]))
@@ -216,6 +217,7 @@ async def on_ready():
 
     logging.info("Starting Google sheets API...")
     await sheet.setup_sheet(config["google_sheet"], config["project_resources"], config["logger.sheet"])
+    await sheet.load_wallets(force=True, validate=True)
     logging.info("Google sheets API loaded.")
 
     # Updating unverified accountinglog entries

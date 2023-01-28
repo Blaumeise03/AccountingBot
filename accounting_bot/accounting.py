@@ -527,10 +527,6 @@ async def send_transaction(embeds: List[Embed], interaction: Interaction, note="
             note += "\nFehler beim Eintragen in die Datenbank, die Transaktion wurde jedoch trotzdem im " \
                     f"Accountinglog gepostet. Informiere bitte einen Admin, danke.\n{e}"
     await interaction.response.send_message("Transaktion gesendet!" + note, ephemeral=True)
-    try:
-        await interaction.message.edit(view=None)
-    except discord.errors.NotFound:
-        pass
 
 
 # noinspection PyUnusedLocal
@@ -805,7 +801,6 @@ class ShipyardModal(ErrorHandledModal):
             )
             embeds.append(transaction_builder.create_embed())
 
-        if len(warnings) > 0:
-            await interaction.response.send_message(warnings, embeds=embeds, ephemeral=True, view=ConfirmView())
-        else:
-            await send_transaction(embeds, interaction, "")
+        if len(warnings) == 0:
+            warnings = "Möchtest du diese Transaktion abschicken?"
+        await interaction.response.send_message(warnings, embeds=embeds, ephemeral=True, view=ConfirmView())
