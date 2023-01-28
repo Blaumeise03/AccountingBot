@@ -220,7 +220,7 @@ class InformPlayerView(AutoDisableView):
 
     async def load_user(self):
         if self.discord_id is None:
-            main_char = utils.get_main_account(name=self.user)
+            main_char, _, _ = utils.get_main_account(name=self.user)
             if main_char is None:
                 main_char = self.user
             discord_id, name, perfect = await utils.get_or_find_discord_id(self.bot, GUILD, USER_ROLE, main_char)

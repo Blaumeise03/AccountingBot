@@ -133,7 +133,7 @@ def get_main_account(name: str = None, discord_id: int = None) -> (Union[str, No
     if discord_id is not None:
         for main_char, d_id in discord_users.items():
             if d_id == discord_id:
-                return main_char
+                return main_char, main_char, True
         return None, None, False
     names = difflib.get_close_matches(name, ingame_chars, 1)
     if len(names) > 0:
