@@ -4,12 +4,14 @@ import json
 import logging
 import re
 import time
+from operator import add
 from os.path import exists
+from typing import Union, Tuple, Dict, Any, List
 
 import gspread_asyncio
 import pytz
 from google.oauth2.service_account import Credentials
-from gspread import GSpreadException
+from gspread import GSpreadException, Cell
 from gspread.utils import ValueRenderOption, ValueInputOption
 
 from accounting_bot import projects, utils
@@ -496,3 +498,109 @@ async def insert_overflow(player: str, quantities: [int], log=None) -> bool:
     log.append("Overflow inserted!")
     logger.debug("Inserted overflow for %s!", player)
     return True
+
+
+def find_cell(cells: [Cell], row: int, col: int, start=0) -> Union[Cell, None]:
+    lower_i = start - 1
+    upper_i = start
+    while lower_i > 0 or upper_i < len(cells):
+        if lower_i > 0 and cells[lower_i].row == row and cells[lower_i].col == col:
+            return cells[lower_i]
+        if upper_i < len(cells) and cells[upper_i].row == row and cells[upper_i].col == col:
+            return cells[upper_i]
+        lower_i -= 1
+        upper_i += 1
+    return None
+
+
+def is_required(ressource: str):
+    for project in allProjects:
+        if project.get_pending_resource(ressource) > 0:
+            return True
+    return False
+
+
+async def split_overflow(log=None) -> Tuple[Dict[str, Dict[str, List[int]]], List[Tuple[Cell, int]]]:
+    if log is None:
+        log = []
+
+    logger.debug("Splitting overflow")
+    log.append("Loading overflow...")
+    agc = await agcm.authorize()
+    sheet = await agc.open_by_key(SPREADSHEET_ID)
+    s = await sheet.worksheet(SHEET_OVERFLOW_NAME)
+    overflow = await s.range("A2:C")
+    i = -1
+    total_res = [0] * len(PROJECT_RESOURCES)
+
+    investments = {}  # type: {str: [Project.Item]}
+    changes = []
+    async with projects_lock:
+        for res_cell in overflow:
+            i += 1
+            if res_cell.col != 1:
+                continue
+            amount_cell = find_cell(overflow, res_cell.row, 2, i)
+            player_cell = find_cell(overflow, res_cell.row, 3, i)
+            if not is_required(res_cell.value):
+                continue
+            if not amount_cell or not player_cell:
+                continue
+            amount = amount_cell.numeric_value
+            item = res_cell.value
+            player = player_cell.value
+            if item not in PROJECT_RESOURCES:
+                continue
+            index = PROJECT_RESOURCES.index(item)
+
+            if type(amount) != int:
+                logger.warning("Warning, value in overflow row %s is not an integer", res_cell.row)
+                continue
+            if player not in investments:
+                investments[player] = {}
+            split = Project.split_contract([Project.Item(item, amount)], allProjects, extra_res=total_res)
+            invest = Project.calc_investments(split)
+            new_value = 0
+            if "overflow" in invest:
+                new_value = invest["overflow"][index]
+
+            old_invest = investments[player]
+            for proj, inv in invest.items():
+                if proj == "overflow":
+                    continue
+                total_res = list(map(add, total_res, inv))
+                changes.append((amount_cell, new_value))
+                if proj in old_invest.keys():
+                    old_invest[proj] = list(map(add, old_invest[proj], inv))
+                else:
+                    old_invest[proj] = inv
+    log.append("Overflow recalculated")
+    return investments, changes
+
+
+async def apply_overflow_split(investments: Dict[str, Dict[str, List[int]]], changes: List[Tuple[Cell, int]]):
+    logger.info("Inserting overflow into projects")
+    agc = await agcm.authorize()
+    sheet = await agc.open_by_key(SPREADSHEET_ID)
+    s = await sheet.worksheet(SHEET_OVERFLOW_NAME)
+    log = [f"Inserting investments from {len(investments)} players..."]
+    logger.info("Inserting overflow investments for %s player", len(investments))
+    for player, invest in investments.items():
+        l, _ = await insert_investments(player, invest)
+        log += l
+    log.append("Investments inserted")
+    batch_change = []
+    logger.info("Calculating batch update for overflow, %s changes", len(changes))
+    log.append(f"Calculating batch changes: {len(batch_change)} changes...")
+    for cell, new_value in changes:
+        log.append(f"  {cell.address}: {cell.value} -> {new_value}")
+        batch_change.append({
+            "range": cell.address,
+            "values": [[str(new_value)]]
+        })
+    log.append(f"Executing {len(batch_change)} changes...")
+    logger.info("Executing batch update (%s changes)", len(batch_change))
+    await s.batch_update(batch_change)
+    log.append("Batch update applied, overflow split completed.")
+    logger.info("Batch update applied, overflow split completed")
+    return log

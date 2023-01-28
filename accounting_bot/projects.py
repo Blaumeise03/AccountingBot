@@ -9,6 +9,7 @@ import pytz
 from discord import ApplicationContext, InputTextStyle, Interaction, Option, option
 from discord.ext import commands
 from discord.ui import InputText
+from gspread import Cell
 
 from accounting_bot import sheet, utils, project_utils
 from accounting_bot.exceptions import GoogleSheetException, BotOfflineException
@@ -106,6 +107,30 @@ class ProjectCommands(commands.Cog):
         else:
             await ctx.response.send_message("Fehlende Berechtigungen!", ephemeral=True)
 
+    @commands.slash_command(
+        name="splitoverflow",
+        description="Splits the overflow onto the projects"
+    )
+    @commands.cooldown(1, 5, commands.BucketType.default)
+    async def split_overflow(self,
+                             ctx: ApplicationContext
+                             ):
+        await ctx.defer()
+        await sheet.load_projects()
+        log = []
+        investments, changes = await sheet.split_overflow(log)
+        msg_list = []
+        for player, invests in investments.items():
+            for proj, invest in invests.items():
+                for index, amount in enumerate(invest):
+                    if amount == 0:
+                        continue
+                    item = sheet.PROJECT_RESOURCES[index]
+                    msg_list.append(f"{player}: {amount} {item} -> {proj}")
+        await ctx.followup.send(f"Überlauf berechnet, soll {len(changes)} Änderung durchgeführt werden?",
+                                file=string_to_file(list_to_string(msg_list), "split.txt"),
+                                view=ConfirmOverflowView(investments, changes, log), ephemeral=False)
+
 
 # noinspection PyUnusedLocal
 class ConfirmView(AutoDisableView):
@@ -146,7 +171,7 @@ class ConfirmView(AutoDisableView):
         msg_list = format_list(self.split, results)
         msg_files = [string_to_file(list_to_string(self.log), "log.txt")]
         base_message = (("An **ERROR** occurred during execution of the command" if not success else
-                        "Investition wurde eingetragen!"))
+                         "Investition wurde eingetragen!"))
 
         msg_files.append(utils.string_to_file(msg_list, "split.txt"))
         view = InformPlayerView(BOT, self.player, self.split, results, base_message)
@@ -157,6 +182,29 @@ class ConfirmView(AutoDisableView):
             ephemeral=False, view=view)
         # To prevent pinging the user, the ping will be edited into the message instead
         await view.update_message()
+
+
+class ConfirmOverflowView(AutoDisableView):
+    def __init__(self, investments: Dict[str, Dict[str, List[int]]], changes: [(Cell, int)], log=None):
+        super().__init__()
+        if log is None:
+            log = []
+        self.log = log
+        self.investments = investments
+        self.changes = changes
+
+    @discord.ui.button(label="Eintragen", style=discord.ButtonStyle.green)
+    async def btn_confirm_callback(self, button, interaction: Interaction):
+        if not (
+                interaction.user.guild_permissions.administrator or interaction.user.id in ADMINS or interaction.user.id == OWNER):
+            await interaction.response.send_message("Missing permissions", ephemeral=True)
+            return
+        if STATE.state.value < State.online.value:
+            raise BotOfflineException("Can't insert transactions when the bot is not online")
+        await interaction.response.send_message("Bitte warten, wird berechnet...")
+        await interaction.message.edit(view=None)
+        log = await sheet.apply_overflow_split(self.investments, self.changes)
+        await interaction.followup.send("Überlauf wurde auf die Projekte verteilt!", file=string_to_file(list_to_string(log)))
 
 
 # noinspection PyUnusedLocal
@@ -232,8 +280,9 @@ class InformPlayerView(AutoDisableView):
             if matched_name is not None:
                 matched_name = sheet.check_name_overwrites(matched_name)
                 utils.save_discord_id(matched_name, int(discord_id))
-                await interaction.response.send_message(f"Spieler {matched_name} wurde zur ID {discord_id} eingespeichert!\n",
-                                                        ephemeral=True)
+                await interaction.response.send_message(
+                    f"Spieler {matched_name} wurde zur ID {discord_id} eingespeichert!\n",
+                    ephemeral=True)
                 self.view.discord_id = utils.get_discord_id(matched_name)
                 await self.view.update_message()
             else:
@@ -321,8 +370,10 @@ class Project(object):
         return res
 
     @staticmethod
-    def split_contract(items, project_list: ['Project'], priority_projects: [str] = None) -> {str: [(str, int)]}:
+    def split_contract(items, project_list: ['Project'], priority_projects: [str] = None, extra_res: [int] = None) -> {
+        str: [(str, int)]}:
         projects_ordered = project_list[::-1]  # Reverse the list
+        item_names = sheet.PROJECT_RESOURCES
         if priority_projects is None:
             priority_projects = []
         else:
@@ -339,6 +390,10 @@ class Project(object):
                 if project.exclude != Project.ExcludeSettings.none:
                     continue
                 pending = project.get_pending_resource(item.name)
+                if item.name in item_names:
+                    index = item_names.index(item.name)
+                    if extra_res and len(extra_res) > index:
+                        pending -= extra_res[index]
                 amount = min(pending, left)
                 if pending > 0 and amount > 0:
                     left -= amount
