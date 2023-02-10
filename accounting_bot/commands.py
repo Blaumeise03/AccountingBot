@@ -121,7 +121,7 @@ class BaseCommands(commands.Cog):
         else:
             user_id = user.id
 
-        name = utils.get_main_account(discord_id=user_id)
+        name, _, _ = utils.get_main_account(discord_id=user_id)
         if name is None:
             await ctx.followup.send("This discord account is not connected to any ingame account!", ephemeral=True)
             return
@@ -184,8 +184,8 @@ class BaseCommands(commands.Cog):
         for name, user in users:  # type: str, discord.Member
             if user.id not in utils.discord_users.values():
                 unreg_users.append(user)
-            elif utils.get_main_account(discord_id=user.id) not in utils.main_chars:
-                old_users.append((utils.get_main_account(discord_id=user.id), user))
+            elif utils.get_main_account(discord_id=user.id)[0] not in utils.main_chars:
+                old_users.append((utils.get_main_account(discord_id=user.id)[0], user))
 
         msg = f"Found {len(unreg_users)} unregistered users that have the specified role.\n"
         for user in unreg_users:

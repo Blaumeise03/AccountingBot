@@ -70,6 +70,15 @@ def log_error(logger: logging.Logger, error: Exception, in_class=None,
 
 
 async def send_exception(error: Exception, ctx: Union[ApplicationContext, Interaction]):
+    if isinstance(ctx, Interaction):
+        location = "interaction in channel {} in guild {}, user {}" \
+            .format(ctx.channel_id, ctx.guild_id, ctx.user.id)
+    else:
+        location = "command in channel {} in guild {}, user {}:{}" \
+            .format(ctx.channel_id, ctx.guild_id, ctx.author.id, ctx.author.name)
+    if isinstance(error, discord.NotFound):
+        logger.info("Ignoring NotFound error caused by %s", location)
+        return
     if not isinstance(ctx, Interaction) and not isinstance(ctx, ApplicationContext):
         raise TypeError(f"Expected Interaction or ApplicationContext, got {type(ctx)}")
     try:
@@ -93,12 +102,6 @@ async def send_exception(error: Exception, ctx: Union[ApplicationContext, Intera
                 await ctx.author.send(f"An unexpected error occurred: \n{error.__class__.__name__}\n{str(error)}")
         except discord.Forbidden:
             pass
-        if isinstance(ctx, Interaction):
-            location = "interaction in channel {} in guild {}, user {}" \
-                .format(ctx.channel_id, ctx.guild_id, ctx.user.id)
-        else:
-            location = "command in channel {} in guild {}, user {}:{}" \
-                .format(ctx.channel_id, ctx.guild_id, ctx.user.id, ctx.user.name)
         logger.warning("Can't send error message for \"%s\", caused by %s: NotFound", error.__class__.__name__,
                        location)
 
