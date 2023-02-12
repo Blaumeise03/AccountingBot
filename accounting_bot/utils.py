@@ -10,7 +10,7 @@ from typing import Union, Tuple, Optional
 import discord
 from discord import Interaction, ApplicationContext, InteractionResponded
 from discord.ext.commands import Bot
-from discord.ui import View, Modal
+from discord.ui import View, Modal, Item
 
 from accounting_bot.config import Config
 from accounting_bot.exceptions import LoggedException
@@ -169,7 +169,7 @@ def parse_player(string: str, users: [str]) -> (Union[str, None], bool):
 
 
 async def get_or_find_discord_id(bot=None, guild=None, user_role=None, player_name="") \
-                                 -> Tuple[Optional[int], Optional[str], Optional[bool]]:
+        -> Tuple[Optional[int], Optional[str], Optional[bool]]:
     if bot is None:
         bot = BOT
     if guild is None:
@@ -230,8 +230,9 @@ class ErrorHandledModal(Modal):
 
 
 class ErrorHandledView(View):
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
+    def __init__(self, *items: Item,
+                 timeout: Optional[float] = 300.0):
+        super().__init__(*items, timeout=timeout)
 
     async def on_error(self, error: Exception, item, interaction):
         log_error(logger, error, self.__class__, ctx=interaction)
