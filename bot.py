@@ -15,7 +15,7 @@ from discord.ext.commands import CommandOnCooldown
 from dotenv import load_dotenv
 
 from accounting_bot import accounting, sheet, projects, utils, corpmissionOCR
-from accounting_bot.accounting import AccountingView, get_menu_embeds
+from accounting_bot.accounting import AccountingView, get_menu_embeds, Transaction
 from accounting_bot.commands import BaseCommands
 from accounting_bot.config import Config, ConfigTree
 from accounting_bot.database import DatabaseConnector
@@ -75,6 +75,7 @@ config_structure = {
     "menuMessage": (int, -1),
     "menuChannel": (int, -1),
     "owner": (int, -1),
+    "logToChannel": (bool, False),
     "errorLogChannel": (int, -1),
     "admins": (list, []),
     "db": {
@@ -183,9 +184,12 @@ async def on_ready():
     # Basic setup
     if config["menuChannel"] == -1:
         return
-    if config["errorLogChannel"] != -1:
+    if config["logToChannel"] and config["errorLogChannel"] != -1:
+        logging.info("Discord logchannel: %s", config["errorLogChannel"])
         log_channel = await bot.fetch_channel(config["errorLogChannel"])
         discord_handler.set_channel(log_channel)
+    else:
+        logging.info("Discord logchannel is deactivated")
     channel = await bot.fetch_channel(config["menuChannel"])
     accounting_log = await bot.fetch_channel(config["logChannel"])
     msg = await channel.fetch_message(config["menuMessage"])
@@ -231,7 +235,8 @@ async def on_ready():
             CONNECTOR.delete(m)
             continue
         if msg.content.startswith("Verifiziert von"):
-            logging.warning(f"Transaction already verified but not inside database: {msg.id}: {msg.content}")
+            logging.warning(f"Transaction already verified but not inside database: %s: %s",
+                            msg.id, msg.content)
             CONNECTOR.set_verification(m, 1)
             continue
         v = False  # Was transaction verified while the bot was offline?
@@ -265,6 +270,15 @@ async def on_ready():
         else:
             # Updating the message View, so it can be used by the users
             await msg.edit(view=accounting.TransactionView())
+            if len(msg.embeds) > 0:
+                transaction = Transaction.from_embed(msg.embeds[0])
+                state = await transaction.get_state()
+                if state == 2:
+                    await msg.add_reaction("⚠️")
+                elif state == 3:
+                    await msg.add_reaction("❌")
+            else:
+                logging.warning("Message %s is listed as transaction but does not have an embed", msg.id)
 
     # Reload projects
     await sheet.find_projects()

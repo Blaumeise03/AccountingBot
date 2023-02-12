@@ -414,6 +414,18 @@ class Transaction:
             embed.set_footer(text=self.author)
         return embed
 
+    async def get_state(self):
+        bal = await sheet.get_balance(self.name_from, 0)
+        inv = await sheet.get_investments(self.name_from, 0)
+        if bal > self.amount:
+            return 0
+        elif (bal + inv * INVESTMENT_RATIO) > self.amount:
+            return 1
+        elif (bal + inv) >= self.amount:
+            return 2
+        else:
+            return 3
+
     @staticmethod
     async def from_modal(modal: Modal, author: str, user: int = None) -> ('Transaction', str):
         """
@@ -557,19 +569,10 @@ async def send_transaction(embeds: List[Embed], interaction: Interaction, note="
                 return
             if not transaction.name_from:
                 return
-            amount = transaction.amount
-            bal = await sheet.get_balance(transaction.name_from, 0)
-            inv = await sheet.get_balance(transaction.name_from, 1)
-
-            if bal > amount:
-                state = 0
-            elif (bal + inv * INVESTMENT_RATIO) > amount:
-                state = 1
-            elif(bal + inv) <= amount:
-                state = 2
+            state = await transaction.get_state()
+            if state == 2:
                 await msg.add_reaction("⚠️")
-            else:
-                state = 3
+            elif state == 3:
                 await msg.add_reaction("❌")
             CONNECTOR.set_state(msg.id, state)
         except mariadb.Error as e:
