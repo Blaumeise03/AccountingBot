@@ -127,10 +127,12 @@ class BaseCommands(commands.Cog):
             return
         name = sheet.check_name_overwrites(name)
         balance = await sheet.get_balance(name)
+        investments = await sheet.get_investments(name, default=0)
         if balance is None:
             await ctx.followup.send("Konto nicht gefunden!", ephemeral=True)
             return
-        await ctx.followup.send("Der Kontostand von {} beträgt `{:,} ISK`.".format(name, balance), ephemeral=True)
+        await ctx.followup.send("Der Kontostand von {} beträgt `{:,} ISK`.\nDie Projekteinlagen betragen `{:,} ISK`"
+                                .format(name, balance, investments), ephemeral=True)
 
     @commands.slash_command(
         name="registeruser",

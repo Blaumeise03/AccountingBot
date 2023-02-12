@@ -24,6 +24,8 @@ if TYPE_CHECKING:
     from bot import BotState
     from accounting_bot.corpmissionOCR import CorporationMission
 
+INVESTMENT_RATIO = 0.3  # percentage of investment that may be used for transactions
+
 logger = logging.getLogger("bot.accounting")
 
 BOT = None  # type: discord.ext.commands.bot.Bot | None
@@ -153,7 +155,7 @@ async def inform_player(transaction, discord_id, receive):
         await user.send(
             ("Du hast ISK auf Deinem Accounting erhalten." if receive else "Es wurde ISK von deinem Konto abgebucht.") +
             "\nDein Kontostand beträgt `" +
-            "{:,} ISK".format(await sheet.get_balance(transaction.name_to if receive else transaction.name_from, safe=True)) + "`",
+            "{:,} ISK".format(await sheet.get_balance(transaction.name_to if receive else transaction.name_from, default=-1)) + "`",
             embed=transaction.create_embed())
     elif discord_id > 0:
         logger.warning("Can't inform user %s (%s) about about the transaction %s -> %s: %s (%s)",
@@ -245,17 +247,32 @@ async def verify_transaction(user_id: int, message: Message, interaction: Intera
             # Check if balance is sufficient
             await sheet.load_wallets()
             bal = await sheet.get_balance(transaction.name_from)
+            inv = await sheet.get_investments(transaction.name_from, default=0)
             if not bal:
                 if interaction:
                     await interaction.followup.send(content="Dein Kontostand konnte nicht gepüft werden.",
                                                     ephemeral=True)
                 return
-            if bal < transaction.amount:
-                if interaction:
+            effective_bal = bal + inv * INVESTMENT_RATIO
+
+            if effective_bal < transaction.amount:
+                if not interaction:
+                    return
+                if (bal + inv) > transaction.amount:
                     await interaction.followup.send(
-                        content="Fehler: Dein Konto (`{:,} ISK`) reicht nicht aus, um diese "
-                                "Transaktion (`{:,} ISK`) zu decken."
-                        .format(bal, transaction.amount),
+                        content="Warnung: Dein Konto (`{:,} ISK`) reicht nicht aus, um diese "
+                                "Transaktion (`{:,} ISK`) zu decken, mit deinen Einlagen (`{:,} ISK`) reicht es aber. "
+                                "Diese Transaktion überschreitet jedoch die **{:.0%}** Grenze und kann deshalb nur von "
+                                "einem **Admin** verifiziert werden."
+                        .format(bal, transaction.amount, inv, INVESTMENT_RATIO),
+                        ephemeral=True)
+                else:
+                    await interaction.followup.send(
+                        content="**Fehler**: Dein Konto (`{:,} ISK`) und deine Einlagen (`{:,} ISK`) reichen nicht aus, "
+                                "um diese Transaktion (`{:,} ISK`) zu decken.\n"
+                                "Dein Konto muss zunächst ausgeglichen werden, oder (falls eine Ausnahmeregelung "
+                                "besteht) ein **Admin** muss diese Transaktion verifizieren."
+                        .format(bal, inv, transaction.amount),
                         ephemeral=True)
                 return
             has_permissions = True
@@ -301,6 +318,8 @@ async def verify_transaction(user_id: int, message: Message, interaction: Intera
         if interaction:
             await message.add_reaction("✅")
             await interaction.followup.send("Transaktion verifiziert!", ephemeral=True)
+            await message.remove_reaction("⚠️", BOT.user)
+            await message.remove_reaction("❌", BOT.user)
 
 
 class Transaction:
@@ -460,11 +479,20 @@ class Transaction:
                             "**verifiziert** (kontaktiere in diesem Fall einen Admin). Nur der Kontobesitzer darf " \
                             "ISK von seinem Konto an andere senden.\n"
             bal = await sheet.get_balance(transaction.name_from)
+            inv = await sheet.get_investments(transaction.name_from, default=0)
             if not bal:
                 warnings += "Warnung: Dein Kontostand konnte nicht geprüft werden.\n"
-            elif bal < transaction.amount:
-                warnings += "Warnung: Dein Kontostand (`{:,} ISK`) reicht nicht aus, um diese Transaktion zu decken. " \
-                            "Nur Admins können diese Transaktion autorisieren.".format(bal)
+            elif (bal + inv) < transaction.amount:
+                warnings += "**Fehler**: Dein Kontostand (`{:,} ISK`) und Projekteinlagen (`{:,} ISK`) reichen nicht aus, " \
+                            "um diese Transaktion zu decken. Wenn Dein Accounting nicht zuvor ausgeglichen ist (oder " \
+                            "es für Dich eine Ausnahmeregelung gibt), wird die Transaktion abgelehnt.\n"\
+                    .format(bal, inv)
+            elif (bal + inv * INVESTMENT_RATIO) < transaction.amount:
+                warnings += "Warnung: Dein Kontostand (`{:,} ISK`) reicht nicht aus, " \
+                            "um diese Transaktion zu decken. Mit deinen Projekteinlagen (`{:,} ISK`) ist die " \
+                            "Transaktion gedeckt, aber überschreitet die **{:.0%}** Grenze und kann deshalb nur " \
+                            "von einem Admin verifiziert werden.\n" \
+                    .format(bal, inv, INVESTMENT_RATIO)
         return transaction, warnings
 
     @staticmethod
@@ -523,6 +551,27 @@ async def send_transaction(embeds: List[Embed], interaction: Interaction, note="
         msg = await BOT.get_channel(ACCOUNTING_LOG).send(embeds=[embed], view=TransactionView())
         try:
             CONNECTOR.add_transaction(msg.id, interaction.user.id)
+            transaction = Transaction.from_embed(embed)
+            if not transaction:
+                logger.warning("Embed in message %s is not a transaction", msg.id)
+                return
+            if not transaction.name_from:
+                return
+            amount = transaction.amount
+            bal = await sheet.get_balance(transaction.name_from, 0)
+            inv = await sheet.get_balance(transaction.name_from, 1)
+
+            if bal > amount:
+                state = 0
+            elif (bal + inv * INVESTMENT_RATIO) > amount:
+                state = 1
+            elif(bal + inv) <= amount:
+                state = 2
+                await msg.add_reaction("⚠️")
+            else:
+                state = 3
+                await msg.add_reaction("❌")
+            CONNECTOR.set_state(msg.id, state)
         except mariadb.Error as e:
             note += "\nFehler beim Eintragen in die Datenbank, die Transaktion wurde jedoch trotzdem im " \
                     f"Accountinglog gepostet. Informiere bitte einen Admin, danke.\n{e}"

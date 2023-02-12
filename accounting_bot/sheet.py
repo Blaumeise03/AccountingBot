@@ -6,7 +6,7 @@ import re
 import time
 from operator import add
 from os.path import exists
-from typing import Union, Tuple, Dict, Any, List
+from typing import Union, Tuple, Dict, Any, List, Optional
 
 import gspread_asyncio
 import pytz
@@ -39,10 +39,12 @@ overwrites = {}
 allProjects = []  # type: [Project]
 lastChanges = datetime.datetime(1970, 1, 1)
 
-wallets = {}
+wallets = {}  # type: {str: int}
+investments = {}  # type: {str: int}
 wallets_last_reload = 0
 MEMBERS_WALLET_INDEX = 2  # The column index of the balance
-MEMBERS_AREA_LITE = "A4:C"  # The reduced area of the member list
+MEMBERS_INVESTMENTS_INDEX = 3  # The column index of the investments
+MEMBERS_AREA_LITE = "A4:D"  # The reduced area of the member list
 MEMBERS_AREA = "A4:O"  # The area of the member list
 MEMBERS_NAME_INDEX = 0  # The column index of the name
 MEMBERS_ACTIVE_INDEX = 10  # The column index of the "active" column
@@ -182,7 +184,7 @@ async def add_transaction(transaction: 'classes.Transaction') -> None:
 
 
 async def load_wallets(force=False, validate=False):
-    global wallets, wallets_last_reload
+    global wallets, investments, wallets_last_reload
     t = time.time()
     if (t - wallets_last_reload) < 60*60*5 and not force:
         return
@@ -200,13 +202,26 @@ async def load_wallets(force=False, validate=False):
                     if validate and type(bal) == float:
                         logger.warning("Balance for %s is a float: %s", u[MEMBERS_NAME_INDEX], bal)
                     wallets[u[MEMBERS_NAME_INDEX]] = int(bal)
+            if len(u) >= 4:
+                inv = u[MEMBERS_INVESTMENTS_INDEX]
+                if type(inv) == int or type(inv) == float:
+                    if validate and type(inv) == float:
+                        logger.warning("Investment sum for %s is a float: %s", u[MEMBERS_NAME_INDEX], inv)
+                    investments[u[MEMBERS_NAME_INDEX]] = int(inv)
 
 
-async def get_balance(name: str, safe=False):
+async def get_balance(name: str, default: Optional[int] = None) -> int:
     async with wallet_lock:
         if name in wallets:
             return wallets[name]
-        return None if not safe else -1
+        return default
+
+
+async def get_investments(name: str, default: Optional[int] = None) -> int:
+    async with wallet_lock:
+        if name in investments:
+            return investments[name]
+        return default
 
 
 async def find_projects():

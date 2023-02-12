@@ -44,6 +44,7 @@ class DatabaseConnector:
                                 "msgID BIGINT NOT NULL, "
                                 "userID BIGINT NOT NULL, "
                                 "verified BIT NOT NULL DEFAULT b'0', "
+                                "t_state TINYINT, "
                                 "PRIMARY KEY (msgID)"
                                 ") ENGINE = InnoDB; ")
             self.cursor.execute("CREATE TABLE IF NOT EXISTS shortcuts ("
@@ -67,6 +68,36 @@ class DatabaseConnector:
         except mariadb.Error as e:
             logger.error(f"Error while trying to insert a new transaction: {e}")
             raise e
+
+    def set_state(self, message: int, state: int):
+        if self.con is None or not self.con.open:
+            self.try_connect()
+        try:
+            self.cursor.execute(
+                "UPDATE messages SET t_state = ? WHERE messages.msgID=?;",
+                (state, message))
+            self.con.commit()
+            return self.cursor.rowcount
+        except mariadb.Error as e:
+            logger.error(f"Error while trying to update the transaction {message} to state {state}: {e}")
+            raise e
+
+    def get_state(self, message: int):
+        if self.con is None or not self.con.open:
+            self.try_connect()
+        try:
+            self.cursor.execute(
+                "SELECT msgID, t_state FROM messages WHERE messages.msgID=?;",
+                (message, ))
+            self.con.commit()
+            res = self.cursor.fetchone()
+            if res is None:
+                return None
+            (msgID, state) = res
+            return state
+        except mariadb.Error as e:
+            logger.error(f"Error while trying to get state of a transaction: {e}")
+            return False
 
     def get_owner(self, message):
         if self.con is None or not self.con.open:
