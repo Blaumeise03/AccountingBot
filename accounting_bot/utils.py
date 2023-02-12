@@ -176,6 +176,7 @@ async def get_or_find_discord_id(bot=None, guild=None, user_role=None, player_na
         guild = CONFIG["server"]
     if user_role is None:
         user_role = CONFIG["user_role"]
+    player_name = get_main_account(name=player_name)[0]
 
     discord_id = get_discord_id(player_name)
     if discord_id:

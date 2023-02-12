@@ -486,7 +486,7 @@ class Transaction:
         if transaction.name_from:
             user_id, _, _ = await utils.get_or_find_discord_id(player_name=transaction.name_from)
             await sheet.load_wallets()
-            if user_id is None or user != user_id and user not in ADMINS:
+            if (user_id is None or user != user_id) and user not in ADMINS:
                 warnings += "**Fehler**: Dieses Konto gehört dir nicht bzw. dein Discordaccount ist nicht " \
                             "**verifiziert** (kontaktiere in diesem Fall einen Admin). Nur der Kontobesitzer darf " \
                             "ISK von seinem Konto an andere senden.\n"
@@ -567,14 +567,13 @@ async def send_transaction(embeds: List[Embed], interaction: Interaction, note="
             if not transaction:
                 logger.warning("Embed in message %s is not a transaction", msg.id)
                 return
-            if not transaction.name_from:
-                return
-            state = await transaction.get_state()
-            if state == 2:
-                await msg.add_reaction("⚠️")
-            elif state == 3:
-                await msg.add_reaction("❌")
-            CONNECTOR.set_state(msg.id, state)
+            if transaction.name_from:
+                state = await transaction.get_state()
+                if state == 2:
+                    await msg.add_reaction("⚠️")
+                elif state == 3:
+                    await msg.add_reaction("❌")
+                CONNECTOR.set_state(msg.id, state)
         except mariadb.Error as e:
             note += "\nFehler beim Eintragen in die Datenbank, die Transaktion wurde jedoch trotzdem im " \
                     f"Accountinglog gepostet. Informiere bitte einen Admin, danke.\n{e}"
@@ -753,6 +752,16 @@ class TransferModal(ErrorHandledModal):
         if transaction is None:
             await interaction.response.send_message(warnings, ephemeral=True)
             return
+        if transaction.name_from:
+            f = transaction.name_from
+            transaction.name_from = sheet.check_name_overwrites(transaction.name_from)
+            if f != transaction.name_from:
+                warnings += f"Info: Der Sender wurde zu \"{transaction.name_from}\" geändert.\n"
+        if transaction.name_to:
+            t = transaction.name_to
+            transaction.name_to = sheet.check_name_overwrites(transaction.name_to)
+            if t != transaction.name_to:
+                warnings += f"Info: Der Empfänger wurde zu \"{transaction.name_to}\" geändert.\n"
         await interaction.response.send_message(
             warnings, embed=transaction.create_embed(),
             ephemeral=True, view=ConfirmView())
