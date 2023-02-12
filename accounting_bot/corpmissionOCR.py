@@ -1,3 +1,4 @@
+import datetime
 import difflib
 import logging
 import os
@@ -118,6 +119,7 @@ def to_relative_cords(cords: {int}, width: int, height: int) -> {float}:
 class CorporationMission:
     def __init__(self) -> None:
         super().__init__()
+        self.isMission = False  # type: bool
         self.valid = False  # type: bool
         self.title = None  # type: str  | None
         self.username = None  # type: str  | None
@@ -148,6 +150,15 @@ class CorporationMission:
         # Find line for ISK
         for cords, t in text:  # type: (dict, str)
             rel_cords = to_relative_cords(cords, width, height)
+
+            # Check if image contains a mission
+            is_mission = max(difflib.SequenceMatcher(None, "MISSION", t).ratio(),
+                             difflib.SequenceMatcher(None, "MISSIONSDETAILS", t).ratio(),
+                             difflib.SequenceMatcher(None, "MISSION DETAILS", t.replace("|", "").strip()).ratio())
+            if is_mission > 0.75:
+                mission.isMission = True
+                continue
+
             # Get transaction direction and y-level of the ISK quantity
             pay = max(difflib.SequenceMatcher(None, "Corporation pays", t).ratio(),
                       difflib.SequenceMatcher(None, "pays", t.replace("|", "").strip()).ratio())
@@ -269,20 +280,22 @@ return_missions = ThreadSafeList()
 
 
 def handle_image(url, content_type, message, channel, author):
-    img_id = None
+    img_id = "".join(random.choice(string.ascii_uppercase) for _ in range(3))
+    image_name = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S") + "__" + img_id + "." + content_type.replace(
+        "image/", "")
+    file_name = WORKING_DIR + "/download/" + image_name
+
     try:
-        img_id = "".join(random.choice(string.ascii_uppercase) for _ in range(10))
         res = requests.get(url, stream=True)
-        logging.info("Received image (" + content_type + "), ID " + img_id)
-        file_name = WORKING_DIR + "/download/" + str(message.author.id) + "_" + img_id + "." + content_type.replace("image/", "")
+        logger.info("Received image (%s) from %s: %s", image_name, message.author.id, url)
 
         if res.status_code == 200:
             with open(file_name, "wb") as f:
                 shutil.copyfileobj(res.raw, f)
-            logging.info("Image successfully downloaded from %s (%s): %s", message.author.name, message.author.id,
-                         file_name)
+            logger.info("Image successfully downloaded from %s (%s): %s", message.author.name, message.author.id,
+                        file_name)
         else:
-            logging.warning("Image download from %s (%s) failed!", message.author.name, message.author.id)
+            logger.warning("Image %s download from %s (%s) failed!", image_name, message.author.name, message.author.id)
 
         image = Image.open(file_name)
         image.thumbnail((1500, 4000), Image.LANCZOS)
@@ -295,10 +308,19 @@ def handle_image(url, content_type, message, channel, author):
         return_missions.append((channel, author, mission, img_id))
         if os.path.exists(WORKING_DIR + "/" + img_id + "_rescaled.png"):
             os.remove(WORKING_DIR + "/" + img_id + "_rescaled.png")
+        if not mission.isMission:
+            logger.warning("Received image %s from %s:%s is not a mission, deleting file.",
+                           file_name, message.author.name, message.author.id)
+            if os.path.exists(file_name):
+                logger.info("Deleting image %s", file_name)
+                os.remove(file_name)
     except Exception as e:
-        logging.error("OCR job failed!")
-        logging.exception(e)
+        logger.error("OCR job for image %s (user %s) failed!", img_id, message.author.id)
+        logger.exception(e)
         return_missions.append((message.author.id, author, e, img_id))
+        if os.path.exists(file_name):
+            logger.info("Deleting image %s", file_name)
+            os.remove(file_name)
 
 
 @tasks.loop(seconds=3.0)
@@ -315,15 +337,19 @@ async def ocr_result_loop():
                 if channel is None:
                     channel = await STATE.bot.fetch_channel(channel_id)
                 if channel is None:
-                    logging.error("Channel " + str(channel_id) + " from OCR result list not found!")
+                    logger.error("Channel " + str(channel_id) + " from OCR result list not found!")
                     continue
             if isinstance(mission, Exception):
-                logging.error("OCR job for %s failed, img_id: %s, error: %s", author, img_id, str(mission))
+                logger.error("OCR job for %s failed, img_id: %s, error: %s", author, img_id, str(mission))
                 await user.send("An error occurred: " + str(mission))
                 continue
-            msg = f"Gültig: {str(mission.valid)}\nTitel: {mission.title}\nNutzername: {mission.username}\n" \
+            msg = f"```\nIst Mission: {str(mission.isMission)}\n" \
+                  f"Gültig: {str(mission.valid)}\nTitel: {mission.title}\nNutzername: {mission.username}\n" \
                   f"Main Char: {mission.main_char}\nMenge: {str(mission.amount)}\nErhalte ISK: {str(mission.pay_isk)}" \
-                  f"\nLimitiert: {str(mission.has_limit)}\nLabel korrekt: {mission.label}\n\n"
+                  f"\nLimitiert: {str(mission.has_limit)}\nLabel korrekt: {mission.label}\n```\n"
+            if not mission.isMission:
+                msg += "**Fehler**: Das Bild ist keine Corpmission. Wenn es sich doch um eine handelt, *kontaktiere " \
+                       "bitte einem Admin* und schicke ihm das Bild zu, damit die Bilderkennung verbessert werden kann.\n\n"
             if not mission.label:
                 msg += "**Fehler**: Das Label wurde nicht erkannt. Für die Mission muss das Label \"Accounting\" " \
                        "ausgewählt werden.\n"
@@ -348,7 +374,7 @@ async def ocr_result_loop():
             if not mission.valid:
                 return
             if user is None:
-                logging.warning("User for OCR image %s with discord ID %s not found!", img_id, author)
+                logger.warning("User for OCR image %s with discord ID %s not found!", img_id, author)
                 return
             transaction = Transaction.from_ocr(mission, author)
             transaction.author = user.name

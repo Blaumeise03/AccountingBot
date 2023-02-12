@@ -285,7 +285,7 @@ async def on_message(message: Message):
                 return
             if not isinstance(message.channel, DMChannel):
                 await message.author.send("Du hast ein Bild im Accountinglog gepostet. Wenn es sich um eine "
-                                          "Corporationsmission handelt, musst Du sie mir hier per Direktnachricht "
+                                          "Corporationsmission handelt, kannst Du sie mir hier per Direktnachricht "
                                           "schicken, um sie per Texterkennung automatisch verarbeiten zu lassen.")
                 return
             channel = message.author.id
