@@ -415,6 +415,8 @@ class Transaction:
         return embed
 
     async def get_state(self):
+        if self.name_from is None:
+            return 0
         bal = await sheet.get_balance(self.name_from, 0)
         inv = await sheet.get_investments(self.name_from, 0)
         if bal > self.amount:
