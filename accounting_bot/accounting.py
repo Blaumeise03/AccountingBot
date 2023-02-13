@@ -174,7 +174,7 @@ async def save_embeds(msg, user_id):
     :param msg:     The message with the transaction embed
     :param user_id: The user ID that verified the transaction
     """
-    if STATE.state.value < State.starting.value:
+    if not STATE.is_online():
         raise BotOfflineException("Can't verify transactions when the bot is not online")
     if len(msg.embeds) == 0:
         return
@@ -223,8 +223,14 @@ async def save_embeds(msg, user_id):
             id_to = None
         await inform_player(transaction, id_to, receive=True)
 
+    await msg.remove_reaction("⚠️", BOT.user)
+    await msg.remove_reaction("❌", BOT.user)
+
 
 async def verify_transaction(user_id: int, message: Message, interaction: Interaction = None):
+    if not STATE.is_online():
+        raise BotOfflineException()
+
     is_unverified = CONNECTOR.is_unverified_transaction(message=message.id)
     if is_unverified is None:
         if interaction:
@@ -318,8 +324,6 @@ async def verify_transaction(user_id: int, message: Message, interaction: Intera
         if interaction:
             await message.add_reaction("✅")
             await interaction.followup.send("Transaktion verifiziert!", ephemeral=True)
-            await message.remove_reaction("⚠️", BOT.user)
-            await message.remove_reaction("❌", BOT.user)
 
 
 class Transaction:
@@ -595,26 +599,36 @@ class AccountingView(AutoDisableView):
 
     @discord.ui.button(label="Transfer", style=discord.ButtonStyle.blurple)
     async def btn_transfer_callback(self, button, interaction):
+        if not STATE.is_online():
+            raise BotOfflineException()
         modal = TransferModal(title="Transfer", color=Color.blue())
         await interaction.response.send_modal(modal)
 
     @discord.ui.button(label="Einzahlen", style=discord.ButtonStyle.green)
     async def btn_deposit_callback(self, button, interaction):
+        if not STATE.is_online():
+            raise BotOfflineException()
         modal = TransferModal(title="Einzahlen", color=Color.green(), special=True, purpose="Einzahlung Accounting")
         await interaction.response.send_modal(modal)
 
     @discord.ui.button(label="Auszahlen", style=discord.ButtonStyle.red)
     async def btn_withdraw_callback(self, button, interaction):
+        if not STATE.is_online():
+            raise BotOfflineException()
         modal = TransferModal(title="Auszahlen", color=Color.red(), special=True, purpose="Auszahlung Accounting")
         await interaction.response.send_modal(modal)
 
     @discord.ui.button(label="Shipyard", style=discord.ButtonStyle.grey)
     async def btn_shipyard_callback(self, button, interaction):
+        if not STATE.is_online():
+            raise BotOfflineException()
         modal = ShipyardModal(title="Schiffskauf", color=Color.red())
         await interaction.response.send_modal(modal)
 
     @discord.ui.button(emoji="🖨️", style=discord.ButtonStyle.grey)
     async def btn_list_transactions_callback(self, button, interaction):
+        if not STATE.is_online():
+            raise BotOfflineException()
         unverified = CONNECTOR.get_unverified(include_user=True)
         msg = "Unverifizierte Transaktionen:"
         if len(unverified) == 0:
@@ -642,11 +656,15 @@ class TransactionView(AutoDisableView):
 
     @discord.ui.button(label="Verifizieren", style=discord.ButtonStyle.green)
     async def btn_verify_callback(self, button: discord.Button, interaction: Interaction):
+        if not STATE.is_online():
+            raise BotOfflineException()
         await interaction.response.defer()
         await verify_transaction(interaction.user.id, interaction.message, interaction)
 
     @discord.ui.button(label="Löschen", style=discord.ButtonStyle.red)
     async def btn_delete_callback(self, button, interaction):
+        if not STATE.is_online():
+            raise BotOfflineException()
         (owner, verified) = CONNECTOR.get_owner(interaction.message.id)
         if not verified and (owner == interaction.user.id or interaction.user.id in ADMINS):
             await interaction.message.delete()
@@ -660,6 +678,8 @@ class TransactionView(AutoDisableView):
 
     @discord.ui.button(label="Bearbeiten", style=discord.ButtonStyle.blurple)
     async def btn_edit_callback(self, button, interaction):
+        if not STATE.is_online():
+            raise BotOfflineException()
         (owner, verified) = CONNECTOR.get_owner(interaction.message.id)
         if not verified and (owner == interaction.user.id or interaction.user.id in ADMINS):
             embed = interaction.message.embeds[0]
@@ -683,6 +703,8 @@ class ConfirmView(AutoDisableView):
 
     @discord.ui.button(label="Senden", style=discord.ButtonStyle.green)
     async def btn_confirm_callback(self, button, interaction):
+        if not STATE.is_online():
+            raise BotOfflineException()
         await send_transaction(interaction.message.embeds, interaction)
 
 
@@ -709,6 +731,8 @@ class ConfirmEditView(AutoDisableView):
 
     @discord.ui.button(label="Speichern", style=discord.ButtonStyle.green)
     async def btn_confirm_callback(self, button, interaction):
+        if not STATE.is_online():
+            raise BotOfflineException()
         await self.message.edit(embeds=interaction.message.embeds)
         await interaction.response.send_message("Transaktion bearbeitet!", ephemeral=True)
 
@@ -722,6 +746,8 @@ class ConfirmOCRView(AutoDisableView):
 
     @discord.ui.button(label="Senden", style=discord.ButtonStyle.green)
     async def btn_confirm_callback(self, button, interaction):
+        if not STATE.is_online():
+            raise BotOfflineException()
         await send_transaction([self.transaction.create_embed()], interaction, self.note)
 
 
@@ -750,6 +776,8 @@ class TransferModal(ErrorHandledModal):
                                     value=reference))
 
     async def callback(self, interaction: Interaction):
+        if not STATE.is_online():
+            raise BotOfflineException()
         transaction, warnings = await Transaction.from_modal(self, interaction.user.name, interaction.user.id)
         if transaction is None:
             await interaction.response.send_message(warnings, ephemeral=True)
@@ -778,6 +806,8 @@ class EditModal(TransferModal):
             self.add_item(InputText(label=field.name, required=True, value=field.value))
 
     async def callback(self, interaction: Interaction):
+        if not STATE.is_online():
+            raise BotOfflineException()
         transaction, warnings = await Transaction.from_modal(self, interaction.user.name, interaction.user.id)
         if transaction is not None and len(warnings) > 0:
             await interaction.response.send_message(
@@ -802,6 +832,8 @@ class ShipyardModal(ErrorHandledModal):
         self.add_item(InputText(label="Bauer", placeholder="Manufacturer", required=False))
 
     async def callback(self, interaction: Interaction):
+        if not STATE.is_online():
+            raise BotOfflineException()
         buyer, buyer_is_match = parse_player(self.children[0].value)
         ship = self.children[1].value.strip()
         price, warn_price = parse_number(self.children[2].value)

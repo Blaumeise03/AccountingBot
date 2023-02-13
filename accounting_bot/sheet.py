@@ -6,7 +6,7 @@ import re
 import time
 from operator import add
 from os.path import exists
-from typing import Union, Tuple, Dict, Any, List, Optional
+from typing import Union, Tuple, Dict, List, Optional, TYPE_CHECKING
 
 import gspread_asyncio
 import pytz
@@ -15,12 +15,18 @@ from gspread import GSpreadException, Cell
 from gspread.utils import ValueRenderOption, ValueInputOption
 
 from accounting_bot import projects, utils
+from accounting_bot.exceptions import GoogleSheetException, BotOfflineException
 from accounting_bot.project_utils import find_player_row, calculate_changes, verify_batch_data, process_first_column
-from accounting_bot.exceptions import GoogleSheetException
 from accounting_bot.projects import Project
+from accounting_bot.utils import State
+
+if TYPE_CHECKING:
+    from bot import BotState
 
 logger = logging.getLogger("bot.sheet")
 logger.setLevel(logging.DEBUG)
+
+STATE = None  # type: BotState | None
 
 # Google Sheets API settings
 SCOPES = ["https://spreadsheets.google.com/feeds",
@@ -186,7 +192,7 @@ async def add_transaction(transaction: 'classes.Transaction') -> None:
 async def load_wallets(force=False, validate=False):
     global wallets, investments, wallets_last_reload
     t = time.time()
-    if (t - wallets_last_reload) < 60*60*5 and not force:
+    if (t - wallets_last_reload) < 60 * 60 * 5 and not force:
         return
     async with wallet_lock:
         wallets_last_reload = t
@@ -206,7 +212,8 @@ async def load_wallets(force=False, validate=False):
                 inv = u[MEMBERS_INVESTMENTS_INDEX]
                 if type(inv) == int or type(inv) == float:
                     if validate and type(inv) == float:
-                        logger.warning("Investment sum for %s is a float: %s", u[MEMBERS_NAME_INDEX], inv)
+                        # logger.warning("Investment sum for %s is a float: %s", u[MEMBERS_NAME_INDEX], inv)
+                        pass
                     investments[u[MEMBERS_NAME_INDEX]] = int(inv)
 
 
@@ -232,6 +239,7 @@ async def find_projects():
     agc = await agcm.authorize()
     sheet = await agc.open_by_key(SPREADSHEET_ID)
     wk_projects = []
+    wkProjectNames.clear()
     for s in await sheet.worksheets():
         if s.title.startswith("Project"):
             wk_projects.append(s)
@@ -287,6 +295,8 @@ async def load_project(project_name: str, log: [str], sheet: gspread_asyncio.Asy
     :param log: the current reloading log
     :param sheet: the current AsyncioGspreadSpreadsheet instance
     """
+    if not STATE.is_online():
+        raise BotOfflineException()
     logger.info(f"Loading project {project_name}")
     log.append(f"Starting processing of project sheet \"{project_name}\"")
     s = await sheet.worksheet(project_name)
@@ -394,6 +404,8 @@ async def insert_investments(player: str, investments: {str: [int]}) -> ([str], 
     """
     log = []
     success = {}
+    if not STATE.is_online():
+        raise BotOfflineException()
     for project in investments:
         log.append(f"Processing investment into {project} for player {player}")
         try:

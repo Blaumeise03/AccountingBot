@@ -47,11 +47,13 @@ class ProjectCommands(commands.Cog):
         description="Loads and list all projects"
     )
     @commands.cooldown(1, 5, commands.BucketType.default)
-    async def load_projects(self, ctx: ApplicationContext,
+    async def load_projects(self, ctx: discord.commands.context.ApplicationContext,
                             silent: Option(bool, "Execute command silently", required=False, default=True)):
-        if not (ctx.author.guild_permissions.administrator or ctx.author.id in ADMINS or ctx.author.id == OWNER):
+        if not (ctx.user.guild_permissions.administrator or ctx.user.id in ADMINS or ctx.user.id == OWNER):
             await ctx.respond("Missing permissions", ephemeral=True)
             return
+        if not STATE.is_online():
+            raise BotOfflineException()
         await ctx.response.defer(ephemeral=True)
         log = await sheet.load_projects()
         res = "Projectlist version: " + sheet.lastChanges.astimezone(pytz.timezone("Europe/Berlin")).strftime(
@@ -102,7 +104,7 @@ class ProjectCommands(commands.Cog):
             priority_projects = priority_project.split(";")
         else:
             priority_projects = [priority_project]
-        if ctx.author.guild_permissions.administrator or ctx.author.id in ADMINS or ctx.author.id == OWNER:
+        if ctx.user.guild_permissions.administrator or ctx.user.id in ADMINS or ctx.user.id == OWNER:
             await ctx.response.send_modal(ListModal(skip_loading, priority_projects))
         else:
             await ctx.response.send_message("Fehlende Berechtigungen!", ephemeral=True)
@@ -149,8 +151,8 @@ class ConfirmView(AutoDisableView):
                 interaction.user.guild_permissions.administrator or interaction.user.id in ADMINS or interaction.user.id == OWNER):
             await interaction.response.send_message("Missing permissions", ephemeral=True)
             return
-        if STATE.state.value < State.online.value:
-            raise BotOfflineException("Can't insert transactions when the bot is not online")
+        if not STATE.is_online():
+            raise BotOfflineException()
         await interaction.response.send_message("Bitte warten...", ephemeral=True)
 
         await interaction.message.edit(view=None)
@@ -199,12 +201,13 @@ class ConfirmOverflowView(AutoDisableView):
                 interaction.user.guild_permissions.administrator or interaction.user.id in ADMINS or interaction.user.id == OWNER):
             await interaction.response.send_message("Missing permissions", ephemeral=True)
             return
-        if STATE.state.value < State.online.value:
-            raise BotOfflineException("Can't insert transactions when the bot is not online")
+        if not STATE.is_online():
+            raise BotOfflineException()
         await interaction.response.send_message("Bitte warten, wird berechnet...")
         await interaction.message.edit(view=None)
         log = await sheet.apply_overflow_split(self.investments, self.changes)
-        await interaction.followup.send("Überlauf wurde auf die Projekte verteilt!", file=string_to_file(list_to_string(log)))
+        await interaction.followup.send("Überlauf wurde auf die Projekte verteilt!",
+                                        file=string_to_file(list_to_string(log)))
 
 
 # noinspection PyUnusedLocal
@@ -251,11 +254,13 @@ class InformPlayerView(AutoDisableView):
         await user.send(message, files=msg_files)
         await interaction.response.send_message(
             f"Nutzer {self.user}: {self.discord_id} wurde informiert.", ephemeral=True)
-        utils.save_discord_id(self.user, self.discord_id)
+        # utils.save_discord_id(self.user, self.discord_id)
         await interaction.message.edit(view=None)
 
     @discord.ui.button(label="Ändern", style=discord.ButtonStyle.blurple)
     async def btn_change_callback(self, button, interaction: Interaction):
+        if not STATE.is_online():
+            raise BotOfflineException()
         if not (
                 interaction.user.guild_permissions.administrator or interaction.user.id in ADMINS or interaction.user.id == OWNER):
             await interaction.response.send_message("Missing permissions", ephemeral=True)
@@ -306,7 +311,9 @@ class ListModal(ErrorHandledModal):
                 interaction.user.guild_permissions.administrator or interaction.user.id in ADMINS or interaction.user.id == OWNER):
             await interaction.response.send_message("Missing permissions", ephemeral=True)
             return
-        logger.debug("Insert Investments command received...")
+        logger.debug("Insert Investments command received")
+        if not STATE.is_online():
+            raise BotOfflineException()
         await interaction.response.send_message("Bitte warten, dies kann einige Sekunden dauern.", ephemeral=True)
         log = []
         player, is_perfect = utils.parse_player(self.children[0].value, sheet.users)
@@ -370,8 +377,7 @@ class Project(object):
         return res
 
     @staticmethod
-    def split_contract(items, project_list: ['Project'], priority_projects: [str] = None, extra_res: [int] = None) -> {
-        str: [(str, int)]}:
+    def split_contract(items, project_list: ['Project'], priority_projects: [str] = None, extra_res: [int] = None) -> {str: [(str, int)]}:
         projects_ordered = project_list[::-1]  # Reverse the list
         item_names = sheet.PROJECT_RESOURCES
         if priority_projects is None:

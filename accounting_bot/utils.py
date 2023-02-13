@@ -1,3 +1,4 @@
+import asyncio
 import difflib
 import io
 import json
@@ -13,6 +14,7 @@ from discord.ext.commands import Bot
 from discord.ui import View, Modal, Item
 
 from accounting_bot.config import Config
+from accounting_bot.database import DatabaseConnector
 from accounting_bot.exceptions import LoggedException
 
 logger = logging.getLogger("bot.utils")
@@ -26,7 +28,7 @@ def set_config(config: Config, bot):
     BOT = bot
 
 
-discord_users = {}  # type: {str: int} | None
+discord_users = {}  # type: {str: int}
 ingame_twinks = {}
 ingame_chars = []
 main_chars = []
@@ -43,18 +45,18 @@ def log_error(logger: logging.Logger, error: Exception, in_class=None,
         logging.warning("discord.errors.NotFound Error in %s: %s", in_class.__name__, str(error))
         return
     full_error = traceback.format_exception(type(error), error, error.__traceback__)
-    class_name = in_class.__name__ if in_class else "N/A"
+    class_name = in_class if type(in_class) == str else in_class.__name__ if in_class else "N/A"
 
     if isinstance(ctx, ApplicationContext):
         if ctx.guild is not None:
             # Error occurred inside a server
             err_msg = "An error occurred in class {} in guild {} in channel {}, sent by {}:{} during execution of command \"{}\"" \
-                .format(class_name, ctx.guild.id, ctx.channel_id, ctx.author.id, ctx.author.name,
+                .format(class_name, ctx.guild.id, ctx.channel_id, ctx.user.id, ctx.user.name,
                         ctx.command.name)
         else:
             # Error occurred inside a direct message
             err_msg = "An error occurred in class {} outside of a guild in channel {}, sent by {}:{} during execution of command \"%s\"" \
-                .format(class_name, ctx.channel_id, ctx.author.id, ctx.author.name,
+                .format(class_name, ctx.channel_id, ctx.user.id, ctx.user.name,
                         ctx.command.name)
     elif isinstance(ctx, Interaction):
         err_msg = "An error occurred in class {} during interaction in guild {} in channel {}, user %s: {}" \
@@ -75,7 +77,7 @@ async def send_exception(error: Exception, ctx: Union[ApplicationContext, Intera
             .format(ctx.channel_id, ctx.guild_id, ctx.user.id)
     else:
         location = "command in channel {} in guild {}, user {}:{}" \
-            .format(ctx.channel_id, ctx.guild_id, ctx.author.id, ctx.author.name)
+            .format(ctx.channel_id, ctx.guild_id, ctx.user.id, ctx.user.name)
     if isinstance(error, discord.NotFound):
         logger.info("Ignoring NotFound error caused by %s", location)
         return
@@ -96,10 +98,7 @@ async def send_exception(error: Exception, ctx: Union[ApplicationContext, Intera
                                     ephemeral=True)
     except discord.NotFound:
         try:
-            if isinstance(ctx, Interaction) and ctx.user:
-                await ctx.user.send(f"An unexpected error occurred: \n{error.__class__.__name__}\n{str(error)}")
-            elif isinstance(ctx, ApplicationContext) and ctx.author:
-                await ctx.author.send(f"An unexpected error occurred: \n{error.__class__.__name__}\n{str(error)}")
+            await ctx.user.send(f"An unexpected error occurred: \n{error.__class__.__name__}\n{str(error)}")
         except discord.Forbidden:
             pass
         logger.warning("Can't send error message for \"%s\", caused by %s: NotFound", error.__class__.__name__,
@@ -253,7 +252,26 @@ class AutoDisableView(ErrorHandledView):
 
 
 class State(Enum):
-    offline = 0
-    preparing = 1
-    starting = 2
-    online = 3
+    terminated = 0
+    offline = 1
+    preparing = 2
+    starting = 3
+    online = 4
+
+
+async def terminate_bot(connector: DatabaseConnector):
+    logger.warning("Disabling discord commands")
+    BOT.remove_cog('BaseCommands')
+    BOT.remove_cog('ProjectCommands')
+    # Wait for all pending interactions to complete
+    logger.warning("Waiting for interactions to complete")
+    await asyncio.sleep(15)
+    logger.warning("Closing SQL connection")
+    connector.con.close()
+    logger.warning("Closing bot")
+    await BOT.close()
+    await asyncio.sleep(10)
+    # Closing the connection should end the event loop directly, causing the program to exit
+    # Should this not happen within 10 seconds, the program will be terminated anyways
+    logger.error("Force closing process")
+    exit(1)

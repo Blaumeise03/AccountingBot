@@ -1,6 +1,12 @@
 from abc import ABC, abstractmethod
+from typing import TYPE_CHECKING
 
 from accounting_bot import utils
+
+if TYPE_CHECKING:
+    from bot import BotState
+
+STATE = None  # type: BotState | None
 
 
 class LoggedException(ABC, Exception):
@@ -42,4 +48,5 @@ class ConfigDataTypeException(ConfigException):
 
 
 class BotOfflineException(Exception):
-    pass
+    def __init__(self, message="Action can't be executed", *args: object) -> None:
+        super().__init__(str(STATE.state) + ": " + str(message), *args)

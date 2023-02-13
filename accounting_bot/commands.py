@@ -219,23 +219,10 @@ class BaseCommands(commands.Cog):
 
     @commands.slash_command(description="Shuts down the discord bot, if set up properly, it will restart.")
     async def stop(self, ctx: ApplicationContext):
-        if ctx.author.id == self.owner:
+        if ctx.user.id == self.owner:
             logger.critical("Shutdown Command received, shutting down bot in 10 seconds")
             await ctx.respond("Bot wird in 10 Sekunden gestoppt...")
-            self.state.state = State.offline
-            logger.warning("Disabling discord commands...")
-            ctx.bot.remove_cog('BaseCommands')
-            ctx.bot.remove_cog('ProjectCommands')
-            # Wait for all pending interactions to complete
-            await asyncio.sleep(5)
-            logger.warning("Closing SQL connection...")
-            self.connector.con.close()
-            logger.warning("Closing bot...")
-            await ctx.bot.close()
-            await asyncio.sleep(15)
-            # Closing the connection should end the event loop directly, causing the program to exit
-            # Should this not happen within 15 seconds, the program will be terminated anyways
-            logger.error("Force closing process...")
-            exit(1)
+            self.state.state = State.terminated
+            utils.terminate_bot()
         else:
             await ctx.respond("Fehler! Berechtigungen fehlen.", ephemeral=True)

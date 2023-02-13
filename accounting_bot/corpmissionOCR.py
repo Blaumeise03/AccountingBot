@@ -19,6 +19,7 @@ from pytesseract import pytesseract
 
 from accounting_bot import utils
 from accounting_bot.accounting import Transaction, ConfirmOCRView
+from accounting_bot.exceptions import BotOfflineException
 
 if TYPE_CHECKING:
     from bot import BotState
@@ -66,7 +67,7 @@ def extract_text(dilation, image):
     im2 = image
     height, width = im2.shape
     rect = im2.copy()
-    print(im2.shape)
+    #print(im2.shape)
     result = []
     for cnt in contours:
         x, y, w, h = cv2.boundingRect(cnt)
@@ -280,6 +281,8 @@ return_missions = ThreadSafeList()
 
 
 def handle_image(url, content_type, message, channel, author):
+    if not STATE.is_online():
+        raise BotOfflineException()
     img_id = "".join(random.choice(string.ascii_uppercase) for _ in range(3))
     image_name = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S") + "__" + img_id + "." + content_type.replace(
         "image/", "")

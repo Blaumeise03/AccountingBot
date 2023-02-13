@@ -1,9 +1,9 @@
 import asyncio
 import logging
 import os
+import signal
 import sys
 from datetime import datetime
-from enum import Enum
 from threading import Thread
 
 import discord
@@ -14,15 +14,15 @@ from discord.ext import commands, tasks
 from discord.ext.commands import CommandOnCooldown
 from dotenv import load_dotenv
 
-from accounting_bot import accounting, sheet, projects, utils, corpmissionOCR
+from accounting_bot import accounting, sheet, projects, utils, corpmissionOCR, exceptions
 from accounting_bot.accounting import AccountingView, get_menu_embeds, Transaction
 from accounting_bot.commands import BaseCommands
 from accounting_bot.config import Config, ConfigTree
 from accounting_bot.database import DatabaseConnector
 from accounting_bot.discordLogger import PycordHandler
-from accounting_bot.exceptions import LoggedException
-from accounting_bot.utils import log_error, string_to_file, State, send_exception
+from accounting_bot.utils import log_error, State, send_exception
 
+logger = logging.getLogger()
 log_filename = "logs/" + datetime.now().strftime("%Y-%m-%d_%H-%M-%S") + ".log"
 print("Logging outputs goes to: " + log_filename)
 if not os.path.exists("logs/"):
@@ -33,18 +33,18 @@ formatter = logging.Formatter(fmt="[%(asctime)s][%(levelname)s][%(name)s]: %(mes
 file_handler = logging.FileHandler(log_filename)
 file_handler.setLevel(logging.INFO)
 file_handler.setFormatter(formatter)
-logging.getLogger().addHandler(file_handler)
+logger.addHandler(file_handler)
 # Console log handler
 console = logging.StreamHandler(sys.stdout)
 console.setLevel(logging.DEBUG)
 console.setFormatter(formatter)
-logging.getLogger().addHandler(console)
+logger.addHandler(console)
 # Discord channel log handler
 discord_handler = PycordHandler(level=logging.WARNING)
 discord_handler.setFormatter(formatter)
-logging.getLogger().addHandler(discord_handler)
+logger.addHandler(discord_handler)
 # Root logger
-logging.getLogger().setLevel(logging.INFO)
+logger.setLevel(logging.INFO)
 
 
 class BotState:
@@ -53,9 +53,15 @@ class BotState:
         self.ocr = False
         self.bot = None  # type: commands.Bot | None
 
+    def is_online(self):
+        return self.state.value >= State.online.value
+
 
 STATE = BotState()
 STATE.state = State.preparing
+exceptions.STATE = STATE
+sheet.STATE = STATE
+corpmissionOCR.STATE = STATE
 
 loop = asyncio.get_event_loop()
 
@@ -106,7 +112,6 @@ CONNECTOR = DatabaseConnector(
     database=config["db.name"]
 )
 
-corpmissionOCR.STATE = STATE
 try:
     if config["pytesseract_cmd_path"] != "N/A":
         pytesseract.pytesseract.tesseract_cmd = config["pytesseract_cmd_path"]
@@ -146,7 +151,10 @@ async def on_error(event_name, *args, **kwargs):
     if info and len(info) > 2 and info[0] == discord.errors.NotFound:
         logging.warning("discord.errors.NotFound Error in %s: %s", event_name, str(info[1]))
         return
-    logging.exception("An unhandled error occurred: %s", event_name)
+    if info and len(info) > 2:
+        utils.log_error(logger, info[1], in_class="bot.event.on_error")
+    else:
+        logging.exception("An unhandled error occurred: %s", event_name)
     pass
 
 
@@ -338,12 +346,52 @@ async def run_bot():
     except Exception as e:
         logging.critical("Bot crashed", e)
         STATE.state = State.offline
-        await bot.close()
+        await utils.terminate_bot(CONNECTOR)
 
 
 async def main():
     await asyncio.gather(run_bot())
 
+
+async def kill_bot(signum, frame):
+    """
+    Shuts down the bot
+    """
+    STATE.state = State.terminated
+    logging.critical("Received signal %s, stopping bot", signal.Signals(signum).name)
+    await utils.terminate_bot(CONNECTOR)
+
+
+@tasks.loop(seconds=1.0)
+async def kill_loop():
+    """
+    In case loop.add_signal_handler does not work, this loop will be started by :func:`kill_bot_sync` as the bot has to
+    be stopped asynchronously.
+    """
+    kill_loop.stop()
+    logging.critical("Stopping bot")
+    await utils.terminate_bot(CONNECTOR)
+
+
+def kill_bot_sync(signum, frame):
+    """
+    Alternate kill function in case `loop.add_signal_handler` does not work.
+    """
+    logging.critical("Received signal %s, starting kill-loop", signal.Signals(signum).name)
+    kill_loop.start()
+
+
+try:
+    # Try to add signal handlers to the event loop, this may not work on all operating systems
+    loop.add_signal_handler(signal.SIGTERM, kill_bot)
+    loop.add_signal_handler(signal.SIGINT, kill_bot)
+except NotImplementedError:
+    # If the event loop does not support signal handlers, they will be handled directly
+    signal.signal(signal.SIGTERM, kill_bot_sync)
+    signal.signal(signal.SIGINT, kill_bot_sync)
+
 log_loop.start()
 corpmissionOCR.ocr_result_loop.start()
 loop.run_until_complete(main())
+logger.info("Bot stopped")
+sys.exit(0)
