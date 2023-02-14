@@ -139,13 +139,13 @@ def get_main_account(name: str = None, discord_id: int = None) -> (Union[str, No
         return None, None, False
     names = difflib.get_close_matches(name, ingame_chars, 1)
     if len(names) > 0:
-        name = str(names[0])
-        main_char = name
+        n = str(names[0])
+        main_char = n
         if main_char in ingame_twinks:
             main_char = ingame_twinks[main_char]
-        if name.casefold() == name.casefold():
-            return main_char, name, True
-        return main_char, name, False
+        if name.casefold() == n.casefold():
+            return main_char, n, True
+        return main_char, n, False
     return None, None, False
 
 
