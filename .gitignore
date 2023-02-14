@@ -5,6 +5,7 @@ images/
 python
 .env
 config.json
+tests/test_config.json
 user_overwrites.json
 discord_ids*.json
 credentials.json
