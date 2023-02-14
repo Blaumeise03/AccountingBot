@@ -353,7 +353,7 @@ async def main():
     await asyncio.gather(run_bot())
 
 
-async def kill_bot(signum, frame):
+async def kill_bot(signum):
     """
     Shuts down the bot
     """
@@ -383,8 +383,8 @@ def kill_bot_sync(signum, frame):
 
 try:
     # Try to add signal handlers to the event loop, this may not work on all operating systems
-    loop.add_signal_handler(signal.SIGTERM, kill_bot)
-    loop.add_signal_handler(signal.SIGINT, kill_bot)
+    loop.add_signal_handler(signal.SIGTERM, lambda: asyncio.ensure_future(kill_bot(signal.SIGTERM)))
+    loop.add_signal_handler(signal.SIGINT, lambda: asyncio.ensure_future(kill_bot(signal.SIGINT)))
 except NotImplementedError:
     # If the event loop does not support signal handlers, they will be handled directly
     signal.signal(signal.SIGTERM, kill_bot_sync)
