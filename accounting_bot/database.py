@@ -1,13 +1,15 @@
 import logging
 from time import sleep
+from typing import Union, Optional, Tuple, List
 
 import mariadb
+
 
 logger = logging.getLogger("database")
 
 
 class DatabaseConnector:
-    def __init__(self, username, password, host, port, database):
+    def __init__(self, username: str, password: str, host: str, port: str, database: str) -> None:
         self.cursor = None
         self.con = None
         self.username = username
@@ -24,10 +26,10 @@ class DatabaseConnector:
                 connected = True
             except mariadb.Error:
                 counter += 1
-                logger.warning(f"Retrying connection in {counter*2} seconds")
-                sleep(counter*2)
+                logger.warning(f"Retrying connection in {counter * 2} seconds")
+                sleep(counter * 2)
 
-    def try_connect(self):
+    def try_connect(self) -> None:
         logger.info("Connecting to database...")
         try:
             self.con = mariadb.connect(
@@ -56,8 +58,8 @@ class DatabaseConnector:
             logger.error(f"Error connecting to MariaDB Platform: {e}")
             raise e
 
-    def add_transaction(self, message, user):
-        logger.debug(f"Saving transaction to database with msg {message} and user {user}")
+    def add_transaction(self, message: int, user: int) -> None:
+        logger.debug(f"Saving transaction to database with msg {str(message)} and user {str(user)}")
         if self.con is None or not self.con.open:
             self.try_connect()
         try:
@@ -69,7 +71,7 @@ class DatabaseConnector:
             logger.error(f"Error while trying to insert a new transaction: {e}")
             raise e
 
-    def set_state(self, message: int, state: int):
+    def set_state(self, message: int, state: int) -> None:
         if self.con is None or not self.con.open:
             self.try_connect()
         try:
@@ -82,13 +84,13 @@ class DatabaseConnector:
             logger.error(f"Error while trying to update the transaction {message} to state {state}: {e}")
             raise e
 
-    def get_state(self, message: int):
+    def get_state(self, message: int) -> Optional[bool]:
         if self.con is None or not self.con.open:
             self.try_connect()
         try:
             self.cursor.execute(
                 "SELECT msgID, t_state FROM messages WHERE messages.msgID=?;",
-                (message, ))
+                (message,))
             self.con.commit()
             res = self.cursor.fetchone()
             if res is None:
@@ -97,23 +99,26 @@ class DatabaseConnector:
             return state
         except mariadb.Error as e:
             logger.error(f"Error while trying to get state of a transaction: {e}")
-            return False
+            raise e
 
-    def get_owner(self, message):
+    def get_owner(self, message: int) -> Optional[Tuple[int, bool]]:
         if self.con is None or not self.con.open:
             self.try_connect()
         try:
             self.cursor.execute(
                 "SELECT userID, verified FROM messages WHERE msgID=?;",
                 (message,))
-            (user, verified) = self.cursor.fetchone()
+            res = self.cursor.fetchone()
+            if res is None:
+                return None
+            (user, verified) = res
             verified = verified == 1
             return user, verified
         except mariadb.Error as e:
             logger.error(f"Error while trying to get a transaction: {e}")
             raise e
 
-    def set_verification(self, message, verified):
+    def set_verification(self, message: int, verified: bool) -> int:
         if self.con is None or not self.con.open:
             self.try_connect()
         try:
@@ -126,13 +131,13 @@ class DatabaseConnector:
             logger.error(f"Error while trying to update the transaction {message} to {verified}: {e}")
             raise e
 
-    def is_unverified_transaction(self, message):
+    def is_unverified_transaction(self, message: int) -> Optional[bool]:
         if self.con is None or not self.con.open:
             self.try_connect()
         try:
             self.cursor.execute(
                 "SELECT msgID, verified FROM messages WHERE messages.msgID=?;",
-                (message, ))
+                (message,))
             self.con.commit()
             res = self.cursor.fetchone()
             if res is None:
@@ -141,9 +146,9 @@ class DatabaseConnector:
             return verified == b'\x00'
         except mariadb.Error as e:
             logger.error(f"Error while trying to check a transaction: {e}")
-            return False
+            raise e
 
-    def get_unverified(self, include_user=False):
+    def get_unverified(self, include_user: bool = False) -> Union[List[int], List[Tuple[int, int]]]:
         if self.con is None or not self.con.open:
             self.try_connect()
         try:
@@ -161,8 +166,9 @@ class DatabaseConnector:
             return res
         except mariadb.Error as e:
             logger.error(f"Error while trying to get all unverified transactions: {e}")
+            raise e
 
-    def delete(self, message):
+    def delete(self, message: int) -> None:
         if self.con is None or not self.con.open:
             self.try_connect()
         try:
@@ -177,8 +183,9 @@ class DatabaseConnector:
                 logger.info(f"Deleted message {message}, affected {affected} rows")
         except mariadb.Error as e:
             logger.error(f"Error while trying to delete a transaction: {e}")
+            raise e
 
-    def add_shortcut(self, msg_id: int, channel_id: int):
+    def add_shortcut(self, msg_id: int, channel_id: int) -> None:
         if self.con is None or not self.con.open:
             self.try_connect()
         try:
@@ -193,8 +200,9 @@ class DatabaseConnector:
                 logger.info(f"Inserted shortcut message {msg_id}, affected {affected} rows")
         except mariadb.Error as e:
             logger.error(f"Error while trying to insert a shortcut message {msg_id}: {e}")
+            raise e
 
-    def get_shortcuts(self):
+    def get_shortcuts(self) -> List[Tuple[int, int]]:
         if self.con is None or not self.con.open:
             self.try_connect()
         try:
@@ -206,8 +214,9 @@ class DatabaseConnector:
             return res
         except mariadb.Error as e:
             logger.error(f"Error while trying to get all shortcut messages: {e}")
+            raise e
 
-    def delete_shortcut(self, message):
+    def delete_shortcut(self, message: int) -> None:
         if self.con is None or not self.con.open:
             self.try_connect()
         try:
@@ -222,3 +231,4 @@ class DatabaseConnector:
                 logger.info(f"Deleted shortcut message {message}, affected {affected} rows")
         except mariadb.Error as e:
             logger.error(f"Error while trying to delete a shortcut message: {e}")
+            raise e

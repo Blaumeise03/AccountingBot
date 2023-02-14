@@ -1,8 +1,6 @@
 from abc import ABC, abstractmethod
 from typing import TYPE_CHECKING
 
-from accounting_bot import utils
-
 if TYPE_CHECKING:
     from bot import BotState
 
@@ -21,6 +19,13 @@ class LoggedException(ABC, Exception):
         pass
 
 
+def list_to_string(line: [str]):
+    res = ""
+    for s in line:
+        res += s + "\n"
+    return res
+
+
 class GoogleSheetException(LoggedException):
     """
     An exception that got caused during the interaction with a Google Sheet, containing a dedicated log with more
@@ -36,7 +41,7 @@ class GoogleSheetException(LoggedException):
         self.progress = progress
 
     def get_log(self) -> str:
-        return utils.list_to_string(self.log)
+        return list_to_string(self.log)
 
 
 class ConfigException(Exception):
