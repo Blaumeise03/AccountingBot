@@ -6,20 +6,25 @@ import logging
 import traceback
 from enum import Enum
 from os.path import exists
-from typing import Union, Tuple, Optional
+from typing import Union, Tuple, Optional, TYPE_CHECKING
 
 import discord
-from discord import Interaction, ApplicationContext, InteractionResponded
+from discord import Interaction, ApplicationContext, InteractionResponded, ActivityType
 from discord.ext.commands import Bot
 from discord.ui import View, Modal, Item
 
+from accounting_bot import exceptions
 from accounting_bot.config import Config
 from accounting_bot.database import DatabaseConnector
 from accounting_bot.exceptions import LoggedException
 
+if TYPE_CHECKING:
+    from bot import BotState
+
 logger = logging.getLogger("bot.utils")
 CONFIG = None  # type: Config | None
 BOT = None  # type: Bot | None
+STATE = None  # type: BotState | None
 
 
 def set_config(config: Config, bot):
@@ -41,11 +46,16 @@ if exists("discord_ids.json"):
 # noinspection PyShadowingNames
 def log_error(logger: logging.Logger, error: Exception, in_class=None,
               ctx: Union[ApplicationContext, Interaction] = None):
-    if error and error.__class__ == discord.errors.NotFound:
-        logging.warning("discord.errors.NotFound Error in %s: %s", in_class.__name__, str(error))
-        return
-    full_error = traceback.format_exception(type(error), error, error.__traceback__)
     class_name = in_class if type(in_class) == str else in_class.__name__ if in_class else "N/A"
+    if error and error.__class__ == discord.errors.NotFound:
+        logger.warning("discord.errors.NotFound Error in %s: %s", class_name, str(error))
+        return
+
+    full_error = traceback.format_exception(type(error), error, error.__traceback__)
+
+    if error and error.__class__ == exceptions.BotOfflineException:
+        if len(full_error) > 2:
+            full_error = [full_error[0], full_error[-2], full_error[-1]]
 
     if isinstance(ctx, ApplicationContext):
         if ctx.guild is not None:
@@ -244,7 +254,10 @@ class AutoDisableView(ErrorHandledView):
         super().__init__(*args, **kwargs)
 
     async def on_timeout(self) -> None:
-        logger.info("View %s timed out (%s).", self.id, self.message.id if self.message is not None else "None")
+        logger.info("View %s timed out (%s) in channel %s.",
+                    self.id,
+                    self.message.id if self.message is not None else "None",
+                    self.message.channel.id if self.message is not None else "None")
         if self.message is not None:
             await self.message.edit(view=None)
         self.clear_items()
@@ -260,6 +273,10 @@ class State(Enum):
 
 
 async def terminate_bot(connector: DatabaseConnector):
+    logger.critical("Terminating bot")
+    STATE.state = State.terminated
+    activity = discord.Activity(name="Shutting down...", type=ActivityType.custom)
+    await BOT.change_presence(status=discord.Status.idle, activity=activity)
     logger.warning("Disabling discord commands")
     BOT.remove_cog('BaseCommands')
     BOT.remove_cog('ProjectCommands')

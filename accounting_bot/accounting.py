@@ -699,7 +699,7 @@ class ConfirmView(AutoDisableView):
     """
 
     def __init__(self):
-        super().__init__(timeout=None)
+        super().__init__(timeout=300)
 
     @discord.ui.button(label="Senden", style=discord.ButtonStyle.green)
     async def btn_confirm_callback(self, button, interaction):

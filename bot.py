@@ -62,6 +62,7 @@ STATE.state = State.preparing
 exceptions.STATE = STATE
 sheet.STATE = STATE
 corpmissionOCR.STATE = STATE
+utils.STATE = STATE
 
 loop = asyncio.get_event_loop()
 
@@ -316,6 +317,15 @@ async def on_message(message: Message):
                 args=(url, att.content_type, message, channel, message.author.id))
             thread.start()
             await message.reply("Verarbeite Bild, bitte warten. Dies dauert einige Sekunden.")
+
+
+@bot.event
+async def on_application_command(ctx: ApplicationContext):
+    logger.info("Command %s called by %s:%s in channel %s",
+                ctx.command.name,
+                ctx.user.name,
+                ctx.user.id,
+                ctx.channel.id)
 
 
 @bot.event

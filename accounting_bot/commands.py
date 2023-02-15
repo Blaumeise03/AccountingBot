@@ -223,6 +223,6 @@ class BaseCommands(commands.Cog):
             logger.critical("Shutdown Command received, shutting down bot in 10 seconds")
             await ctx.respond("Bot wird in 10 Sekunden gestoppt...")
             self.state.state = State.terminated
-            utils.terminate_bot()
+            await utils.terminate_bot(connector=self.connector)
         else:
             await ctx.respond("Fehler! Berechtigungen fehlen.", ephemeral=True)
