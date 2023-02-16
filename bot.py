@@ -3,8 +3,10 @@ import logging
 import os
 import signal
 import sys
+from asyncio import AbstractEventLoop
 from datetime import datetime
 from threading import Thread
+from typing import Any
 
 import discord
 import mariadb
@@ -79,6 +81,7 @@ config_structure = {
     "test_server": (int, -1),
     "user_role": (int, -1),
     "logChannel": (int, -1),
+    "adminLogChannel": (int, -1),
     "menuMessage": (int, -1),
     "menuChannel": (int, -1),
     "owner": (int, -1),
@@ -159,6 +162,13 @@ async def on_error(event_name, *args, **kwargs):
     pass
 
 
+def handle_asyncio_exception(error_loop: AbstractEventLoop, context: dict[str, Any]):
+    logger.error("Exception in event_loop: %s",
+                 context["message"])
+    if "exception" in context:
+        utils.log_error(logger, error=context["exception"], in_class="event_loop")
+
+
 @tasks.loop(seconds=10.0)
 async def log_loop():
     """
@@ -166,6 +176,11 @@ async def log_loop():
     See :class:`accounting_bot.discordLogger.PycordHandler` for more details.
     """
     await discord_handler.process_logs()
+
+
+@log_loop.error
+async def handle_ocr_error(error: Exception):
+    utils.log_error(logger, error, in_class="log_loop")
 
 
 @bot.event
@@ -402,6 +417,7 @@ except NotImplementedError:
 
 log_loop.start()
 corpmissionOCR.ocr_result_loop.start()
+loop.set_exception_handler(handle_asyncio_exception)
 loop.run_until_complete(main())
 logger.info("Bot stopped")
 sys.exit(0)

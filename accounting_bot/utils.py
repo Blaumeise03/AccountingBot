@@ -1,9 +1,11 @@
 import asyncio
+import datetime
 import difflib
 import io
 import json
 import logging
 import traceback
+from abc import ABC, abstractmethod
 from enum import Enum
 from os.path import exists
 from typing import Union, Tuple, Optional, TYPE_CHECKING
@@ -20,6 +22,7 @@ from accounting_bot.exceptions import LoggedException
 
 if TYPE_CHECKING:
     from bot import BotState
+    from accounting_bot.accounting import Transaction
 
 logger = logging.getLogger("bot.utils")
 CONFIG = None  # type: Config | None
@@ -228,6 +231,29 @@ def save_discord_id(name: str, discord_id: int):
 def save_discord_config():
     with open("discord_ids.json", "w") as outfile:
         json.dump(discord_users, outfile, indent=4)
+
+
+# noinspection PyMethodMayBeStatic
+class TransactionLike(ABC):
+    def get_from(self) -> Optional[str]:
+        return None
+
+    def get_to(self) -> Optional[str]:
+        return None
+
+    @abstractmethod
+    def get_amount(self) -> int:
+        pass
+
+    def get_time(self) -> Optional[datetime.datetime]:
+        return None
+
+    @abstractmethod
+    def get_purpose(self) -> str:
+        pass
+
+    def get_reference(self) -> Optional[str]:
+        return None
 
 
 class ErrorHandledModal(Modal):

@@ -1,7 +1,9 @@
 import logging
 import unittest
+from datetime import datetime
 
 import pytesseract
+from numpy import ndarray
 
 from accounting_bot import corpmissionOCR, utils
 
@@ -36,16 +38,35 @@ class CorpmissionOCRTest(unittest.TestCase):
         logging.info("Tesseract version " + str(tesseract_version) + " installed!")
         corpmissionOCR.STATE = TestState()
 
-    def test_handle_image(self):
+    def test_donation(self):
+        utils.ingame_chars = ["Blaumeise03", "Blaumeise04"]
+        utils.main_chars = ["Blaumeise03"]
+        utils.ingame_twinks = {"Blaumeise04": "Blaumeise03"}
+        user = TestUser(2, "TestUser")
+        msg = TestMessage(1, user)
+        corpmissionOCR.return_missions.list.clear()
+        corpmissionOCR.handle_image("", "png", msg, 2, user, "img_donation_en.png", no_delete=True, debug=True)
+        channel, author, donation, img_id, img = corpmissionOCR.return_missions.list[0]  # type: object, object, corpmissionOCR.MemberDonation, str, ndarray
+        self.assertEqual(corpmissionOCR.MemberDonation, donation.__class__)
+        self.assertEqual(500000000, donation.amount)
+        self.assertEqual("Blaumeise03", donation.main_char)
+        self.assertEqual("Blaumeise03", donation.username)
+        self.assertEqual(datetime.strptime("2023-02-15 16:43:24", "%Y-%m-%d %H:%M:%S"), donation.time)
+        self.assertTrue(donation.is_donation)
+        self.assertTrue(donation.valid)
+        self.assertIsNotNone(img)
+
+    def test_corpmission(self):
         utils.ingame_chars = ["Blaumeise03", "Blaumeise04"]
         self.assertEqual(0, len(corpmissionOCR.return_missions.list))
         user = TestUser(2, "TestUser")
         msg = TestMessage(1, user)
 
-        corpmissionOCR.handle_image("https://url.blaumeise03.de/AccTestMissionDE", "png", msg, 2, user)
+        corpmissionOCR.handle_image("", "png", msg, 2, user, "img_mission_de.png")
         # noinspection DuplicatedCode
         self.assertEqual(1, len(corpmissionOCR.return_missions.list))
-        channel, author, mission, img_id = corpmissionOCR.return_missions.list[0]  # type: object, object, corpmissionOCR.CorporationMission, str
+        channel, author, mission, img_id, img = corpmissionOCR.return_missions.list[0]  # type: object, object, corpmissionOCR.CorporationMission, str, ndarray
+        self.assertEqual(corpmissionOCR.CorporationMission, mission.__class__)
         self.assertEqual(2, channel)
         self.assertEqual(user, author)
         self.assertEqual(True, mission.isMission)
@@ -60,10 +81,11 @@ class CorpmissionOCRTest(unittest.TestCase):
         corpmissionOCR.return_missions.list.clear()
         self.assertEqual(0, len(corpmissionOCR.return_missions.list))
 
-        corpmissionOCR.handle_image("https://url.blaumeise03.de/AccTestMissionEN", "png", msg, 2, user)
+        corpmissionOCR.handle_image("", "png", msg, 2, user, "img_mission_en.png")
         # noinspection DuplicatedCode
         self.assertEqual(1, len(corpmissionOCR.return_missions.list))
-        channel, author, mission, img_id = corpmissionOCR.return_missions.list[0]  # type: object, object, corpmissionOCR.CorporationMission, str
+        channel, author, mission, img_id, img = corpmissionOCR.return_missions.list[0]  # type: object, object, corpmissionOCR.CorporationMission, str, ndarray
+        self.assertEqual(corpmissionOCR.CorporationMission, mission.__class__)
         self.assertEqual(2, channel)
         self.assertEqual(user, author)
         self.assertEqual(True, mission.isMission)

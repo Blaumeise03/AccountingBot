@@ -3,7 +3,7 @@ import logging
 import re
 from asyncio import Lock
 from datetime import datetime
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Optional
 from typing import Union, List
 
 import discord
@@ -18,11 +18,11 @@ from accounting_bot import sheet, utils
 from accounting_bot.config import Config
 from accounting_bot.database import DatabaseConnector
 from accounting_bot.exceptions import BotOfflineException
-from accounting_bot.utils import AutoDisableView, State, ErrorHandledModal
+from accounting_bot.utils import AutoDisableView, State, ErrorHandledModal, TransactionLike
 
 if TYPE_CHECKING:
     from bot import BotState
-    from accounting_bot.corpmissionOCR import CorporationMission
+    from accounting_bot.corpmissionOCR import CorporationMission, MemberDonation
 
 INVESTMENT_RATIO = 0.3  # percentage of investment that may be used for transactions
 
@@ -31,6 +31,7 @@ logger = logging.getLogger("bot.accounting")
 BOT = None  # type: discord.ext.commands.bot.Bot | None
 CONFIG = None  # type: Config | None
 ACCOUNTING_LOG = None  # type: int | None
+ADMIN_LOG = None  # type: int | None
 SERVER = None  # type: int | None
 ADMINS = []  # type: [int]
 CONNECTOR = None  # type: DatabaseConnector | None
@@ -61,12 +62,15 @@ def set_up(config: Config,
     :param bot: the discord bot instance
     :param state: the global state of the bot
     """
-    global CONNECTOR, CONFIG, BOT, ACCOUNTING_LOG, SERVER, USER_ROLE, STATE, ADMINS
+    global CONNECTOR, CONFIG, BOT, ACCOUNTING_LOG, ADMIN_LOG, SERVER, USER_ROLE, STATE, ADMINS
     global EMBED_MENU_INTERNAL, EMBED_MENU_EXTERNAL, EMBED_MENU_VCB, EMBED_MENU_SHORTCUT, EMBED_INDU_MENU
     CONNECTOR = new_connector
     CONFIG = config
     BOT = bot
     ACCOUNTING_LOG = config["logChannel"]
+    admin_log = config["adminLogChannel"]
+    if admin_log != -1:
+        ADMIN_LOG = admin_log
     SERVER = config["server"]
     USER_ROLE = config["user_role"]
     ADMINS = config["admins"]
@@ -155,7 +159,8 @@ async def inform_player(transaction, discord_id, receive):
         await user.send(
             ("Du hast ISK auf Deinem Accounting erhalten." if receive else "Es wurde ISK von deinem Konto abgebucht.") +
             "\nDein Kontostand beträgt `" +
-            "{:,} ISK".format(await sheet.get_balance(transaction.name_to if receive else transaction.name_from, default=-1)) + "`",
+            "{:,} ISK".format(
+                await sheet.get_balance(transaction.name_to if receive else transaction.name_from, default=-1)) + "`",
             embed=transaction.create_embed())
     elif discord_id > 0:
         logger.warning("Can't inform user %s (%s) about about the transaction %s -> %s: %s (%s)",
@@ -231,6 +236,12 @@ async def verify_transaction(user_id: int, message: Message, interaction: Intera
     if not STATE.is_online():
         raise BotOfflineException()
 
+    if ADMIN_LOG is not None:
+        admin_log_channel = BOT.get_channel(ADMIN_LOG)
+        if admin_log_channel is None:
+            admin_log_channel = await BOT.fetch_channel(ADMIN_LOG)
+    else:
+        admin_log_channel = None
     is_unverified = CONNECTOR.is_unverified_transaction(message=message.id)
     if is_unverified is None:
         if interaction:
@@ -246,6 +257,7 @@ async def verify_transaction(user_id: int, message: Message, interaction: Intera
             await interaction.followup.send(content="Error: Couldn't parse embed", ephemeral=True)
         return
     has_permissions = user_id in ADMINS
+    user = await BOT.get_or_fetch_user(user_id)
     if not has_permissions and transaction.name_from and transaction.name_to:
         # Only transactions between two players can be self-verified
         owner_id, _, _ = await utils.get_or_find_discord_id(player_name=transaction.name_from)
@@ -282,8 +294,13 @@ async def verify_transaction(user_id: int, message: Message, interaction: Intera
                         ephemeral=True)
                 return
             has_permissions = True
-            logger.info("User " + str(user_id) + " is owner of transaction " + transaction.__str__() + " and has "
-                                                                                                       "sufficient balance")
+            logger.info("User " + str(user_id) + " is owner of transaction " + transaction.__str__() + " and has sufficient balance")
+    ocr_verified = False
+    if not has_permissions and transaction.detect_type() == 1:
+        owner_id, _, _ = await utils.get_or_find_discord_id(player_name=transaction.name_to)
+        if owner_id and user_id == owner_id:
+            ocr_verified = CONNECTOR.get_ocr_verification(message.id)
+            has_permissions = ocr_verified
 
     if not has_permissions:
         if interaction:
@@ -293,14 +310,13 @@ async def verify_transaction(user_id: int, message: Message, interaction: Intera
 
     if not is_unverified:
         # Message is already verified
-        author = await BOT.get_or_fetch_user(user_id)
         msg = "Fehler: Diese Transaktion wurde bereits verifiziert, sie wurde nicht " \
               "erneut im Sheet eingetragen. Bitte trage sie selbstständig ein, falls " \
               "dies nötig ist."
         if interaction:
             await interaction.followup.send(content=msg, ephemeral=True)
         else:
-            await author.send(content=msg)
+            await user.send(content=msg)
         return
 
     if message.content.startswith("Verifiziert von"):
@@ -321,6 +337,12 @@ async def verify_transaction(user_id: int, message: Message, interaction: Intera
     else:
         # Save transaction
         await save_embeds(message, user_id)
+        if admin_log_channel and user_id not in ADMINS:
+            msg = "Transaction `{}` was self-verified by `{}:{}`:\nhttps://discord.com/channels/{}/{}/{}\n"\
+                .format(transaction, user.name, user_id, SERVER, ACCOUNTING_LOG, message.id)
+            if ocr_verified:
+                msg += "*Transaction was OCR verified*"
+            await admin_log_channel.send(msg)
         if interaction:
             await message.add_reaction("✅")
             await interaction.followup.send("Transaktion verifiziert!", ephemeral=True)
@@ -373,10 +395,11 @@ class Transaction:
         self.amount = amount
         self.name_to = name_to
         self.name_from = name_from
+        self.allow_self_verification = False
 
     def __str__(self):
-        return f"<Transaction time: {self.timestamp} from: {self.name_from} to: {self.name_to} amount: {self.amount} " \
-               f"purpose: {self.purpose} reference: {self.reference}>"
+        return f"<Transaction: time {self.timestamp}; from {self.name_from}; to {self.name_to}; amount {self.amount}; " \
+               f"purpose \"{self.purpose}\"; reference \"{self.reference}\">"
 
     def detect_type(self) -> int:
         """
@@ -392,6 +415,17 @@ class Transaction:
             return 2
         return -1
 
+    def is_valid(self):
+        if self.detect_type() == -1:
+            return False
+        if self.name_from == self.name_to:
+            return False
+        if self.amount <= 0:
+            return False
+        if self.purpose is None or len(self.purpose.strip()) == 0:
+            return False
+        return True
+
     def create_embed(self) -> Embed:
         """
         Creates an :class:`Embed` representing this transaction.
@@ -402,6 +436,7 @@ class Transaction:
         transaction_type = self.detect_type()
         if transaction_type < 0:
             logger.error(f"Unexpected transaction type: {transaction_type}")
+
         embed = Embed(title=Transaction.NAMES[transaction_type],
                       color=Transaction.COLORS[transaction_type],
                       timestamp=datetime.now())
@@ -503,7 +538,7 @@ class Transaction:
             elif (bal + inv) < transaction.amount:
                 warnings += "**Fehler**: Dein Kontostand (`{:,} ISK`) und Projekteinlagen (`{:,} ISK`) reichen nicht aus, " \
                             "um diese Transaktion zu decken. Wenn Dein Accounting nicht zuvor ausgeglichen ist (oder " \
-                            "es für Dich eine Ausnahmeregelung gibt), wird die Transaktion abgelehnt.\n"\
+                            "es für Dich eine Ausnahmeregelung gibt), wird die Transaktion abgelehnt.\n" \
                     .format(bal, inv)
             elif (bal + inv * INVESTMENT_RATIO) < transaction.amount:
                 warnings += "Warnung: Dein Kontostand (`{:,} ISK`) reicht nicht aus, " \
@@ -540,21 +575,18 @@ class Transaction:
         return transaction
 
     @staticmethod
-    def from_ocr(mission: 'CorporationMission', user_id: int):
+    def from_ocr(mission: TransactionLike, user_id: int):
         transaction = Transaction()
-        if mission.pay_isk and mission.title == "Auszahlung":
-            transaction.name_from = mission.main_char
-            transaction.purpose = "Auszahlung Accounting"
-        elif not mission.pay_isk and mission.title == "Einzahlung":
-            transaction.name_to = mission.main_char
-            transaction.purpose = "Einzahlung Accounting"
-        else:
-            return None
-        transaction.amount = mission.amount
+        transaction.name_from = mission.get_from()
+        transaction.name_to = mission.get_to()
+        transaction.purpose = mission.get_purpose()
+        transaction.reference = mission.get_reference()
+        transaction.amount = mission.get_amount()
+        transaction.timestamp = mission.get_time()
         return transaction
 
 
-async def send_transaction(embeds: List[Embed], interaction: Interaction, note=""):
+async def send_transaction(embeds: List[Union[Embed, Transaction]], interaction: Interaction, note="") -> Optional[Message]:
     """
     Sends the embeds into the accounting log channel. Will send a response to the :class:`Interaction` containing the
     note and an error message in case any :class:`mariadb.Error` occurred.
@@ -566,10 +598,15 @@ async def send_transaction(embeds: List[Embed], interaction: Interaction, note="
     for embed in embeds:
         if embed is None:
             continue
+        transaction = None
+        if isinstance(embed, Transaction):
+            transaction = embed
+            embed = embed.create_embed()
         msg = await BOT.get_channel(ACCOUNTING_LOG).send(embeds=[embed], view=TransactionView())
         try:
             CONNECTOR.add_transaction(msg.id, interaction.user.id)
-            transaction = Transaction.from_embed(embed)
+            if transaction is None:
+                transaction = Transaction.from_embed(embed)
             if not transaction:
                 logger.warning("Embed in message %s is not a transaction", msg.id)
                 return
@@ -580,9 +617,12 @@ async def send_transaction(embeds: List[Embed], interaction: Interaction, note="
                 elif state == 3:
                     await msg.add_reaction("❌")
                 CONNECTOR.set_state(msg.id, state)
+            if transaction.allow_self_verification:
+                CONNECTOR.set_ocr_verification(msg.id, True)
         except mariadb.Error as e:
             note += "\nFehler beim Eintragen in die Datenbank, die Transaktion wurde jedoch trotzdem im " \
                     f"Accountinglog gepostet. Informiere bitte einen Admin, danke.\n{e}"
+        return msg
     await interaction.response.send_message("Transaktion gesendet!" + note, ephemeral=True)
 
 
@@ -666,10 +706,19 @@ class TransactionView(AutoDisableView):
         if not STATE.is_online():
             raise BotOfflineException()
         (owner, verified) = CONNECTOR.get_owner(interaction.message.id)
-        if not verified and (owner == interaction.user.id or interaction.user.id in ADMINS):
+        transaction = Transaction.from_embed(interaction.message.embeds[0])
+        user_name = utils.get_main_account(discord_id=interaction.user.id)
+        has_perm = owner == interaction.user.id or interaction.user.id in ADMINS
+        if transaction.name_from and utils.get_main_account(transaction.name_from) == user_name:
+            has_perm = True
+        elif transaction.name_to and utils.get_main_account(transaction.name_to) == user_name:
+            has_perm = True
+
+        if not verified and has_perm:
             await interaction.message.delete()
-            await interaction.response.send_message("Transaktion Gelöscht!", ephemeral=True)
             CONNECTOR.delete(interaction.message.id)
+            await interaction.response.send_message("Transaktion Gelöscht!", ephemeral=True)
+            logger.info("User %s deleted message %s", interaction.user.id, interaction.message.id)
         elif not owner == interaction.user.id:
             await interaction.response.send_message("Dies ist nicht deine Transaktion, wenn du ein Admin bist, lösche "
                                                     "die Nachricht bitte eigenständig.", ephemeral=True)
@@ -720,7 +769,7 @@ class ConfirmEditView(AutoDisableView):
         the original message which should be edited.
     """
 
-    def __init__(self, message: Message):
+    def __init__(self, message: Message, original: Transaction):
         """
         Creates a new ConfirmEditView.
 
@@ -728,13 +777,22 @@ class ConfirmEditView(AutoDisableView):
         """
         super().__init__()
         self.message = message
+        self.original = original
 
     @discord.ui.button(label="Speichern", style=discord.ButtonStyle.green)
     async def btn_confirm_callback(self, button, interaction):
         if not STATE.is_online():
             raise BotOfflineException()
+        transaction = Transaction.from_embed(interaction.message.embeds[0])
+        warnings = ""
+        if self.original.name_to != transaction.name_to or self.original.name_from != transaction.name_from or \
+                self.original.amount != transaction.amount or self.original.purpose != transaction.purpose:
+            ocr_verified = CONNECTOR.get_ocr_verification(interaction.message.id)
+            if ocr_verified:
+                CONNECTOR.set_ocr_verification(interaction.message.id, False)
+                warnings += "Warnung: Du kannst diese Transaktion nicht mehr selbst verifizieren.\n"
         await self.message.edit(embeds=interaction.message.embeds)
-        await interaction.response.send_message("Transaktion bearbeitet!", ephemeral=True)
+        await interaction.response.send_message(f"Transaktion bearbeitet!\n{warnings}", ephemeral=True)
 
 
 # noinspection PyUnusedLocal
@@ -748,7 +806,49 @@ class ConfirmOCRView(AutoDisableView):
     async def btn_confirm_callback(self, button, interaction):
         if not STATE.is_online():
             raise BotOfflineException()
-        await send_transaction([self.transaction.create_embed()], interaction, self.note)
+        msg = await send_transaction([self.transaction], interaction, self.note)
+        res_msg = f"Transaktion versendet: https://discord.com/channels/{SERVER}/{ACCOUNTING_LOG}/{msg.id}"
+        if self.transaction.allow_self_verification:
+            res_msg += "\nDu kannst diese Transaktion selbstständig verifizieren, klicke dazu im Accountinglog unter" \
+                       "der Transaktion auf \"Verifizieren\"."
+        await interaction.response.send_message(res_msg)
+
+    @discord.ui.button(label="Ändern", style=discord.ButtonStyle.blurple)
+    async def btn_change_callback(self, button, interaction):
+        if not STATE.is_online():
+            raise BotOfflineException()
+        await interaction.response.send_modal(EditOCRModal(self.transaction, self.message))
+
+
+class EditOCRModal(ErrorHandledModal):
+    def __init__(self, transaction: Transaction, message: Message, *args, **kwargs):
+        super().__init__(title="Transaktion ändern", *args, **kwargs)
+        self.transaction = transaction
+        self.message = message
+        amount = "{:,} ISK".format(transaction.amount) if transaction.amount is not None else None
+        self.add_item(InputText(label="Datum/Uhrzeit", placeholder="z.B. 25.03.2023 13:40", required=True,
+                                value=transaction.timestamp.strftime("%d.%m.%Y %H:%M")))
+        self.add_item(InputText(label="Menge", placeholder="z.B. 100,000,000 ISK", required=True, value=amount))
+
+    async def callback(self, interaction: Interaction):
+        time_raw = self.children[0].value
+        amount_raw = self.children[1].value
+        amount, warn = parse_number(amount_raw)
+        try:
+            time = datetime.strptime(time_raw, "%d.%m.%Y %H:%M")
+            self.transaction.timestamp = time
+        except ValueError:
+            warn += f"**Fehler**: \"{time_raw}\" entspricht nicht dem Format \"25.03.2023 13:40\"\n"
+        if amount is None:
+            warn += f"**Fehler**: \"{amount_raw}\" ist keine Zahl, bzw. entspricht nicht dem Format \"1,000,000,000.00 ISK\"\n"
+        elif self.transaction.amount != amount:
+            warn += "Warnung: Die Menge wurde verändert, eine Verifizierung ist nur durch einen Admin möglich.\n"
+            self.transaction.allow_self_verification = False
+            self.transaction.amount = amount
+        await self.message.edit(embed=self.transaction.create_embed())
+        if len(warn) == 0:
+            warn += "Transaktion geändert!\n"
+        await interaction.response.send_message(warn)
 
 
 class TransferModal(ErrorHandledModal):
@@ -809,14 +909,21 @@ class EditModal(TransferModal):
         if not STATE.is_online():
             raise BotOfflineException()
         transaction, warnings = await Transaction.from_modal(self, interaction.user.name, interaction.user.id)
+        original = Transaction.from_embed(interaction.message.embeds[0])  # type: Transaction
         if transaction is not None and len(warnings) > 0:
             await interaction.response.send_message(
                 warnings, embed=transaction.create_embed(),
-                ephemeral=True, view=ConfirmEditView(message=interaction.message))
+                ephemeral=True, view=ConfirmEditView(message=interaction.message, original=original))
             return
         if transaction is None:
             await interaction.response.send_message(warnings, ephemeral=True)
             return
+        if original.name_to != transaction.name_to or original.name_from != transaction.name_from or \
+                original.amount != transaction.amount or original.purpose != transaction.purpose:
+            ocr_verified = CONNECTOR.get_ocr_verification(interaction.message.id)
+            if ocr_verified:
+                CONNECTOR.set_ocr_verification(interaction.message.id, False)
+                warnings += "Warnung: Du kannst diese Transaktion nicht mehr selbst verifizieren.\n"
         await interaction.message.edit(embed=transaction.create_embed())
         await interaction.response.send_message(f"Transaktionen wurde editiert!\n{warnings}", ephemeral=True)
 

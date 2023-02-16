@@ -47,6 +47,7 @@ class DatabaseConnector:
                                 "userID BIGINT NOT NULL, "
                                 "verified BIT NOT NULL DEFAULT b'0', "
                                 "t_state TINYINT, "
+                                "ocr_verified BIT NOT NULL DEFAULT b'0', "
                                 "PRIMARY KEY (msgID)"
                                 ") ENGINE = InnoDB; ")
             self.cursor.execute("CREATE TABLE IF NOT EXISTS shortcuts ("
@@ -118,7 +119,7 @@ class DatabaseConnector:
             logger.error(f"Error while trying to get a transaction: {e}")
             raise e
 
-    def set_verification(self, message: int, verified: bool) -> int:
+    def set_verification(self, message: int, verified: Union[bool, int]) -> int:
         if self.con is None or not self.con.open:
             self.try_connect()
         try:
@@ -168,6 +169,38 @@ class DatabaseConnector:
             logger.error(f"Error while trying to get all unverified transactions: {e}")
             raise e
 
+    def set_ocr_verification(self, message: int, verified: Union[bool, int]) -> int:
+        if type(verified) == bool:
+            verified = 1 if verified else 0
+        if self.con is None or not self.con.open:
+            self.try_connect()
+        try:
+            self.cursor.execute(
+                "UPDATE messages SET ocr_verified = ? WHERE messages.msgID=?;",
+                (verified, message))
+            self.con.commit()
+            return self.cursor.rowcount
+        except mariadb.Error as e:
+            logger.error(f"Error while trying to update the transaction {message} to ocr_verified {verified}: {e}")
+            raise e
+
+    def get_ocr_verification(self, message: int) -> Optional[bool]:
+        if self.con is None or not self.con.open:
+            self.try_connect()
+        try:
+            self.cursor.execute(
+                "SELECT msgID, ocr_verified FROM messages WHERE messages.msgID=?;",
+                (message,))
+            self.con.commit()
+            res = self.cursor.fetchone()
+            if res is None:
+                return None
+            (msgID, verified) = res
+            return verified == b'\x01'
+        except mariadb.Error as e:
+            logger.error(f"Error while trying to check a transaction: {e}")
+            raise e
+
     def delete(self, message: int) -> None:
         if self.con is None or not self.con.open:
             self.try_connect()
@@ -180,7 +213,8 @@ class DatabaseConnector:
             if not affected == 1:
                 logger.warning(f"Deletion of message {message} affected {affected} rows, expected was 1 row")
             else:
-                logger.info(f"Deleted message {message}, affected {affected} rows")
+                # logger.info(f"Deleted message {message}, affected {affected} rows")
+                pass
         except mariadb.Error as e:
             logger.error(f"Error while trying to delete a transaction: {e}")
             raise e

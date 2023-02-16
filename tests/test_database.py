@@ -73,8 +73,7 @@ class DatabaseTest(unittest.TestCase):
         with self.assertLogs("database", level="INFO") as cm:
             con.delete(1234)
             con.delete(1234)
-        self.assertEqual(cm.output, ["INFO:database:Deleted message 1234, affected 1 rows",
-                                     "WARNING:database:Deletion of message 1234 affected 0 rows, expected was 1 row"])
+        self.assertEqual(["WARNING:database:Deletion of message 1234 affected 0 rows, expected was 1 row"], cm.output)
         con.add_transaction(1234, 5678)
         con.add_transaction(4321, 5678)
         con.add_transaction(1111, 42)
@@ -100,8 +99,8 @@ class DatabaseTest(unittest.TestCase):
             con.add_shortcut(4242, 1234)
             self.assertEqual(1, len(con.get_shortcuts()))
             con.add_shortcut(123, 9999)
-        self.assertEqual(cm.output, ["INFO:database:Inserted shortcut message 4242, affected 1 rows",
-                                     "INFO:database:Inserted shortcut message 123, affected 1 rows"])
+        self.assertEqual(["INFO:database:Inserted shortcut message 4242, affected 1 rows",
+                          "INFO:database:Inserted shortcut message 123, affected 1 rows"], cm.output)
         res = con.get_shortcuts()
         self.assertEqual(2, len(res))
         self.assertTrue((123, 9999) in res)
@@ -112,9 +111,9 @@ class DatabaseTest(unittest.TestCase):
             con.delete_shortcut(123)
             con.delete_shortcut(4242)
             con.delete_shortcut(123)
-        self.assertEqual(cm.output, ["INFO:database:Deleted shortcut message 123, affected 1 rows",
-                                     "INFO:database:Deleted shortcut message 4242, affected 1 rows",
-                                     "WARNING:database:Deletion of shortcut message 123 affected 0 rows, expected was 1 row"])
+        self.assertEqual(["INFO:database:Deleted shortcut message 123, affected 1 rows",
+                          "INFO:database:Deleted shortcut message 4242, affected 1 rows",
+                          "WARNING:database:Deletion of shortcut message 123 affected 0 rows, expected was 1 row"], cm.output)
         self.assertEqual(0, len(con.get_shortcuts()))
 
     # noinspection PyTypeChecker
