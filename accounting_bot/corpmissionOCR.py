@@ -112,7 +112,8 @@ def preprocess_donation(img, debug=False):
     return dilation, img_lut
 
 
-def extract_text(dilation, image, postfix="", expansion=(9, 9, 8, 8)):
+def extract_text(dilation, image, postfix="", expansion=(9, 9, 8, 8), skip_donations=False,
+                 rel_bounds: Dict[str, int] = None):
     if not STATE.ocr:
         raise OCRException("OCR is not enabled!")
     contours, hierarchy = cv2.findContours(dilation, cv2.RETR_EXTERNAL,
@@ -132,6 +133,17 @@ def extract_text(dilation, image, postfix="", expansion=(9, 9, 8, 8)):
         y = max(0, y - expansion[1])
         w = min(w + expansion[2], width - (x + w))
         h = min(h + expansion[3], height - (y + h))
+
+        cords = {
+            "x1": x,
+            "x2": x + w,
+            "y1": y,
+            "y2": y + h
+        }
+        rel_cords = to_relative_cords(cords, width, height)
+        cx, cy = get_center(rel_cords)
+        if rel_bounds is not None and not is_within_bounds(bounds=rel_bounds, x=cx, y=cy):
+            continue
         # Draw the bounding box on the text area
         rect = cv2.rectangle(rect,
                              (x, y),
@@ -150,16 +162,24 @@ def extract_text(dilation, image, postfix="", expansion=(9, 9, 8, 8)):
         text = text.strip()
         if len(text) == 0:
             continue
-
-        # print(f"Found text at ({x}, {y}) to ({x + w}, {y + h}) \"{text}\"")
         result.append((
             {"x1": x, "x2": x + w, "y1": y, "y2": y + h},
             text
         ))
-        # cv2.imshow(text, cropped)
-        # cv2.waitKey(0)
-
+        if skip_donations and rel_cords["x1"] < 0.2 and match_donation(text) > 0.75:
+            return result, rect
     return result, rect
+
+
+def match_donation(text: str) -> float:
+    split = text.split(" ")
+    alt_text = None
+    if len(split) > 2:
+        alt_text = split[0] + split[1]
+    return max(difflib.SequenceMatcher(None, "Member Donation", text).ratio(),
+               difflib.SequenceMatcher(None, "Member Donation", alt_text).ratio() if alt_text else 0,
+               difflib.SequenceMatcher(None, "Donation", text).ratio(),
+               difflib.SequenceMatcher(None, "Mitgliederspende", text.split(" ")[0]).ratio())
 
 
 def get_image_type(text: [{str: int}, str], width: int, height: int) -> int:
@@ -172,10 +192,7 @@ def get_image_type(text: [{str: int}, str], width: int, height: int) -> int:
                         difflib.SequenceMatcher(None, "MISSION", txt).ratio(),
                         difflib.SequenceMatcher(None, "MISSIONSDETAILS", txt).ratio())
         if rel_cords["x1"] < 0.2:
-            m_donation = max(m_donation,
-                             difflib.SequenceMatcher(None, "Member Donation", txt).ratio(),
-                             difflib.SequenceMatcher(None, "Donation", txt).ratio(),
-                             difflib.SequenceMatcher(None, "Mitgliederspende", txt.split(" ")[0]).ratio())
+            m_donation = max(m_donation, match_donation(txt))
     if m_donation > 0.75:
         return 1
     if m_mission > 0.75:
@@ -183,13 +200,22 @@ def get_image_type(text: [{str: int}, str], width: int, height: int) -> int:
     return -1
 
 
-def to_relative_cords(cords: {int}, width: int, height: int) -> {float}:
+def to_relative_cords(cords: Dict[str, int], width: int, height: int) -> {float}:
     return {
         "x1": cords["x1"] / width,
         "x2": cords["x2"] / width,
         "y1": cords["y1"] / height,
         "y2": cords["y2"] / height,
     }
+
+
+def is_within_bounds(bounds: Dict[str, Union[int, float]], x: Union[int, float], y: Union[int, float]):
+    return min(bounds["x1"], bounds["x2"]) <= x <= max(bounds["x1"], bounds["x2"]) and \
+        min(bounds["y1"], bounds["y2"]) <= y <= max(bounds["y1"], bounds["y2"])
+
+
+def get_center(cords: Dict[str, Union[int, float]]) -> Tuple[Union[int, float], Union[int, float]]:
+    return (cords["x1"] + cords["x2"]) / 2, (cords["y1"] + cords["y2"]) / 2
 
 
 def set_bounding_box(bounding_box: Dict[str, Optional[int]], cords: Dict[str, int]) -> None:
@@ -542,7 +568,7 @@ def handle_image(url, content_type, message, channel, author, file=None, no_dele
         image.save(WORKING_DIR + "/image_rescaled_" + img_id + ".png", "PNG")
         img = cv2.imread(WORKING_DIR + "/image_rescaled_" + img_id + ".png")
         dilation, img_lut = preprocess_mission(img, debug=debug)
-        res = extract_text(dilation, img_lut)
+        res = extract_text(dilation, img_lut, skip_donations=True)
         text = res[0]
         img_rect = res[1] if len(res) > 1 else None
         height, width, _ = img.shape
@@ -558,7 +584,12 @@ def handle_image(url, content_type, message, channel, author, file=None, no_dele
                             image_name)
         elif img_type == 1:
             dilation, img_lut = preprocess_donation(img, debug=debug)
-            res = extract_text(dilation, img_lut, expansion=(4, 7, 12, 10))
+            res = extract_text(
+                dilation,
+                img_lut,
+                expansion=(4, 7, 12, 10),
+                rel_bounds={"x1": 0, "x2": 0.3, "y1": 0, "y2": 0.7}
+            )
             text = res[0]
             img_rect = res[1] if len(res) > 1 else None
             data = MemberDonation.from_text(text, width, height)  # type: MemberDonation

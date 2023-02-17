@@ -73,7 +73,7 @@ class CorpmissionOCRTest(unittest.TestCase):
 
     def test_corpmission(self):
         utils.ingame_chars = ["Blaumeise03", "Blaumeise04"]
-        self.assertEqual(0, len(corpmissionOCR.return_missions.list))
+        corpmissionOCR.return_missions.list.clear()
         user = TestUser(2, "TestUser")
         msg = TestMessage(1, user)
 
