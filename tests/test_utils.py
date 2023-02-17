@@ -1,5 +1,7 @@
 import unittest
 
+import cv2
+
 from accounting_bot import utils
 
 
@@ -47,6 +49,11 @@ class UtilsTest(unittest.TestCase):
         self.assertMultiLineEqual("Abc\ndef\n123\n", utils.list_to_string(["Abc", "def", "123"]))
         self.assertEqual("", utils.list_to_string([]))
         self.assertEqual("\n", utils.list_to_string([""]))
+
+    def test_image_to_file(self):
+        img = cv2.imread("img_donation_en.png")
+        file = utils.image_to_file(img, ".jpg", "result.jpg")
+        self.assertIsNotNone(file)
 
 
 if __name__ == '__main__':

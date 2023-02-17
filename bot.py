@@ -315,6 +315,8 @@ async def on_ready():
 async def on_message(message: Message):
     await bot.process_commands(message)
     if isinstance(message.channel, DMChannel) or message.channel.id == ACCOUNTING_LOG:
+        if message.author.id == bot.user.id:
+            return
         for att in message.attachments:
             if not att.content_type.startswith("image"):
                 continue

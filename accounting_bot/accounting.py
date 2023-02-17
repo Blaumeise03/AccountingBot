@@ -1,11 +1,13 @@
 import json
 import logging
+import os
 import re
 from asyncio import Lock
 from datetime import datetime
 from typing import TYPE_CHECKING, Optional
 from typing import Union, List
 
+import cv2
 import discord
 import discord.ext
 import mariadb
@@ -13,6 +15,7 @@ import pytz
 from discord import Embed, Interaction, Color, Message
 from discord.ext.commands import Bot
 from discord.ui import Modal, InputText
+from numpy import ndarray
 
 from accounting_bot import sheet, utils
 from accounting_bot.config import Config
@@ -37,6 +40,7 @@ ADMINS = []  # type: [int]
 CONNECTOR = None  # type: DatabaseConnector | None
 USER_ROLE = None  # type: int | None
 STATE = None  # type: BotState | None
+IMG_WORKING_DIR = None  # type: str | None
 
 # All embeds
 EMBED_MENU_INTERNAL = None  # type: Embed | None
@@ -296,11 +300,11 @@ async def verify_transaction(user_id: int, message: Message, interaction: Intera
             has_permissions = True
             logger.info("User " + str(user_id) + " is owner of transaction " + transaction.__str__() + " and has sufficient balance")
     ocr_verified = False
-    if not has_permissions and transaction.detect_type() == 1:
+    if transaction.detect_type() == 1:
         owner_id, _, _ = await utils.get_or_find_discord_id(player_name=transaction.name_to)
         if owner_id and user_id == owner_id:
             ocr_verified = CONNECTOR.get_ocr_verification(message.id)
-            has_permissions = ocr_verified
+            has_permissions = has_permissions or ocr_verified
 
     if not has_permissions:
         if interaction:
@@ -337,12 +341,18 @@ async def verify_transaction(user_id: int, message: Message, interaction: Intera
     else:
         # Save transaction
         await save_embeds(message, user_id)
-        if admin_log_channel and user_id not in ADMINS:
+        if admin_log_channel and (user_id not in ADMINS or ocr_verified):
+            file = None
+            if os.path.exists(IMG_WORKING_DIR + f"/transactions/{str(message.id)}.jpg"):
+                file = discord.File(IMG_WORKING_DIR + f"/transactions/{str(message.id)}.jpg")
             msg = "Transaction `{}` was self-verified by `{}:{}`:\nhttps://discord.com/channels/{}/{}/{}\n"\
                 .format(transaction, user.name, user_id, SERVER, ACCOUNTING_LOG, message.id)
             if ocr_verified:
                 msg += "*Transaction was OCR verified*"
-            await admin_log_channel.send(msg)
+            await admin_log_channel.send(msg, file=file)
+            if os.path.exists(IMG_WORKING_DIR + f"/transactions/{str(message.id)}.jpg"):
+                os.remove(IMG_WORKING_DIR + f"/transactions/{str(message.id)}.jpg")
+                logger.info("Deleted file %s", IMG_WORKING_DIR + f"/transactions/{str(message.id)}.jpg")
         if interaction:
             await message.add_reaction("✅")
             await interaction.followup.send("Transaktion verifiziert!", ephemeral=True)
@@ -396,6 +406,7 @@ class Transaction:
         self.name_to = name_to
         self.name_from = name_from
         self.allow_self_verification = False
+        self.img = None  # type: ndarray | None
 
     def __str__(self):
         return f"<Transaction: time {self.timestamp}; from {self.name_from}; to {self.name_to}; amount {self.amount}; " \
@@ -797,10 +808,11 @@ class ConfirmEditView(AutoDisableView):
 
 # noinspection PyUnusedLocal
 class ConfirmOCRView(AutoDisableView):
-    def __init__(self, transaction: Transaction, note: str = ""):
+    def __init__(self, transaction: Transaction, img: ndarray, note: str = ""):
         super().__init__()
         self.transaction = transaction
         self.note = note
+        self.img = img
 
     @discord.ui.button(label="Senden", style=discord.ButtonStyle.green)
     async def btn_confirm_callback(self, button, interaction):
@@ -812,6 +824,8 @@ class ConfirmOCRView(AutoDisableView):
             res_msg += "\nDu kannst diese Transaktion selbstständig verifizieren, klicke dazu im Accountinglog unter" \
                        "der Transaktion auf \"Verifizieren\"."
         await interaction.response.send_message(res_msg)
+        if self.img is not None:
+            cv2.imwrite(IMG_WORKING_DIR + f"/transactions/{str(msg.id)}.jpg", self.img)
 
     @discord.ui.button(label="Ändern", style=discord.ButtonStyle.blurple)
     async def btn_change_callback(self, button, interaction):

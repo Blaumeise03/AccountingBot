@@ -7,30 +7,31 @@ import re
 import shutil
 import string
 import threading
-from abc import ABC, abstractmethod
 from pathlib import Path
-from typing import TYPE_CHECKING, Union, Optional, Tuple
+from typing import TYPE_CHECKING, Union, Optional, Tuple, Callable, Dict
 
 import cv2
 import numpy
-import numpy as np
 import requests
 from PIL import Image
 from discord.ext import tasks
+from numpy import ndarray
 from pytesseract import pytesseract
 
-from accounting_bot import utils
+from accounting_bot import utils, accounting
 from accounting_bot.accounting import Transaction, ConfirmOCRView
 from accounting_bot.exceptions import BotOfflineException
-from accounting_bot.utils import TransactionLike
+from accounting_bot.utils import TransactionLike, OCRBaseData
 
 if TYPE_CHECKING:
     from bot import BotState
 
 logger = logging.getLogger("bot.ocr")
 WORKING_DIR = "images"
+accounting.IMG_WORKING_DIR = WORKING_DIR
 STATE = None  # type: BotState | None
 Path(WORKING_DIR + "/download").mkdir(parents=True, exist_ok=True)
+Path(WORKING_DIR + "/transactions").mkdir(parents=True, exist_ok=True)
 
 
 def apply_dilation(img, block_size, c, rect: Tuple[int, int], iterations, debug=False):
@@ -158,7 +159,7 @@ def extract_text(dilation, image, postfix="", expansion=(9, 9, 8, 8)):
         # cv2.imshow(text, cropped)
         # cv2.waitKey(0)
 
-    return result
+    return result, rect
 
 
 def get_image_type(text: [{str: int}, str], width: int, height: int) -> int:
@@ -190,7 +191,20 @@ def to_relative_cords(cords: {int}, width: int, height: int) -> {float}:
     }
 
 
-class CorporationMission(TransactionLike):
+def set_bounding_box(bounding_box: Dict[str, Optional[int]], cords: Dict[str, int]) -> None:
+    def set_bound(cord_name: str, cord_num: str, method: Callable) -> None:
+        if bounding_box[cord_name + cord_num] is not None:
+            bounding_box[cord_name + cord_num] = method(bounding_box[cord_name + cord_num], cords[f"{cord_name}1"],
+                                                        cords[f"{cord_name}2"])
+        else:
+            bounding_box[cord_name + cord_num] = method(cords[f"{cord_name}1"], cords[f"{cord_name}2"])
+    set_bound("x", "1", min)
+    set_bound("y", "1", min)
+    set_bound("x", "2", max)
+    set_bound("y", "2", max)
+
+
+class CorporationMission(TransactionLike, OCRBaseData):
     def __init__(self) -> None:
         super().__init__()
         self.isMission = False  # type: bool
@@ -242,6 +256,7 @@ class CorporationMission(TransactionLike):
     @staticmethod
     def from_text(text: ({int}, str), width, height):
         mission = CorporationMission()
+        bounding_box = {"x1": None, "x2": None, "y1": None, "y2": None}
         isk_get_lines = []
         isk_pay_lines = []
         title_line = None
@@ -256,6 +271,7 @@ class CorporationMission(TransactionLike):
                              difflib.SequenceMatcher(None, "MISSION DETAILS", t.replace("|", "").strip()).ratio())
             if is_mission > 0.75:
                 mission.isMission = True
+                set_bounding_box(bounding_box, cords)
                 continue
 
             # Get transaction direction and y-level of the ISK quantity
@@ -268,6 +284,7 @@ class CorporationMission(TransactionLike):
                     isk_pay_lines.append((rel_cords["y1"] + rel_cords["y2"]) / 2)
                 elif get > pay:
                     isk_get_lines.append((rel_cords["y1"] + rel_cords["y2"]) / 2)
+                set_bounding_box(bounding_box, cords)
                 continue
 
             # Check the "Total Times"-Setting
@@ -275,6 +292,8 @@ class CorporationMission(TransactionLike):
                                               difflib.SequenceMatcher(None, "Times", t).ratio(),
                                               difflib.SequenceMatcher(None, "Gesamthäufigkeit", t).ratio()) > 0.7:
                 mission.has_limit = True
+                # ToDo: Check for number or "No Restrictions"
+                set_bounding_box(bounding_box, cords)
                 continue
 
             # Get the title
@@ -282,12 +301,14 @@ class CorporationMission(TransactionLike):
             if rel_cords["x1"] < 0.3 and rel_cords["y1"] < 0.3 and len(matches) > 0:
                 mission.title = str(matches[0])
                 title_line = (rel_cords["y1"] + rel_cords["y2"]) / 2
+                set_bounding_box(bounding_box, cords)
                 continue
 
             # Get the label
             label_acc = difflib.SequenceMatcher(None, "Accounting", t).ratio()
             if label_acc > 0.75:
                 mission.label = True
+                set_bounding_box(bounding_box, cords)
 
         if len(isk_pay_lines) > 0 and len(isk_get_lines) > 0:
             raise Exception("Found both pay and get lines!")
@@ -316,6 +337,7 @@ class CorporationMission(TransactionLike):
                         mission.main_char = main_char
                         mission.username = parsed_name
                         name_match = match
+                set_bounding_box(bounding_box, cords)
                 continue
 
             if best_line and abs(rel_y - best_line) < 0.05 and rel_cords["x1"] < 0.66:
@@ -327,11 +349,14 @@ class CorporationMission(TransactionLike):
                 txt = txt.strip()
                 if txt.isdigit():
                     mission.amount = int(txt)
+                    set_bounding_box(bounding_box, cords)
         mission.validate()
+        if bounding_box["x1"] and bounding_box["x2"] and bounding_box["y1"] and bounding_box["y2"]:
+            mission.bounding_box = bounding_box
         return mission
 
 
-class MemberDonation(TransactionLike):
+class MemberDonation(TransactionLike, OCRBaseData):
     def __init__(self) -> None:
         super().__init__()
         self.valid = False  # type: bool
@@ -356,9 +381,11 @@ class MemberDonation(TransactionLike):
     @staticmethod
     def from_text(text: ({int}, str), width, height):
         donation = MemberDonation()
+        bounding_box = {"x1": None, "x2": None, "y1": None, "y2": None}
         quantity_line = None
         type_line = None
         time_line = None
+
         for cords, txt in text:  # type: dict, str
             rel_cords = to_relative_cords(cords, width, height)
             if rel_cords["x1"] > 0.25:
@@ -371,19 +398,16 @@ class MemberDonation(TransactionLike):
                     donation.main_char = main_char
                     donation.username = parsed_name
                 donation.is_donation = True
-                continue
-
-            if difflib.SequenceMatcher(None, "Quantity", txt).ratio() > 0.75:
+                set_bounding_box(bounding_box, cords)
+            elif difflib.SequenceMatcher(None, "Quantity", txt).ratio() > 0.75:
                 quantity_line = (rel_cords["y1"] + rel_cords["y2"]) / 2
-                continue
-
-            if difflib.SequenceMatcher(None, "Type", txt).ratio() > 0.75:
+                set_bounding_box(bounding_box, cords)
+            elif difflib.SequenceMatcher(None, "Type", txt).ratio() > 0.75:
                 type_line = (rel_cords["y1"] + rel_cords["y2"]) / 2
-                continue
-
-            if difflib.SequenceMatcher(None, "Time", txt).ratio() > 0.75:
+                set_bounding_box(bounding_box, cords)
+            elif difflib.SequenceMatcher(None, "Time", txt).ratio() > 0.75:
                 time_line = (rel_cords["y1"] + rel_cords["y2"]) / 2
-                continue
+                set_bounding_box(bounding_box, cords)
 
         for cords, txt in text:  # type: dict, str
             rel_cords = to_relative_cords(cords, width, height)
@@ -394,24 +418,29 @@ class MemberDonation(TransactionLike):
 
             if type_line and abs(rel_y - type_line) < 0.05 and difflib.SequenceMatcher(None, "Member Donation", txt).ratio() > 0.75:
                 donation.is_donation = True
-                continue
-            if quantity_line and abs(rel_y - quantity_line) < 0.05:
+                set_bounding_box(bounding_box, cords)
+            elif quantity_line and abs(rel_y - quantity_line) < 0.05:
                 quantity_raw = re.sub("[.,]", "", txt).upper() \
                     .replace("D", "0").replace("O", "0").strip()
                 if quantity_raw.isdigit():
                     donation.amount = int(quantity_raw)
-                continue
-
-            if time_line and abs(rel_y - time_line) < 0.05:
+                    set_bounding_box(bounding_box, cords)
+            elif time_line and abs(rel_y - time_line) < 0.05:
                 time_raw = re.sub("[.,:;]", "", txt.split("\n")[0])
                 try:
                     time = datetime.datetime.strptime(time_raw, "%Y-%m-%d %H%M%S")
                     donation.time = time
+                    set_bounding_box(bounding_box, cords)
                 except ValueError:
                     pass
-                continue
 
         donation.validate()
+        if bounding_box["x1"] and bounding_box["x2"] and bounding_box["y1"] and bounding_box["y2"]:
+            bounding_box["x1"] = max(bounding_box["x1"] - 8, 0)
+            bounding_box["x2"] += 8
+            bounding_box["y1"] = max(bounding_box["y1"] - 16, 0)
+            bounding_box["y2"] += 16
+            donation.bounding_box = bounding_box
         return donation
 
     def validate(self):
@@ -499,24 +528,38 @@ def handle_image(url, content_type, message, channel, author, file=None, no_dele
         image.save(WORKING_DIR + "/image_rescaled_" + img_id + ".png", "PNG")
         img = cv2.imread(WORKING_DIR + "/image_rescaled_" + img_id + ".png")
         dilation, img_lut = preprocess_mission(img, debug=debug)
-        text = extract_text(dilation, img_lut)
+        res = extract_text(dilation, img_lut)
+        text = res[0]
+        img_rect = res[1] if len(res) > 1 else None
         height, width, _ = img.shape
         img_type = get_image_type(text, width, height)
         valid = False
+        data = None  # type: OCRBaseData | None
+        bounds = None
         if img_type == 0:
-            mission = CorporationMission.from_text(text, width, height)
-            return_missions.append((channel, author, mission, img_id))
-            if mission.isMission:
+            data = CorporationMission.from_text(text, width, height)  # type: CorporationMission
+            if data.isMission:
                 valid = True
+                logger.info("Detected CorporationMission from %s:%s: %s", message.author.id, message.author.name, image_name)
         elif img_type == 1:
             dilation, img_lut = preprocess_donation(img, debug=debug)
-            text = extract_text(dilation, img_lut, expansion=(4, 7, 12, 10))  # for highres (4, 7, 10, 8) works
-            donation = MemberDonation.from_text(text, width, height)
-            return_missions.append((channel, author, donation, img_id))
-            if donation.valid:
+            res = extract_text(dilation, img_lut, expansion=(4, 7, 12, 10))
+            text = res[0]
+            img_rect = res[1] if len(res) > 1 else None
+            data = MemberDonation.from_text(text, width, height)  # type: MemberDonation
+            bounds = data.bounding_box
+            if data.is_donation:
                 valid = True
+                logger.info("Detected MemberDonation from %s (%s): %s", message.author.id, message.author.name, image_name)
         else:
+            logger.info("Could not handle image from %s (%s) %s", message.author.id, message.author.name, image_name)
             return_missions.append((message.author.id, author, OCRException("Image is not a mission/donation"), img_id))
+
+        cropped = None
+        if bounds is not None and img_rect is not None:
+            cropped = img_rect[bounds["y1"]:bounds["y2"], bounds["x1"]:bounds["x2"]]
+            data.img = cropped
+        return_missions.append((channel, author, data, img_id, cropped))
 
         if os.path.exists(WORKING_DIR + "/image_rescaled_" + img_id + ".png"):
             os.remove(WORKING_DIR + "/image_rescaled_" + img_id + ".png")
@@ -528,7 +571,7 @@ def handle_image(url, content_type, message, channel, author, file=None, no_dele
                 os.remove(file_name)
     except Exception as e:
         logger.error("OCR job for image %s (user %s) failed!", img_id, message.author.id)
-        logger.exception(e)
+        utils.log_error(logger, e, in_class="handle_image")
         return_missions.append((message.author.id, author, e, img_id))
         if os.path.exists(file_name) and not no_delete:
             logger.info("Deleting image %s", file_name)
@@ -541,8 +584,12 @@ async def ocr_result_loop():
         for i in range(len(return_missions.list)):
             if return_missions.list[i] is None:
                 continue
-            channel_id, author, data, img_id = return_missions.list[
-                i]  # type: int, int, Union[CorporationMission, MemberDonation], str
+            res = return_missions.list[i]  # type: Tuple[int, int, Union[CorporationMission, MemberDonation], str, ndarray]
+            channel_id = res[0]
+            author = res[1]
+            data = res[2]
+            img_id = res[3]
+            img_cropped = res[4] if len(res) > 4 else None
             return_missions.list[i] = None
             user = await STATE.bot.get_or_fetch_user(author) if author is not None else None
             if not user and channel_id:
@@ -557,6 +604,7 @@ async def ocr_result_loop():
                 await user.send("An error occurred: " + str(data))
                 continue
             is_valid = False
+            file = utils.image_to_file(img_cropped, ".jpg", "img_ocr_cropped.jpg")
             if isinstance(data, CorporationMission):
                 msg = f"```\nIst Mission: {str(data.isMission)}\n" \
                       f"Gültig: {str(data.valid)}\nTitel: {data.title}\nNutzername: {data.username}\n" \
@@ -613,15 +661,16 @@ async def ocr_result_loop():
                              author,
                              img_id,
                              data)
+
                 if user is not None:
-                    await user.send("Bild wurde verarbeitet: \n" + msg)
+                    await user.send("Bild wurde verarbeitet: \n" + msg, file=file)
                 continue
 
             transaction = Transaction.from_ocr(data, author)
             if user is not None:
                 transaction.author = user.name
             if author is not None and isinstance(data, MemberDonation):
-                char = utils.get_main_account(discord_id=author)
+                char = utils.get_main_account(discord_id=author)[0]
                 transaction.allow_self_verification = True
                 if transaction.name_to != char:
                     msg += "Warnung: Diese Einzahlung stammt nicht von dir"
@@ -629,15 +678,16 @@ async def ocr_result_loop():
                 msg += "**Fehler**: Transaktion is nicht gültig.\n"
                 is_valid = False
             if user is not None:
-                await user.send("Bild wurde verarbeitet: \n" + msg)
-            if user is None:
+                logger.info("OCR job for image %s for user %s (%s) completed, valid: %s", img_id, user.name, author, is_valid)
+                await user.send("Bild wurde verarbeitet: \n" + msg, file=file)
+            else:
                 logger.warning("User for OCR image %s with discord ID %s not found!", img_id, author)
                 continue
             if not is_valid:
                 continue
 
             if transaction:
-                ocr_view = ConfirmOCRView(transaction)
+                ocr_view = ConfirmOCRView(transaction, img_cropped)
                 msg = "Willst du diese Transaktion senden? "
                 if isinstance(data, MemberDonation):
                     msg += "Stelle bitte auch sicher, dass die korrekte Zeit erkannt wurde. Die Zeit kannst Du einfach " \
@@ -652,7 +702,8 @@ async def ocr_result_loop():
 @ocr_result_loop.error
 async def handle_ocr_error(error: Exception):
     utils.log_error(logger, error, in_class="ocr_result_loop")
-    ocr_result_loop.start()
+    del error
+    ocr_result_loop.restart()
 
 
 class OCRException(Exception):

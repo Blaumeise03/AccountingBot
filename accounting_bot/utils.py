@@ -10,10 +10,12 @@ from enum import Enum
 from os.path import exists
 from typing import Union, Tuple, Optional, TYPE_CHECKING
 
+import cv2
 import discord
 from discord import Interaction, ApplicationContext, InteractionResponded, ActivityType
 from discord.ext.commands import Bot
 from discord.ui import View, Modal, Item
+from numpy import ndarray
 
 from accounting_bot import exceptions
 from accounting_bot.config import Config
@@ -116,6 +118,17 @@ async def send_exception(error: Exception, ctx: Union[ApplicationContext, Intera
             pass
         logger.warning("Can't send error message for \"%s\", caused by %s: NotFound", error.__class__.__name__,
                        location)
+
+
+def image_to_file(img: ndarray, encoding: str, filename: str):
+    if img is None:
+        return None
+    is_success, im_buf_arr = cv2.imencode(encoding, img)
+    if is_success:
+        img_byte = io.BytesIO(im_buf_arr)
+        file = discord.File(img_byte, filename)
+        return file
+    return None
 
 
 def string_to_file(text: str, filename="message.txt"):
@@ -254,6 +267,13 @@ class TransactionLike(ABC):
 
     def get_reference(self) -> Optional[str]:
         return None
+
+
+class OCRBaseData:
+    def __init__(self) -> None:
+        super().__init__()
+        self.bounding_box = None  # type: dict[str, int] | None
+        self.img = None  # type: ndarray | None
 
 
 class ErrorHandledModal(Modal):
