@@ -44,8 +44,23 @@ class CorpmissionOCRTest(unittest.TestCase):
         utils.ingame_twinks = {"Blaumeise04": "Blaumeise03"}
         user = TestUser(2, "TestUser")
         msg = TestMessage(1, user)
+
         corpmissionOCR.return_missions.list.clear()
         corpmissionOCR.handle_image("", "png", msg, 2, user, "img_donation_en.png", no_delete=True, debug=True)
+        # noinspection DuplicatedCode
+        channel, author, donation, img_id, img = corpmissionOCR.return_missions.list[0]  # type: object, object, corpmissionOCR.MemberDonation, str, ndarray
+        self.assertEqual(corpmissionOCR.MemberDonation, donation.__class__)
+        self.assertEqual(500000000, donation.amount)
+        self.assertEqual("Blaumeise03", donation.main_char)
+        self.assertEqual("Blaumeise03", donation.username)
+        self.assertEqual(datetime.strptime("2023-02-15 16:43:24", "%Y-%m-%d %H:%M:%S"), donation.time)
+        self.assertTrue(donation.is_donation)
+        self.assertTrue(donation.valid)
+        self.assertIsNotNone(img)
+
+        corpmissionOCR.return_missions.list.clear()
+        corpmissionOCR.handle_image("", "png", msg, 2, user, "img_donation_de.png", no_delete=True, debug=True)
+        # noinspection DuplicatedCode
         channel, author, donation, img_id, img = corpmissionOCR.return_missions.list[0]  # type: object, object, corpmissionOCR.MemberDonation, str, ndarray
         self.assertEqual(corpmissionOCR.MemberDonation, donation.__class__)
         self.assertEqual(500000000, donation.amount)
