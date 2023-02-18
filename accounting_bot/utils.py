@@ -8,7 +8,7 @@ import traceback
 from abc import ABC, abstractmethod
 from enum import Enum
 from os.path import exists
-from typing import Union, Tuple, Optional, TYPE_CHECKING
+from typing import Union, Tuple, Optional, TYPE_CHECKING, Type
 
 import cv2
 import discord
@@ -24,7 +24,6 @@ from accounting_bot.exceptions import LoggedException
 
 if TYPE_CHECKING:
     from bot import BotState
-    from accounting_bot.accounting import Transaction
 
 logger = logging.getLogger("bot.utils")
 CONFIG = None  # type: Config | None
@@ -49,11 +48,14 @@ if exists("discord_ids.json"):
 
 
 # noinspection PyShadowingNames
-def log_error(logger: logging.Logger, error: Exception, in_class=None,
+def log_error(logger: logging.Logger,
+              error: Exception,
+              location: Optional[Union[str, Type]] = None,
               ctx: Union[ApplicationContext, Interaction] = None):
-    class_name = in_class if type(in_class) == str else in_class.__name__ if in_class else "N/A"
+
+    location = location if type(location) == str else f"class {location.__name__}" if location else "N/A"
     if error and error.__class__ == discord.errors.NotFound:
-        logger.warning("discord.errors.NotFound Error in %s: %s", class_name, str(error))
+        logger.warning("discord.errors.NotFound Error at %s: %s", location, str(error))
         return
 
     full_error = traceback.format_exception(type(error), error, error.__traceback__)
@@ -65,19 +67,17 @@ def log_error(logger: logging.Logger, error: Exception, in_class=None,
     if isinstance(ctx, ApplicationContext):
         if ctx.guild is not None:
             # Error occurred inside a server
-            err_msg = "An error occurred in class {} in guild {} in channel {}, sent by {}:{} during execution of command \"{}\"" \
-                .format(class_name, ctx.guild.id, ctx.channel_id, ctx.user.id, ctx.user.name,
-                        ctx.command.name)
+            err_msg = "An error occurred at {} in guild {} in channel {}, sent by {}:{} during execution of command \"{}\"" \
+                .format(location, ctx.guild.id, ctx.channel_id, ctx.user.id, ctx.user.name, ctx.command.name)
         else:
             # Error occurred inside a direct message
-            err_msg = "An error occurred in class {} outside of a guild in channel {}, sent by {}:{} during execution of command \"%s\"" \
-                .format(class_name, ctx.channel_id, ctx.user.id, ctx.user.name,
-                        ctx.command.name)
+            err_msg = "An error occurred at {} outside of a guild in channel {}, sent by {}:{} during execution of command \"%s\"" \
+                .format(location, ctx.channel_id, ctx.user.id, ctx.user.name, ctx.command.name)
     elif isinstance(ctx, Interaction):
-        err_msg = "An error occurred in class {} during interaction in guild {} in channel {}, user %s: {}" \
-            .format(class_name, ctx.guild_id, ctx.channel_id, ctx.user.id, ctx.user.name)
+        err_msg = "An error occurred at {} during interaction in guild {} in channel {}, user %s: {}" \
+            .format(location, ctx.guild_id, ctx.channel_id, ctx.user.id, ctx.user.name)
     else:
-        err_msg = "An error occurred in class {}".format(class_name)
+        err_msg = "An error occurred at {}".format(location)
 
     logger.error(err_msg)
     for line in full_error:
@@ -274,6 +274,7 @@ class OCRBaseData:
         super().__init__()
         self.bounding_box = None  # type: dict[str, int] | None
         self.img = None  # type: ndarray | None
+        self.valid = False  # type: bool
 
 
 class ErrorHandledModal(Modal):

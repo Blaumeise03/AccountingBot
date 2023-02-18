@@ -156,17 +156,16 @@ async def on_error(event_name, *args, **kwargs):
         logging.warning("discord.errors.NotFound Error in %s: %s", event_name, str(info[1]))
         return
     if info and len(info) > 2:
-        utils.log_error(logger, info[1], in_class="bot.event.on_error")
+        utils.log_error(logger, info[1], location="bot.event.on_error")
     else:
         logging.exception("An unhandled error occurred: %s", event_name)
     pass
 
 
 def handle_asyncio_exception(error_loop: AbstractEventLoop, context: dict[str, Any]):
-    logger.error("Exception in event_loop: %s",
-                 context["message"])
+    logger.error("Unhandled exception in event_loop: %s", context["message"])
     if "exception" in context:
-        utils.log_error(logger, error=context["exception"], in_class="event_loop")
+        utils.log_error(logger, error=context["exception"], location="event_loop")
 
 
 @tasks.loop(seconds=10.0)
@@ -175,12 +174,17 @@ async def log_loop():
     Logging loop. Will send every 10 seconds all logs into a specified discord channel.
     See :class:`accounting_bot.discordLogger.PycordHandler` for more details.
     """
-    await discord_handler.process_logs()
-
-
-@log_loop.error
-async def handle_ocr_error(error: Exception):
-    utils.log_error(logger, error, in_class="log_loop")
+    try:
+        await discord_handler.process_logs()
+        if log_loop.minutes != 0 and log_loop.seconds != 10:
+            # If the log_loop intervall is not set to the default value (e.g. because of an exception, see below),
+            # the interval is reset to default if no error occurred this time.
+            log_loop.change_interval(minutes=0, seconds=10)
+    except Exception as e:
+        utils.log_error(logger, e, location="log_loop")
+        # Pausing log_loop to avoid the exception getting spammed
+        logger.warning("Pausing log_loop for 10 Minutes")
+        log_loop.change_interval(minutes=10, seconds=0)
 
 
 @bot.event
@@ -325,8 +329,9 @@ async def on_message(message: Message):
                 return
             if not isinstance(message.channel, DMChannel):
                 await message.author.send("Du hast ein Bild im Accountinglog gepostet. Wenn es sich um eine "
-                                          "Corporationsmission handelt, kannst Du sie mir hier per Direktnachricht "
-                                          "schicken, um sie per Texterkennung automatisch verarbeiten zu lassen.")
+                                          "Corporationsmission oder eine Spende handelt, kannst Du sie mir hier per "
+                                          "Direktnachricht schicken, um sie per Texterkennung automatisch verarbeiten "
+                                          "zu lassen.\nSpenden kannst Du dann auch selbst verifizieren.")
                 return
             channel = message.author.id
             thread = Thread(
