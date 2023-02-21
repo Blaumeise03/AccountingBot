@@ -80,7 +80,7 @@ def set_up(config: Config,
     ADMINS = config["admins"]
     STATE = state
     logger.info("Loading embed config...")
-    with open("embeds.json", "r") as embed_file:
+    with open("resources/embeds.json", "r") as embed_file:
         embeds = json.load(embed_file)
         EMBED_MENU_INTERNAL = Embed.from_dict(embeds["MenuEmbedInternal"])
         EMBED_MENU_EXTERNAL = Embed.from_dict(embeds["MenuEmbedExternal"])
