@@ -431,7 +431,7 @@ class Transaction:
             return False
         if self.name_from == self.name_to:
             return False
-        if self.amount <= 0:
+        if self.amount is None or self.amount <= 0:
             return False
         if self.purpose is None or len(self.purpose.strip()) == 0:
             return False
@@ -606,6 +606,8 @@ async def send_transaction(embeds: List[Union[Embed, Transaction]], interaction:
     :param interaction: discord interaction for the response
     :param note: the note which should be sent
     """
+    msg = None
+    await interaction.response.defer(ephemeral=True)
     for embed in embeds:
         if embed is None:
             continue
@@ -633,8 +635,8 @@ async def send_transaction(embeds: List[Union[Embed, Transaction]], interaction:
         except mariadb.Error as e:
             note += "\nFehler beim Eintragen in die Datenbank, die Transaktion wurde jedoch trotzdem im " \
                     f"Accountinglog gepostet. Informiere bitte einen Admin, danke.\n{e}"
-        return msg
-    await interaction.response.send_message("Transaktion gesendet!" + note, ephemeral=True)
+    await interaction.followup.send("Transaktion gesendet!" + note, ephemeral=True)
+    return msg
 
 
 # noinspection PyUnusedLocal

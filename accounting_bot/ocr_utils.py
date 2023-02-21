@@ -122,7 +122,8 @@ class CorporationMission(TransactionLike, OCRBaseData):
         # Find line for ISK
         for cords, t in text:  # type: (dict, str)
             rel_cords = to_relative_cords(cords, width, height)
-
+            if rel_cords["x1"] < 0.1:
+                continue
             # Check if image contains a mission
             is_mission = max(difflib.SequenceMatcher(None, "MISSION", t).ratio(),
                              difflib.SequenceMatcher(None, "MISSIONSDETAILS", t).ratio(),
@@ -291,7 +292,7 @@ class MemberDonation(TransactionLike, OCRBaseData):
                 set_bounding_box(bounding_box, cords)
             elif quantity_line and abs(rel_y - quantity_line) < 0.05:
                 quantity_raw = re.sub("[.,]", "", txt).upper() \
-                    .replace("D", "0").replace("O", "0").strip()
+                    .replace("D", "0").replace("O", "0").replace("$", "5").strip()
                 if quantity_raw.isdigit():
                     donation.amount = int(quantity_raw)
                     set_bounding_box(bounding_box, cords)
@@ -316,8 +317,7 @@ class MemberDonation(TransactionLike, OCRBaseData):
     def validate(self):
         self.valid = self.is_donation and \
                      self.main_char is not None and \
-                     self.amount is not None and \
-                     self.time is not None
+                     self.amount is not None
 
 
 def get_message(data: OCRBaseData) -> str:
@@ -359,14 +359,15 @@ def get_message(data: OCRBaseData) -> str:
         if not donation.is_donation:
             msg += "**Fehler**: Das Bild enthält keine Spende\n"
         if not donation.time:
-            msg += "**Fehler**: Die Zeit wurde nicht erkannt\n"
+            msg += "**Fehler**: Die Zeit wurde nicht erkannt, verwende aktuelle Zeit\n"
+            donation.time = datetime.datetime.now()
         if not donation.main_char:
             msg += "**Fehler**: Der Nutzername wurde nicht erkannt\n"
         if not donation.amount:
             msg += "**Fehler**: Die Menge wurde nicht erkannt\n"
         if not donation.valid:
             msg += "\n**Fehlgeschlagen**: Die Spende wurde nicht korrekt erkannt. Bitte sende nur unbearbeitete " \
-                   "Screenshots (d.h. schneide das Bild bitte nicht passend zu). Wenn es sich um einen Fehler vom" \
+                   "Screenshots (d.h. schneide das Bild bitte nicht passend zu). Wenn es sich um einen Fehler vom " \
                    "Bot handelt, poste die Spende manuell im Accountinglog.\n" \
                    "Du kannst außerdem einen Admin informieren, damit die Bilderkennung verbessert werden kann.\n"
         return msg

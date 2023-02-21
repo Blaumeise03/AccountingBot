@@ -13,6 +13,7 @@ from typing import TYPE_CHECKING, Union, Optional, Tuple, Callable, Dict, List, 
 
 import cv2
 import numpy
+import numpy as np
 import requests
 from PIL import Image
 from discord import Message
@@ -46,12 +47,31 @@ def apply_dilation(img: ndarray,
                    rect: Tuple[int, int],
                    iterations: int,
                    debug=False) -> ndarray:
+
     # Apply threshold
     thresh = cv2.adaptiveThreshold(img, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY_INV, block_size, c)
+
+    # Filter out horizontal and vertical lines of threshold
+    thresh_h = cv2.threshold(thresh, 0, 255, cv2.THRESH_OTSU)[1]
+    horizontal_kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (25, 1))
+    vertical_kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (1, 25))
+    detected_h_lines = cv2.morphologyEx(thresh_h, cv2.MORPH_OPEN, horizontal_kernel, iterations=2)
+    detected_v_lines = cv2.morphologyEx(thresh_h, cv2.MORPH_OPEN, vertical_kernel, iterations=2)
+    detected_lines = detected_h_lines + detected_v_lines
+    np.clip(detected_lines, 0, 255, out=detected_lines)
+    cnts = cv2.findContours(detected_lines, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    cnts = cnts[0] if len(cnts) == 2 else cnts[1]
+    for cnt in cnts:
+        cv2.drawContours(thresh, [cnt], -1, (0, 0, 0), 2)
+
+    # Filter out noise (single dots)
+    kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (1, 2))
+    thresh = cv2.morphologyEx(thresh, cv2.MORPH_OPEN, kernel, iterations=1)
+
     if debug:
         cv2.imwrite(WORKING_DIR + '/image_threshold.jpg', thresh)
 
-    # Detect text
+    # Dilation of text areas
     rect_kernel = cv2.getStructuringElement(cv2.MORPH_RECT, rect)
     dilation = cv2.dilate(thresh, rect_kernel, iterations=iterations)
     if debug:
@@ -64,7 +84,7 @@ def apply_lut(lut_in: List[int], lut_out: List[int], img: ndarray) -> ndarray:
     return cv2.LUT(img, lut_8u)
 
 
-def preprocess_mission(img: ndarray, debug=False) -> Tuple[ndarray, ndarray]:
+def preprocess_mission(img: ndarray, rect=(2, 2), debug=False) -> Tuple[ndarray, ndarray]:
     # Greyscale
     gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
     gray = (255 - gray)
@@ -83,14 +103,15 @@ def preprocess_mission(img: ndarray, debug=False) -> Tuple[ndarray, ndarray]:
         img=gray,
         block_size=11,
         c=9,
-        rect=(2, 2),
+        rect=rect,
         iterations=6,
         debug=debug
     )
     return dilation, img_lut
 
 
-def preprocess_donation(img: ndarray, debug=False) -> Tuple[ndarray, ndarray]:
+def preprocess_donation(img: ndarray, rect=(3, 1), debug=False) -> Tuple[ndarray, ndarray]:
+    img_b, img_g, img_r = cv2.split(img)
     # Dilation image for text area detection
     gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
     gray = 255 - gray
@@ -102,19 +123,34 @@ def preprocess_donation(img: ndarray, debug=False) -> Tuple[ndarray, ndarray]:
     dilation = apply_dilation(
         img=img_lut_thresh,
         block_size=7,
-        c=9,
-        rect=(3, 1),
+        c=10,
+        rect=rect,
         iterations=6,
         debug=debug
     )
 
     # Image for OCR with improved readability
-    img_lut = apply_lut(
-        lut_in=[0, 59, 130, 255],
-        lut_out=[0, 43, 217, 255],
-        img=img
+    #img_lut = apply_lut(
+    #    lut_in=[0, 59, 130, 255],
+    #    lut_out=[0, 43, 217, 255],
+    #    img=img
+    #)
+    img_b_lut = apply_lut(
+        lut_in=[0, 54, 86, 255],
+        lut_out=[0, 17, 153, 255],
+        img=img_b
     )
-
+    img_g_lut = apply_lut(
+        lut_in=[0, 44, 73, 255],
+        lut_out=[0, 8, 85, 255],
+        img=img_g
+    )
+    img_r_lut = apply_lut(
+        lut_in=[0, 59, 144, 255],
+        lut_out=[0, 31, 239, 255],
+        img=img_r
+    )
+    img_lut = cv2.merge([img_b_lut, img_g_lut, img_r_lut])
     if debug:
         cv2.imwrite(WORKING_DIR + '/image_LUT.jpg', img_lut)
     return dilation, img_lut
@@ -170,8 +206,11 @@ def extract_text(dilation: ndarray,
         cropped = im2[y:y + h, x:x + w]
 
         # Using tesseract on the cropped image to get the text
-        text = pytesseract.image_to_string(cropped)  # type: str
+        text = pytesseract.image_to_string(
+            image=cropped
+        )  # type: str
         text = text.strip()
+
         if len(text) == 0:
             continue
         # Draw the bounding box on around the text area
@@ -185,8 +224,18 @@ def extract_text(dilation: ndarray,
             {"x1": x, "x2": x + w, "y1": y, "y2": y + h},
             text
         ))
+
         if skip_donations and rel_cords["x1"] < 0.2 and match_donation(text) > 0.75:
+            with open(WORKING_DIR + f"/image_text{postfix}.txt", mode="w", encoding="utf-8") as fp:
+                for c, t in result:
+                    # write each item on a new line
+                    fp.write("{}:{}\n".format(c, t))
             return result, rect
+
+    with open(WORKING_DIR + f"/image_text{postfix}.txt", 'w') as fp:
+        for c, t in result:
+            # write each item on a new line
+            fp.write("{}:{}\n".format(c, t))
     return result, rect
 
 
@@ -266,15 +315,40 @@ def handle_image(url: str,
                 logger.warning("Image %s download from %s (%s) failed: %s", image_name, message.author.name,
                                message.author.id, res.status_code)
 
-        image = Image.open(file_name)
-        image.thumbnail((1500, 4000), Image.LANCZOS)
-        image.save(WORKING_DIR + "/image_rescaled_" + img_id + ".png", "PNG")
-        img = cv2.imread(WORKING_DIR + "/image_rescaled_" + img_id + ".png")
-        dilation, img_lut = preprocess_mission(img, debug=debug)
-        res = extract_text(dilation, img_lut, skip_donations=True)
+        # image = Image.open(file_name)
+        # image.thumbnail((1500, 4000), Image.LANCZOS)
+        # image.save(WORKING_DIR + "/image_rescaled_" + img_id + ".png", "PNG")
+        # img = cv2.imread(WORKING_DIR + "/image_rescaled_" + img_id + ".png")
+
+        resolutions = [
+            # res, (l, u, r, d), (l, u, r, d)
+            (1500, (9, 9, 8, 8), (4, 7, 12, 9), (2, 2), (3, 1)),
+            (2000, (10, 9, 9, 8), (5, 7, 13, 10), (2, 2), (4, 2)),
+            (2500, (11, 9, 10, 8), (6, 7, 13, 10), (3, 2), (4, 2)),
+                       ]
+
+        img = cv2.imread(file_name)
+        height, width, _ = img.shape
+        exp_mission = None
+        exp_donation = None
+        dil_rect_mission = None
+        dil_rect_donation = None
+        for res, ex1, ex2, r1, r2 in resolutions:
+            if res is None or width < res:
+                exp_mission = ex1
+                exp_donation = ex2
+                dil_rect_mission = r1
+                dil_rect_donation = r2
+        dilation, img_lut = preprocess_mission(img, rect=dil_rect_mission, debug=debug)
+        res = extract_text(
+            dilation,
+            img_lut,
+            expansion=exp_mission,
+            rel_bounds={"x1": 0.1, "x2": 0.9, "y1": 0, "y2": 1},
+            skip_donations=True)
         text = res[0]
         img_rect = res[1] if len(res) > 1 else None
-        height, width, _ = img.shape
+
         img_type = get_image_type(text, width, height)
         valid = False
         data = None  # type: OCRBaseData | None
@@ -286,11 +360,11 @@ def handle_image(url: str,
                 logger.info("Detected CorporationMission from %s:%s: %s", message.author.name, message.author.id,
                             image_name)
         elif img_type == 1:
-            dilation, img_lut = preprocess_donation(img, debug=debug)
+            dilation, img_lut = preprocess_donation(img, rect=dil_rect_donation, debug=debug)
             res = extract_text(
                 dilation,
                 img_lut,
-                expansion=(4, 7, 12, 10),
+                expansion=exp_donation,
                 rel_bounds={"x1": 0, "x2": 0.3, "y1": 0, "y2": 0.7}
             )
             text = res[0]
@@ -328,7 +402,7 @@ def handle_image(url: str,
             os.remove(file_name)
 
 
-async def handle_prc_result(res: Tuple[int, int, Union[CorporationMission, MemberDonation], str, Optional[ndarray]]) -> None:
+async def handle_orc_result(res: Tuple[int, int, Union[CorporationMission, MemberDonation], str, Optional[ndarray]]) -> None:
     channel_id = res[0]
     author = res[1]
     data = res[2]
@@ -404,7 +478,7 @@ async def ocr_result_loop():
                     continue
                 res = return_missions.list[i]
                 return_missions.list[i] = None
-                await handle_prc_result(res)
+                await handle_orc_result(res)
 
             while None in return_missions.list:
                 return_missions.list.remove(None)

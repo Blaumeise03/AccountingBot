@@ -38,6 +38,35 @@ class CorpmissionOCRTest(unittest.TestCase):
         logging.info("Tesseract version " + str(tesseract_version) + " installed!")
         corpmissionOCR.STATE = TestState()
 
+    def test_tmp(self):
+        files = [
+            "images/img_donation_en_1280x720.png",
+            "images/img_donation_en_1600x900.png",
+            "images/img_donation_en_2340x1080.png",
+            "images/img_donation_de_3840x2160.png",
+        ]
+        utils.ingame_chars = ["Blaumeise03", "Blaumeise04"]
+        utils.main_chars = ["Blaumeise03"]
+        utils.ingame_twinks = {"Blaumeise04": "Blaumeise03"}
+        user = TestUser(2, "TestUser")
+        msg = TestMessage(1, user)
+        for file in files:
+            corpmissionOCR.return_missions.list.clear()
+            corpmissionOCR.handle_image("", "png", msg, 2, user, file, no_delete=True, debug=True)
+
+            channel, author, donation, img_id, img = corpmissionOCR.return_missions.list[
+                0]  # type: object, object, corpmissionOCR.MemberDonation, str, ndarray
+            self.assertEqual(corpmissionOCR.MemberDonation, donation.__class__)
+            self.assertEqual(12346789, donation.amount)
+            self.assertEqual("Blaumeise03", donation.main_char)
+            self.assertEqual("Blaumeise03", donation.username)
+            self.assertEqual(datetime.strptime("2023-02-18 18:04:53", "%Y-%m-%d %H:%M:%S"), donation.time)
+            self.assertTrue(donation.is_donation)
+            self.assertTrue(donation.valid)
+            self.assertIsNotNone(img)
+
+        self.assertTrue(True)
+
     def test_donation(self):
         utils.ingame_chars = ["Blaumeise03", "Blaumeise04"]
         utils.main_chars = ["Blaumeise03"]
