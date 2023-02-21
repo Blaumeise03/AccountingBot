@@ -328,10 +328,10 @@ async def on_message(message: Message):
             if not "://cdn.discordapp.com".casefold() in url.casefold():
                 return
             if not isinstance(message.channel, DMChannel):
-                await message.author.send("Du hast ein Bild im Accountinglog gepostet. Wenn es sich um eine "
-                                          "Corporationsmission oder eine Spende handelt, kannst Du sie mir hier per "
-                                          "Direktnachricht schicken, um sie per Texterkennung automatisch verarbeiten "
-                                          "zu lassen.\nSpenden kannst Du dann auch selbst verifizieren.")
+                # await message.author.send("Du hast ein Bild im Accountinglog gepostet. Wenn es sich um eine "
+                #                           "Corporationsmission oder eine Spende handelt, kannst Du sie mir hier per "
+                #                           "Direktnachricht schicken, um sie per Texterkennung automatisch verarbeiten "
+                #                           "zu lassen.\nSpenden kannst Du dann auch selbst verifizieren.")
                 return
             channel = message.author.id
             thread = Thread(
