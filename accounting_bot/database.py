@@ -1,17 +1,17 @@
 import logging
 from time import sleep
-from typing import Union, Optional, Tuple, List
+from typing import Union, Optional, Tuple, List, Sequence
 
 import mariadb
-
+from mariadb import Cursor, Connection
 
 logger = logging.getLogger("database")
 
 
 class DatabaseConnector:
     def __init__(self, username: str, password: str, host: str, port: str, database: str) -> None:
-        self.cursor = None
-        self.con = None
+        self.cursor = None  # type: Cursor | None
+        self.con = None  # type: Connection | None
         self.username = username
         self.password = password
         self.host = host
@@ -57,6 +57,17 @@ class DatabaseConnector:
                                 ") ENGINE = InnoDB; ")
         except mariadb.Error as e:
             logger.error(f"Error connecting to MariaDB Platform: {e}")
+            raise e
+
+    def execute_statement(self, statement: str, data: Sequence = ()) -> Cursor:
+        if self.con is None or not self.con.open:
+            self.try_connect()
+        try:
+            self.cursor.execute(statement, data)
+            self.con.commit()
+            return self.cursor
+        except mariadb.Error as e:
+            logger.error("Error while trying to execute statement %s: %s", statement, e)
             raise e
 
     def add_transaction(self, message: int, user: int) -> None:

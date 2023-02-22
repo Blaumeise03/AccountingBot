@@ -55,3 +55,7 @@ class ConfigDataTypeException(ConfigException):
 class BotOfflineException(Exception):
     def __init__(self, message="Action can't be executed", *args: object) -> None:
         super().__init__(str(STATE.state) + ": " + str(message), *args)
+
+
+class PlanetaryProductionException(Exception):
+    pass
