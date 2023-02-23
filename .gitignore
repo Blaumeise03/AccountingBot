@@ -2,6 +2,14 @@ logs/
 .idea/
 venv/
 images/
+
+# EVE Online Static Data Export (SDE) can be found on their website as a bundled zip
+# (https://developers.eveonline.com/resource), however this data is unprocessed
+# On the UNIWIKI the data is available as prepared .csv files
+# (https://wiki.eveuniversity.org/Static_Data_Export)
+resources/map*.csv
+resources/*.eve.csv
+
 python
 .env
 config.json

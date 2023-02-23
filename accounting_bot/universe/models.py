@@ -1,8 +1,7 @@
 import enum
-from typing import List, Optional
+from typing import List, Optional, TYPE_CHECKING
 
 from sqlalchemy import String, ForeignKey, Float, Enum, BigInteger, Integer
-from sqlalchemy.ext.hybrid import hybrid_property
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
 
@@ -62,7 +61,16 @@ class System(Base):
     faction_id: Mapped[int] = mapped_column(Integer, nullable=True)
     radius: Mapped[int] = mapped_column(BigInteger, nullable=True)
     security_class: Mapped[str] = mapped_column(String(5), nullable=True)
-    planets: Mapped[List["Celestial"]] = relationship(back_populates="system")
+    celestials: Mapped[List["Celestial"]] = relationship(back_populates="system")
+    planets: List["Celestial"]
+
+    @property
+    def planets(self) -> List["Celestial"]:
+        planet_list = []
+        for celestial in self.celestials:
+            if celestial.type == Celestial.Type.planet:
+                planet_list.append(celestial)
+        return planet_list
 
     def __repr__(self) -> str:
         return f"System(id={self.id!r}, name={self.name!r}, const={self.constellation.name!r})"
@@ -103,9 +111,9 @@ class Celestial(Base):
             return 'MapType(%s, type_id %r, group_id %r)' % (self.__name__, self.typeID, self.groupID)
 
         @staticmethod
-        def from_type_id(type_id):
+        def from_group_id(group_id):
             for c_type in Celestial.Type:
-                if c_type.typeID == type_id:
+                if c_type.groupID == group_id:
                     return c_type
             return None
 
@@ -141,7 +149,7 @@ class Celestial(Base):
     type_id: Mapped[int] = mapped_column(Integer, nullable=True)
     group_id: Mapped[int] = mapped_column(Integer, nullable=True)
     system_id = mapped_column(ForeignKey("system.id", name="key_celest_sys"))
-    system: Mapped[System] = relationship(back_populates="planets")
+    system: Mapped[System] = relationship(back_populates="celestials")
     orbit_id: Mapped[int] = mapped_column(Integer, nullable=True)
     x: Mapped[int] = mapped_column(BigInteger, nullable=True)
     y: Mapped[int] = mapped_column(BigInteger, nullable=True)
@@ -151,15 +159,14 @@ class Celestial(Base):
     security: Mapped[int] = mapped_column(Float, nullable=True)
     celestial_index: Mapped[int] = mapped_column(Integer, nullable=True)
     orbit_index: Mapped[int] = mapped_column(Integer, nullable=True)
-    # type: # Mapped[PlanetType] = mapped_column(Enum(PlanetType))
     resources: Mapped[List["Resource"]] = relationship(back_populates="planet")
 
     @hybrid_property
-    def type(self):
-        return Celestial.Type.from_type_id(self.type_id)
+    def type(self) -> Type:
+        return Celestial.Type.from_group_id(self.group_id)
 
     @hybrid_property
-    def planet_type(self):
+    def planet_type(self) -> PlanetType:
         return Celestial.PlanetType.from_type_id(self.type_id)
 
     def __repr__(self) -> str:
@@ -175,7 +182,7 @@ class Item(Base):
     __tablename__ = "item"
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
     name: Mapped[str] = mapped_column(String(60), index=True)
-    type: Mapped[str] = mapped_column(String(10), nullable=True)
+    type: Mapped[str] = mapped_column(String(15), nullable=True)
 
     def __repr__(self) -> str:
         return f"Item(id={self.id!r}, name={self.name!r}, type={self.type!r})"

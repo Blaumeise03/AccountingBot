@@ -1,12 +1,13 @@
+import json
 import logging
 import math
 import multiprocessing
 import os
 import sys
 from multiprocessing.pool import ThreadPool
-from typing import Optional
+from typing import Optional, Dict, Tuple
 
-from sqlalchemy import create_engine, Table, MetaData, Column, Integer, String, text
+from sqlalchemy import create_engine, Table, MetaData, Column, Integer, String, text, update, between
 from sqlalchemy.orm import Session
 
 from accounting_bot.config import Config, ConfigTree
@@ -29,6 +30,19 @@ class PlanetaryDatabase:
         System.__table__.create(bind=self.engine, checkfirst=True)
         Celestial.__table__.create(bind=self.engine, checkfirst=True)
         Resource.__table__.create(bind=self.engine, checkfirst=True)
+
+    def fetch_system(self, system_name: str) -> Optional[System]:
+        with Session(self.engine, expire_on_commit=False) as conn:
+            return conn.query(System).filter(System.name == system_name).first()
+
+    def fetch_planet(self, planet_name: str) -> Optional[Celestial]:
+        with Session(self.engine, expire_on_commit=False) as conn:
+            return conn.query(Celestial).filter(Celestial.name == planet_name).first()
+
+
+class DatabaseInitializer(PlanetaryDatabase):
+    def __init__(self, db: DatabaseConnector) -> None:
+        super().__init__(db)
 
     def init_db_from_csv(self,
                          path: str,
@@ -71,7 +85,7 @@ class PlanetaryDatabase:
                         else:
                             logger.info("Processing line %s, %s/%s (%s)",
                                         line_i, line_i - start, size,
-                                        "{:.2%}".format((line_i - start)/size))
+                                        "{:.2%}".format((line_i - start) / size))
                         session.commit()
 
                     resource_type = session.query(Item).filter(Item.name == res_n).first()
@@ -113,6 +127,19 @@ class PlanetaryDatabase:
         pool.starmap(self.init_db_from_csv, args)
         logger.info("Threadpool finished, database initialized")
 
+    def auto_init_item_types(self, types: Dict[str, Tuple[int, int]]):
+        with self.engine.begin() as conn:
+            logger.info("Initializing item types for database")
+            for k, v in types.items():
+                logger.info("Updating item type for [%s, %s] to '%s'", v[0], v[1], k)
+                stmt = (update(Item)
+                        .where(between(Item.id, v[0], v[1]))
+                        .values(type=k)
+                        )
+                result = conn.execute(stmt)
+                pass
+            logger.info("Item types updated")
+
 
 if __name__ == '__main__':
     formatter = logging.Formatter(fmt="[%(asctime)s][%(levelname)s][%(name)s][%(threadName)s]: %(message)s")
@@ -122,6 +149,7 @@ if __name__ == '__main__':
     console.setFormatter(formatter)
     logger.addHandler(console)
     logging.root.setLevel(logging.NOTSET)
+    logging.getLogger('sqlalchemy.engine').setLevel(logging.INFO)
     # noinspection DuplicatedCode
     config_structure = {
         "db": {
@@ -135,12 +163,11 @@ if __name__ == '__main__':
         "project_resources": (list, [],),
         "pytesseract_cmd_path": (str, "N/A"),
     }
-
-    config = Config("../../tests/test_config.json", ConfigTree(config_structure))
+    path = input("Enter path to config: ")
+    config = Config(path, ConfigTree(config_structure))
     config.load_config()
     db_name = config["db.name"]  # type: str
-    # if not "test".casefold() in db_name.casefold():
-        # raise Exception(f"Database {db_name} is probably not a testdatabase, test evaluation canceled.")
+
     connector = DatabaseConnector(
         username=config["db.user"],
         password=config["db.password"],
@@ -148,6 +175,19 @@ if __name__ == '__main__':
         host=config["db.host"],
         database=config["db.name"]
     )
-    db = PlanetaryDatabase(connector)
-    input("Press enter to process resource file (this may take a while time)...")
-    db.auto_init_pool("../../resources/planetary_production.csv", pool_size=5)
+    db = DatabaseInitializer(connector)
+    inp = input(
+        "Press enter 'i' to load the planetary production database. Enter 't' to initialize the item types: ").casefold()
+
+    if inp == "i".casefold():
+        print("Required format for planetary_production.csv")
+        print("Planet ID;Region;Constellation;System;Planet Name;Planet Type;Resource;Richness;Output")
+        path = input("Enter path to planetary_production.csv: ")
+        db.auto_init_pool("../../resources/planetary_production.csv", pool_size=5)
+    elif inp == "t".casefold():
+        with open("../../resources/item_types.json") as f:
+            data = f.read()
+        types = json.loads(data)
+        db.auto_init_item_types(types)
+    else:
+        print(f"Error, unknown input '{inp}'")
