@@ -12,8 +12,7 @@ from sqlalchemy.orm import Session
 from accounting_bot.config import Config, ConfigTree
 from accounting_bot.database import DatabaseConnector
 from accounting_bot.exceptions import PlanetaryProductionException
-from accounting_bot.universe.models import Region, Constellation, Planet, PlanetType, ResourceType, Resource, Richness, \
-    System
+from accounting_bot.universe.models import Region, Constellation, Celestial, Item, Resource, Richness, System
 
 logger = logging.getLogger("bot.pi")
 
@@ -26,89 +25,61 @@ class PlanetaryDatabase:
                                     )
         Region.__table__.create(bind=self.engine, checkfirst=True)
         Constellation.__table__.create(bind=self.engine, checkfirst=True)
-        ResourceType.__table__.create(bind=self.engine, checkfirst=True)
+        Item.__table__.create(bind=self.engine, checkfirst=True)
         System.__table__.create(bind=self.engine, checkfirst=True)
-        Planet.__table__.create(bind=self.engine, checkfirst=True)
+        Celestial.__table__.create(bind=self.engine, checkfirst=True)
         Resource.__table__.create(bind=self.engine, checkfirst=True)
 
     def init_db_from_csv(self,
                          path: str,
                          start: Optional[int] = None,
                          end: Optional[int] = None,
-                         start_planet: Optional[int] = None,
-                         auto: bool = False):
-        logger.warning("Initialising planetary production database with file %s, start: %s, end: %s, start_planet: %s, auto: %s",
-                       path, start, end, start_planet, auto)
+                         separator: str = ";",
+                         start_planet: Optional[int] = None):
+        logger.warning("Initialising planetary production database with file %s, start: %s, end: %s, start_planet: %s",
+                       path, start, end, start_planet)
         line_i = 0
-        session = Session(self.engine)
-        if auto:
-            result = session.execute(text("SELECT MAX(id) as max_planet FROM planet;"))
-            result = result.fetchone()
-            if result is not None and len(result) == 1:
-                start_planet = result[0]
-        size = None  # type: int | None
-        if start is not None and end is not None:
-            size = end - start
-        with open(path, "r") as file:
-            for line in file:
-                line_i += 1
-                if line_i == 1:
-                    continue
-                if start is not None and line_i < start:
-                    continue
-                if end is not None and line_i > end:
-                    logger.warning("Line %s reached, stopping initialization", end)
+        with Session(self.engine) as session:
+            size = None  # type: int | None
+            if start is not None and end is not None:
+                size = end - start
+            with open(path, "r") as file:
+                for line in file:
+                    line_i += 1
+                    if line_i == 1:
+                        continue
+                    if start is not None and line_i < start:
+                        continue
+                    if end is not None and line_i > end:
+                        logger.warning("Line %s reached, stopping initialization", end)
+                        break
 
-                line = line.replace("\n", "").split(";")
-                if len(line) < 9:
-                    raise PlanetaryProductionException(f"CSV file {path} has invalid entry in line {str(line_i)}")
-                p_id = int(line[0])
-                reg_n = line[1].strip()
-                const_n = line[2].strip()
-                sys_n = line[3].strip()
-                p_n = line[4].strip()
-                p_t = PlanetType.from_str(line[5].strip())
-                res_n = line[6].strip()
-                rich = Richness.from_str(line[7].strip())
-                out = float(line[8].replace(",", "."))
+                    line = line.replace("\n", "").split(separator)
+                    if len(line) < 9:
+                        raise PlanetaryProductionException(f"CSV file {path} has invalid entry in line {str(line_i)}")
+                    p_id = int(line[0])
+                    res_n = line[6].strip()
+                    rich = Richness.from_str(line[7].strip())
+                    out = float(line[8].replace(",", "."))
 
-                if start_planet is not None and p_id < start_planet:
-                    continue
+                    if start_planet is not None and p_id < start_planet:
+                        continue
 
-                if line_i % 100 == 0:
-                    if size is None or start is None:
-                        logger.info("Processing line %s", line_i)
-                    else:
-                        logger.info("Processing line %s, %s/%s (%s)",
-                                    line_i, line_i - start, size,
-                                    "{:.2%}".format((line_i - start)/size))
-                    session.commit()
+                    if line_i % 100 == 0:
+                        if size is None or start is None:
+                            logger.info("Processing line %s", line_i)
+                        else:
+                            logger.info("Processing line %s, %s/%s (%s)",
+                                        line_i, line_i - start, size,
+                                        "{:.2%}".format((line_i - start)/size))
+                        session.commit()
 
-                region = session.query(Region).filter(Region.name == reg_n).first()
-                if region is None:
-                    region = Region(name=res_n)
-                    session.add(region)
-                constellation = session.query(Constellation).filter(Constellation.name == const_n).first()
-                if constellation is None:
-                    constellation = Constellation(name=const_n, region=region)
-                    session.add(constellation)
-                system = session.query(System).filter(System.name == sys_n).first()
-                if system is None:
-                    system = System(name=sys_n, constellation=constellation)
-                    session.add(system)
-                planet = session.query(Planet).filter(Planet.id == p_id).first()
-                if planet is None:
-                    planet = Planet(id=p_id, name=p_n, system=system, type=p_t)
-                    session.add(planet)
-                resource_type = session.query(ResourceType).filter(ResourceType.name == res_n).first()
-                if resource_type is None:
-                    resource_type = ResourceType(name=res_n)
-                    session.add(resource_type)
-                resource = session.query(Resource).filter(Resource.planet == planet and Resource.type == resource_type).first()
-                if resource is None:
-                    resource = Resource(planet=planet, type=resource_type, output=out, richness=rich)
+                    resource_type = session.query(Item).filter(Item.name == res_n).first()
+                    if resource_type is None:
+                        raise PlanetaryProductionException("Ressource Type %s not found in database", resource_type)
+                    resource = Resource(planet_id=p_id, type=resource_type, output=out, richness=rich)
                     session.add(resource)
-            session.commit()
+                session.commit()
             logger.info("Database initialized")
 
     def auto_init_pool(self, path: str, pool_size=20):
@@ -121,6 +92,7 @@ class PlanetaryDatabase:
                 b = reader(1024 * 1024)
 
         with open(path, 'rb') as fp:
+            # noinspection PyUnresolvedReferences
             c_generator = _count_generator(fp.raw.read)
             # count each \n
             file_length = sum(buffer.count(b'\n') for buffer in c_generator)
@@ -137,18 +109,9 @@ class PlanetaryDatabase:
             else:
                 args.append((path, last_line + 1, last_line + lines_per_thread))
             last_line += lines_per_thread
-
-
         logger.info("Starting threadpool")
         pool.starmap(self.init_db_from_csv, args)
-
-    def test(self):
-        region = Region(name="Region A")
-        const = Constellation(region=region, name="Constellation A")
-        planet_a = Planet(constellation=const, name="Planet I", type=PlanetType.temperate)
-        session = Session(self.engine)
-        session.add(planet_a)
-        session.commit()
+        logger.info("Threadpool finished, database initialized")
 
 
 if __name__ == '__main__':
@@ -176,8 +139,8 @@ if __name__ == '__main__':
     config = Config("../../tests/test_config.json", ConfigTree(config_structure))
     config.load_config()
     db_name = config["db.name"]  # type: str
-    if not "test".casefold() in db_name.casefold():
-        raise Exception(f"Database {db_name} is probably not a testdatabase, test evaluation canceled.")
+    # if not "test".casefold() in db_name.casefold():
+        # raise Exception(f"Database {db_name} is probably not a testdatabase, test evaluation canceled.")
     connector = DatabaseConnector(
         username=config["db.user"],
         password=config["db.password"],
@@ -186,4 +149,5 @@ if __name__ == '__main__':
         database=config["db.name"]
     )
     db = PlanetaryDatabase(connector)
-    db.auto_init_pool("../../resources/planetary_production.csv", pool_size=20)
+    input("Press enter to process resource file (this may take a while time)...")
+    db.auto_init_pool("../../resources/planetary_production.csv", pool_size=5)
