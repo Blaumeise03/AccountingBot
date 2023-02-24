@@ -8,11 +8,12 @@ from multiprocessing.pool import ThreadPool
 from typing import Optional, Dict, Tuple
 
 from sqlalchemy import create_engine, Table, MetaData, Column, Integer, String, text, update, between
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, joinedload
 
 from accounting_bot.config import Config, ConfigTree
 from accounting_bot.database import DatabaseConnector
 from accounting_bot.exceptions import PlanetaryProductionException
+from accounting_bot.universe import models
 from accounting_bot.universe.models import Region, Constellation, Celestial, Item, Resource, Richness, System
 
 logger = logging.getLogger("bot.pi")
@@ -28,6 +29,7 @@ class PlanetaryDatabase:
         Constellation.__table__.create(bind=self.engine, checkfirst=True)
         Item.__table__.create(bind=self.engine, checkfirst=True)
         System.__table__.create(bind=self.engine, checkfirst=True)
+        models.SystemConnections.create(bind=self.engine, checkfirst=True)
         Celestial.__table__.create(bind=self.engine, checkfirst=True)
         Resource.__table__.create(bind=self.engine, checkfirst=True)
 
@@ -140,6 +142,40 @@ class DatabaseInitializer(PlanetaryDatabase):
                 pass
             logger.info("Item types updated")
 
+    def auto_init_stargates(self, file_path: str):
+        with open(file_path, "r") as f:
+            with Session(self.engine) as conn:
+                line_i = 0
+                logger.info("Loading stargates")
+                for line in f:
+                    line_i += 1
+                    if line_i == 1:
+                        continue
+                    if line_i % 100 == 0:
+                        logger.info("Processing line %s", line_i)
+                        conn.commit()
+                    line = line.replace("\n", "").split(",")
+                    gate_a_id = int(line[0])
+                    gate_b_id = int(line[1])
+                    gate_a = (
+                        conn.query(Celestial)
+                        .options(joinedload(Celestial.system))
+                        .filter(Celestial.id == gate_a_id)
+                        .first()
+                    )  # type: Celestial | None
+                    system_a = gate_a.system  # type: System
+                    gate_b = (
+                        conn.query(Celestial)
+                        .options(joinedload(Celestial.system))
+                        .filter(Celestial.id == gate_b_id)
+                        .first()
+                    )  # type: Celestial | None
+                    system_b = gate_b.system  # type: System
+                    system_a.stargates.append(system_b)
+                    pass
+                conn.commit()
+            logger.info("Stargates loaded")
+
 
 if __name__ == '__main__':
     formatter = logging.Formatter(fmt="[%(asctime)s][%(levelname)s][%(name)s][%(threadName)s]: %(message)s")
@@ -177,17 +213,19 @@ if __name__ == '__main__':
     )
     db = DatabaseInitializer(connector)
     inp = input(
-        "Press enter 'i' to load the planetary production database. Enter 't' to initialize the item types: ").casefold()
-
+        "Press enter 'i' to load the planetary production database. Enter 't' to initialize the item types. "
+        "Enter s to initialize stargates: ").casefold()
     if inp == "i".casefold():
         print("Required format for planetary_production.csv")
         print("Planet ID;Region;Constellation;System;Planet Name;Planet Type;Resource;Richness;Output")
         path = input("Enter path to planetary_production.csv: ")
-        db.auto_init_pool("../../resources/planetary_production.csv", pool_size=5)
+        db.auto_init_pool(path, pool_size=5)
     elif inp == "t".casefold():
         with open("../../resources/item_types.json") as f:
             data = f.read()
         types = json.loads(data)
         db.auto_init_item_types(types)
+    elif inp == "s".casefold():
+        db.auto_init_stargates("../../resources/mapJumps.csv")
     else:
         print(f"Error, unknown input '{inp}'")

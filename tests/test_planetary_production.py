@@ -74,6 +74,17 @@ class PlanetaryProductionTest(unittest.TestCase):
             self.assertGreaterEqual(len(cm.output), 2)
             self.assertEqual(9, len(planets))
 
+    def test_stargates(self):
+        with Session(self.db.engine) as conn:
+            with self.assertLogs("sqlalchemy.engine", level="INFO") as cm:
+                system = conn.query(System).filter(System.name.like("IAK-JW")).first()
+                # noinspection PyTypeChecker
+                gates = system.stargates  # type: List[Celestial]
+                gates_names = map(lambda s: s.name, gates)
+            self.assertGreaterEqual(len(cm.output), 2)
+            self.assertEqual(3, len(gates))
+            self.assertCountEqual(gates_names, ["KZFV-4", "RYC-19", "WO-GC0"])
+
 
 if __name__ == '__main__':
     unittest.main()

@@ -1,7 +1,8 @@
 import enum
 from typing import List, Optional, TYPE_CHECKING
 
-from sqlalchemy import String, ForeignKey, Float, Enum, BigInteger, Integer
+from sqlalchemy import String, ForeignKey, Float, Enum, BigInteger, Integer, Table, Column
+from sqlalchemy.ext.hybrid import hybrid_property
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
 
@@ -42,7 +43,13 @@ class Constellation(Base):
     systems: Mapped[List["System"]] = relationship(back_populates="constellation")
 
     def __repr__(self) -> str:
-        return f"Constellation(id={self.id!r}, name={self.name!r}, region={self.region.name!r})"
+        return f"Constellation(id={self.id!r}, name={self.name!r})"
+
+
+SystemConnections = Table(
+    "system_gates", Base.metadata,
+    Column("a", Integer, ForeignKey("system.id", name="key_sysgates_a")),
+    Column("b", Integer, ForeignKey("system.id", name="key_sysgates_b")))
 
 
 class System(Base):
@@ -63,6 +70,10 @@ class System(Base):
     security_class: Mapped[str] = mapped_column(String(5), nullable=True)
     celestials: Mapped[List["Celestial"]] = relationship(back_populates="system")
     planets: List["Celestial"]
+    stargates: Mapped[List["System"]] = relationship("System",
+                                                     secondary=SystemConnections,
+                                                     primaryjoin=SystemConnections.c.b == id,
+                                                     secondaryjoin=SystemConnections.c.a == id)
 
     @property
     def planets(self) -> List["Celestial"]:
@@ -73,7 +84,7 @@ class System(Base):
         return planet_list
 
     def __repr__(self) -> str:
-        return f"System(id={self.id!r}, name={self.name!r}, const={self.constellation.name!r})"
+        return f"System(id={self.id!r}, name={self.name!r})"
 
 
 class Celestial(Base):
@@ -103,7 +114,7 @@ class Celestial(Base):
         planet = None, 7
         moon = None, 8
         asteroid_belt = 15, 9
-        unknown = None, 10
+        stargate = None, 10
         npc_station = None, 15
         unknown_anomaly = None, 995
 
