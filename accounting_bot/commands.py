@@ -3,7 +3,7 @@ import logging
 from typing import TYPE_CHECKING
 
 import discord
-from discord import Option, User, ApplicationContext, AutocompleteContext, option, Role
+from discord import Option, User, ApplicationContext, AutocompleteContext, option, Role, SlashCommand
 from discord.ext import commands
 
 from accounting_bot import accounting, sheet, utils
@@ -16,10 +16,115 @@ if TYPE_CHECKING:
     from bot import BotState
 
 logger = logging.getLogger("bot.commands")
+BOT = None  # type: commands.Bot | None
 
 
 def main_char_autocomplete(self: AutocompleteContext):
     return filter(lambda n: self.value is None or n.startswith(self.value.strip()), utils.main_chars)
+
+
+class HelpCommand(commands.Cog):
+    def __init__(self, state: 'BotState'):
+        global BOT
+        self.state = state
+
+    def commands_autocomplete(self, ctx: AutocompleteContext):
+        cmds = []
+        for name, cog in self.state.bot.cogs.items():
+            cmds.append(name)
+            for cmd in cog.walk_commands():
+                cmds.append(cmd.name)
+        for command in self.state.bot.walk_commands():
+            cmds.append(command.name)
+        return filter(lambda n: ctx.value is None or n.casefold().startswith(ctx.value.casefold().strip()), cmds)
+
+    @commands.slash_command(name="help", description="Help-Command")
+    @option("selection", description="The command/module to get help about.", required=False, default=None,
+            autocomplete=commands_autocomplete)
+    @option("not_silent", description="Execute the command publicly.", required=False, default=False,
+            autocomplete=commands_autocomplete)
+    async def help(self, ctx: ApplicationContext,
+                   selection: str, not_silent: bool):
+        if selection is None:
+            emb = discord.Embed(title="Hilfe", color=discord.Color.red(),
+                                description="Gib `/help <Befehl>` oder `/help <Modul>` ein für weitere Informationen")
+            for name, cog in self.state.bot.cogs.items():  # type: str, commands.Cog
+                cmd_desc = ""
+                for cmd in cog.get_commands():
+                    cmd_desc += f"`{cmd.name}`: {cmd.description}\n"
+                emb.add_field(name=name, value=cmd_desc, inline=False)
+
+            cmd_desc = ""
+            for command in self.state.bot.walk_commands():
+                # if cog not in a cog
+                # listing command if cog name is None and command isn't hidden
+                if not command.cog_name and not command.hidden:
+                    cmd_desc += f'{command.name} - {command.description}\n'
+
+            if cmd_desc:
+                emb.add_field(name="Andere Befehle", value=cmd_desc)
+
+            await ctx.response.send_message(embed=emb, ephemeral=not not_silent)
+            return
+        selection = selection.strip()
+        if selection in self.state.bot.cogs:
+            cog = self.state.bot.cogs[selection]  # type: commands.Cog
+            emb = discord.Embed(title=f"Hilfe zu {cog.__cog_name__}", color=discord.Color.red(),
+                                description="Gib `/help <Befehl>` oder `/help <Modul>` ein für weitere Informationen.\n"
+                                            "Bei den Befehlsdetails werden optionale Parameter mit <`Param`> und "
+                                            "verpflichtende Parameter mit [`Param`] gekennzeichnet")
+            for cmd in cog.get_commands():
+                cmd_desc = f"`{cmd.name}`: {cmd.description}\n"
+                if isinstance(cmd, SlashCommand):
+                    if len(cmd.options) > 0:
+                        cmd_desc += "*Parameter*:\n"
+                    for opt in cmd.options:
+                        # noinspection PyUnresolvedReferences
+                        cmd_desc += f"  {'[' if opt.required else '<'}`{opt.name}`{']' if opt.required else '>'}: " \
+                                    f"`{opt.input_type.name}` - {opt.description}\n"
+                emb.add_field(name=cmd.name, value=cmd_desc, inline=False)
+            await ctx.response.send_message(embed=emb, ephemeral=not not_silent)
+            return
+        command = None
+        for cmd in self.state.bot.walk_commands():
+            if cmd.name.casefold() == selection.casefold():
+                command = cmd
+                break
+        if command is None:
+            for cog in self.state.bot.cogs.values():
+                for cmd in cog.walk_commands():
+                    if cmd.name.casefold() == selection.casefold():
+                        command = cmd
+                        break
+                if command is not None:
+                    break
+        if command is not None:
+            description = "Keine Beschreibung verfügbar"
+            if command.description is not None and len(command.description) > 0:
+                description = command.description
+
+            if isinstance(command, SlashCommand):
+                if len(command.options) > 0:
+                    description += "\nParameter:"
+                emb = discord.Embed(title=f"Hilfe zu `{command.name}`", color=discord.Color.red(),
+                                    description=description)
+                for opt in command.options:
+
+                    # noinspection PyUnresolvedReferences
+                    emb.add_field(name=opt.name,
+                                  value=("(Optional):" if not opt.required else "(Benötigt): ") +
+                                  f"{opt.input_type.name}\nStandardwert: '{str(opt.default)}\n{opt.description}'",
+                                  inline=False)
+            else:
+                emb = discord.Embed(title=f"Hilfe zu {command.name}", color=discord.Color.red(),
+                                    description=description)
+            await ctx.response.send_message(embed=emb, ephemeral=not not_silent)
+            return
+
+        emb = discord.Embed(title=f"Hilfe", color=discord.Color.red(),
+                            description=f"Befehl/Modul `{selection}` nicht gefunden. Gib `/help` ein um eine Liste "
+                                        f"aller Befehle zu sehen.")
+        await ctx.response.send_message(embed=emb, ephemeral=not not_silent)
 
 
 class BaseCommands(commands.Cog):
@@ -32,8 +137,8 @@ class BaseCommands(commands.Cog):
         self.state = state
 
     def has_permissions(self, ctx: ApplicationContext):
-        return (ctx.guild and self.guild == ctx.guild.id and ctx.author.guild_permissions.administrator) \
-            or ctx.author.id in self.admins or ctx.author.id == self.owner
+        return (ctx.guild and self.guild == ctx.guild.id and ctx.user.guild_permissions.administrator) \
+            or ctx.user.id in self.admins or ctx.user.id == self.owner
 
     @commands.slash_command(description="Creates the main menu for the bot and sets all required settings.")
     async def setup(self, ctx):

@@ -18,7 +18,7 @@ from dotenv import load_dotenv
 
 from accounting_bot import accounting, sheet, projects, utils, corpmissionOCR, exceptions
 from accounting_bot.accounting import AccountingView, get_menu_embeds, Transaction
-from accounting_bot.commands import BaseCommands
+from accounting_bot.commands import BaseCommands, HelpCommand
 from accounting_bot.config import Config, ConfigTree
 from accounting_bot.database import DatabaseConnector
 from accounting_bot.discordLogger import PycordHandler
@@ -137,13 +137,19 @@ intents.message_content = True
 intents.reactions = True
 # noinspection PyUnresolvedReferences,PyDunderSlots
 intents.members = True
-bot = commands.Bot(command_prefix=config["prefix"], intents=intents, debug_guilds=[config["test_server"], config["server"]])
+bot = commands.Bot(
+    command_prefix=config["prefix"],
+    intents=intents,
+    debug_guilds=[config["test_server"], config["server"]],
+    help_command=None
+)
 STATE.bot = bot
 
 accounting.set_up(config, CONNECTOR, bot, STATE)
 utils.set_config(config, bot)
 projects.STATE = STATE
 
+bot.add_cog(HelpCommand(STATE))
 bot.add_cog(BaseCommands(config, CONNECTOR, STATE))
 bot.add_cog(projects.ProjectCommands(bot, config["admins"], config["owner"], config["server"], config["user_role"]))
 
