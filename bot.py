@@ -18,10 +18,12 @@ from dotenv import load_dotenv
 
 from accounting_bot import accounting, sheet, projects, utils, corpmissionOCR, exceptions
 from accounting_bot.accounting import AccountingView, get_menu_embeds, Transaction
-from accounting_bot.commands import BaseCommands, HelpCommand
+from accounting_bot.commands import BaseCommands, HelpCommand, UniverseCommands
 from accounting_bot.config import Config, ConfigTree
 from accounting_bot.database import DatabaseConnector
 from accounting_bot.discordLogger import PycordHandler
+from accounting_bot.universe import data_utils
+from accounting_bot.universe.universe_database import UniverseDatabase
 from accounting_bot.utils import log_error, State, send_exception
 
 logger = logging.getLogger()
@@ -115,6 +117,8 @@ CONNECTOR = DatabaseConnector(
     host=config["db.host"],
     database=config["db.name"]
 )
+data_utils.db = UniverseDatabase(CONNECTOR)
+data_utils.resource_order = config["project_resources"]
 
 try:
     if config["pytesseract_cmd_path"] != "N/A":
@@ -152,6 +156,7 @@ projects.STATE = STATE
 bot.add_cog(HelpCommand(STATE))
 bot.add_cog(BaseCommands(config, CONNECTOR, STATE))
 bot.add_cog(projects.ProjectCommands(bot, config["admins"], config["owner"], config["server"], config["user_role"]))
+bot.add_cog(UniverseCommands(STATE))
 
 
 # noinspection PyUnusedLocal

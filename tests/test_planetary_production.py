@@ -6,7 +6,7 @@ from sqlalchemy.orm import Session
 from accounting_bot.config import Config, ConfigTree
 from accounting_bot.database import DatabaseConnector
 from accounting_bot.universe.models import System, Celestial
-from accounting_bot.universe.planetary_production import PlanetaryDatabase
+from accounting_bot.universe.universe_database import UniverseDatabase
 
 # noinspection DuplicatedCode
 config_structure = {
@@ -43,7 +43,7 @@ class PlanetaryProductionTest(unittest.TestCase):
     def setUp(self) -> None:
         self.config = PlanetaryProductionTest.config
         self.connector = PlanetaryProductionTest.connector
-        self.db = PlanetaryDatabase(PlanetaryProductionTest.connector)
+        self.db = UniverseDatabase(PlanetaryProductionTest.connector)
 
     def test_system(self):
         with Session(self.db.engine) as conn:

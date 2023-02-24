@@ -10,6 +10,8 @@ images/
 resources/map*.csv
 resources/*.eve.csv
 
+*.ignore.py
+
 python
 .env
 config.json

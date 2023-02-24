@@ -1,13 +1,11 @@
 import json
 import logging
 import math
-import multiprocessing
-import os
 import sys
 from multiprocessing.pool import ThreadPool
-from typing import Optional, Dict, Tuple
+from typing import Optional, Dict, Tuple, List
 
-from sqlalchemy import create_engine, Table, MetaData, Column, Integer, String, text, update, between
+from sqlalchemy import create_engine, update, between, func, select
 from sqlalchemy.orm import Session, joinedload
 
 from accounting_bot.config import Config, ConfigTree
@@ -16,10 +14,10 @@ from accounting_bot.exceptions import PlanetaryProductionException
 from accounting_bot.universe import models
 from accounting_bot.universe.models import Region, Constellation, Celestial, Item, Resource, Richness, System
 
-logger = logging.getLogger("bot.pi")
+logger = logging.getLogger("data.db")
 
 
-class PlanetaryDatabase:
+class UniverseDatabase:
     def __init__(self, db: DatabaseConnector) -> None:
         super().__init__()
         self.engine = create_engine(f"mariadb+mariadbconnector://"
@@ -41,8 +39,58 @@ class PlanetaryDatabase:
         with Session(self.engine, expire_on_commit=False) as conn:
             return conn.query(Celestial).filter(Celestial.name == planet_name).first()
 
+    def fetch_resources(self, constellation_name: str, res_names: Optional[List[str]] = None):
+        with Session(self.engine, expire_on_commit=False) as conn:
+            logger.debug("Loading resources for constellation %s: %s", constellation_name, res_names)
+            const_id_q = conn.query(Constellation.id).filter(Constellation.name.like(constellation_name))
+            system_ids_q = conn.query(System.id).filter(System.constellation_id.in_(const_id_q))
+            planet_ids = (
+                conn.query(Celestial.id)
+                .filter(
+                    Celestial.system_id.in_(system_ids_q),
+                    Celestial.group_id == Celestial.Type.planet.groupID
+                )
+            )
+            if res_names is None or len(res_names) == 0:
+                # noinspection PyTypeChecker
+                res = (
+                    conn.query(Resource)
+                    .options(joinedload(Resource.planet), joinedload(Resource.type))
+                    .filter(Resource.planet_id.in_(planet_ids)).all())
+            else:
+                res_ids = conn.query(Item.id).filter(Item.name.in_(res_names))
+                # noinspection PyTypeChecker
+                res = (
+                    conn.query(Resource)
+                    .options(joinedload(Resource.planet), joinedload(Resource.type))
+                    .filter(
+                        Resource.planet_id.in_(planet_ids),
+                        Resource.type_id.in_(res_ids)
+                    )
+                    .all()
+                )  # type: List[Resource]
+            logger.debug("Resources loaded for %s", constellation_name)
+        processed = list(map(lambda r: {
+            "p_id": r.planet_id,
+            "p_name": r.planet.name,
+            "res": r.type.name,
+            "out": r.output
+        }, res))
+        return processed
 
-class DatabaseInitializer(PlanetaryDatabase):
+    def fetch_max_resources(self):
+        with Session(self.engine, expire_on_commit=False) as conn:
+            stmt = (
+                select(Item.name, func.max(Resource.output))
+                .select_from(Resource)
+                .join(Item, Resource.type_id == Item.id)
+                .group_by(Resource.type_id)
+            )
+            result = conn.execute(stmt).all()
+        return dict(result)
+
+
+class DatabaseInitializer(UniverseDatabase):
     def __init__(self, db: DatabaseConnector) -> None:
         super().__init__(db)
 
@@ -202,7 +250,6 @@ if __name__ == '__main__':
     path = input("Enter path to config: ")
     config = Config(path, ConfigTree(config_structure))
     config.load_config()
-    db_name = config["db.name"]  # type: str
 
     connector = DatabaseConnector(
         username=config["db.user"],

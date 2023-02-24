@@ -1,22 +1,23 @@
 import asyncio
+import io
 import logging
 from typing import TYPE_CHECKING
 
 import discord
-from discord import Option, User, ApplicationContext, AutocompleteContext, option, Role, SlashCommand
+from discord import Option, User, ApplicationContext, AutocompleteContext, option, Role, SlashCommand, SlashCommandGroup
 from discord.ext import commands
 
 from accounting_bot import accounting, sheet, utils
 from accounting_bot.accounting import AccountingView
 from accounting_bot.config import Config
 from accounting_bot.database import DatabaseConnector
+from accounting_bot.universe import data_utils
 from accounting_bot.utils import State
 
 if TYPE_CHECKING:
     from bot import BotState
 
 logger = logging.getLogger("bot.commands")
-BOT = None  # type: commands.Bot | None
 
 
 def main_char_autocomplete(self: AutocompleteContext):
@@ -25,7 +26,6 @@ def main_char_autocomplete(self: AutocompleteContext):
 
 class HelpCommand(commands.Cog):
     def __init__(self, state: 'BotState'):
-        global BOT
         self.state = state
 
     def commands_autocomplete(self, ctx: AutocompleteContext):
@@ -33,9 +33,9 @@ class HelpCommand(commands.Cog):
         for name, cog in self.state.bot.cogs.items():
             cmds.append(name)
             for cmd in cog.walk_commands():
-                cmds.append(cmd.name)
-        for command in self.state.bot.walk_commands():
-            cmds.append(command.name)
+                cmds.append(f"{cmd.full_parent_name} {cmd.name}".strip())
+        for cmd in self.state.bot.commands:
+            cmds.append(f"{cmd.full_parent_name} {cmd.name}".strip())
         return filter(lambda n: ctx.value is None or n.casefold().startswith(ctx.value.casefold().strip()), cmds)
 
     @commands.slash_command(name="help", description="Help-Command")
@@ -73,8 +73,9 @@ class HelpCommand(commands.Cog):
                                 description="Gib `/help <Befehl>` oder `/help <Modul>` ein für weitere Informationen.\n"
                                             "Bei den Befehlsdetails werden optionale Parameter mit <`Param`> und "
                                             "verpflichtende Parameter mit [`Param`] gekennzeichnet")
-            for cmd in cog.get_commands():
-                cmd_desc = f"`{cmd.name}`: {cmd.description}\n"
+            for cmd in cog.walk_commands():
+                cmd_name = f"{cmd.full_parent_name} {cmd.name}".strip()
+                cmd_desc = cmd.description if cmd.description is not None and len(cmd.description) > 0 else "N/A"
                 if isinstance(cmd, SlashCommand):
                     if len(cmd.options) > 0:
                         cmd_desc += "*Parameter*:\n"
@@ -82,18 +83,18 @@ class HelpCommand(commands.Cog):
                         # noinspection PyUnresolvedReferences
                         cmd_desc += f"  {'[' if opt.required else '<'}`{opt.name}`{']' if opt.required else '>'}: " \
                                     f"`{opt.input_type.name}` - {opt.description}\n"
-                emb.add_field(name=cmd.name, value=cmd_desc, inline=False)
+                emb.add_field(name=cmd_name, value=cmd_desc, inline=False)
             await ctx.response.send_message(embed=emb, ephemeral=not not_silent)
             return
         command = None
         for cmd in self.state.bot.walk_commands():
-            if cmd.name.casefold() == selection.casefold():
+            if f"{cmd.full_parent_name} {cmd.name}".strip().casefold() == selection.casefold():
                 command = cmd
                 break
         if command is None:
             for cog in self.state.bot.cogs.values():
                 for cmd in cog.walk_commands():
-                    if cmd.name.casefold() == selection.casefold():
+                    if f"{cmd.full_parent_name} {cmd.name}".strip().casefold() == selection.casefold():
                         command = cmd
                         break
                 if command is not None:
@@ -102,19 +103,18 @@ class HelpCommand(commands.Cog):
             description = "Keine Beschreibung verfügbar"
             if command.description is not None and len(command.description) > 0:
                 description = command.description
-
             if isinstance(command, SlashCommand):
                 if len(command.options) > 0:
                     description += "\nParameter:"
                 emb = discord.Embed(title=f"Hilfe zu `{command.name}`", color=discord.Color.red(),
                                     description=description)
                 for opt in command.options:
-
                     # noinspection PyUnresolvedReferences
                     emb.add_field(name=opt.name,
                                   value=("(Optional):" if not opt.required else "(Benötigt): ") +
                                   f"{opt.input_type.name}\nStandardwert: '{str(opt.default)}\n{opt.description}'",
                                   inline=False)
+
             else:
                 emb = discord.Embed(title=f"Hilfe zu {command.name}", color=discord.Color.red(),
                                     description=description)
@@ -331,3 +331,27 @@ class BaseCommands(commands.Cog):
             await utils.terminate_bot(connector=self.connector)
         else:
             await ctx.respond("Fehler! Berechtigungen fehlen.", ephemeral=True)
+
+
+class UniverseCommands(commands.Cog):
+    def __init__(self, state: 'BotState'):
+        self.state = state
+    cmd_pi = SlashCommandGroup(name="pi", description="Access planetary production data.")
+
+    @cmd_pi.command(name="conststats", description="View statistical data for pi in a selected constellation.")
+    @option(name="const", description="Target Constellation", type=str, required=True)
+    @option(name="resources", description="List of pi, seperated by ';'.", type=str, required=False)
+    async def cmd_const_stats(self, ctx: ApplicationContext, const: str, resources: str):
+        await ctx.response.defer(ephemeral=True)
+        if resources is None:
+            resource_names = []
+        else:
+            resource_names = resources.split(";")
+            resource_names = [r.strip() for r in resource_names]
+            resource_names = list(filter(len, resource_names))
+        figure = await data_utils.create_pi_boxplot_async(const, resource_names)
+        img_binary = await data_utils.create_image(figure, height=400, width=max(len(resource_names) * 45, 500))
+        arr = io.BytesIO(img_binary)
+        arr.seek(0)
+        file = discord.File(arr, "image.jpeg")
+        await ctx.followup.send("Analyse abgeschlossen:", file=file, ephemeral=True)
