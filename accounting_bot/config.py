@@ -109,9 +109,10 @@ class ConfigElement:
 
 
 class Config:
-    def __init__(self, path: str, tree: ConfigTree):
+    def __init__(self, path: str, tree: ConfigTree, read_only=False):
         self.tree = tree
         self.path = path
+        self.read_only = read_only
 
     def load_config(self):
         if exists(self.path):
@@ -122,6 +123,9 @@ class Config:
             logger.warning("Config %s does not exists!", self.path)
 
     def save_config(self):
+        if self.read_only:
+            logger.warning("Can't save config %s: Config mode is set to read-only", self.path)
+            return
         logger.info("Saving config to %s...", self.path)
         with open(self.path, "w") as outfile:
             json.dump(self.tree.to_dict(), outfile, indent=4)
