@@ -5,6 +5,8 @@ import os
 import sys
 from typing import List
 
+import plotly.graph_objects as go
+
 from accounting_bot.config import Config, ConfigTree
 from accounting_bot.database import DatabaseConnector
 from accounting_bot.universe import data_utils
@@ -32,7 +34,8 @@ config_structure = {
         "password": (str, "N/A"),
         "port": (int, -1),
         "host": (str, "N/A"),
-        "name": (str, "N/A")
+        "name": (str, "N/A"),
+        "universe_name": (str, "N/A")
     },
     "project_resources": (list, [],)
 }
@@ -40,17 +43,42 @@ config_structure = {
 config = Config("config.json", ConfigTree(config_structure), read_only=True)
 config.load_config()
 resource_order = config["project_resources"]  # type: List[str]
-connector = DatabaseConnector(
-        username=config["db.user"],
-        password=config["db.password"],
-        port=config["db.port"],
-        host=config["db.host"],
-        database=config["db.name"]
-    )
 
-db = UniverseDatabase(connector)
+db = UniverseDatabase(
+    username=config["db.user"],
+    password=config["db.password"],
+    port=config["db.port"],
+    host=config["db.host"],
+    database=config["db.universe_name"]
+)
 data_utils.db = db
 data_utils.resource_order = resource_order
+
+
+def safe_html(fig: go.Figure, path: str):
+    while True:
+        inp = input("Save as HTML [y/n]? ")
+        if inp.casefold() == "y".casefold():
+            logger.info("Writing html to %s", path)
+            fig.write_html(path)
+            logger.info("Saved html to %s", path)
+            return
+        elif inp.casefold() == "n".casefold():
+            return
+        print(f"Input '{inp}' not recognized, please write 'y' or 'n'")
+
+
+def safe_image(fig: go.Figure, path: str, img_type: str, *arg, **kwargs):
+    while True:
+        inp = input(f"Save as {img_type} [y/n]? ")
+        if inp.casefold() == "y".casefold():
+            logger.info("Writing image to %s", path)
+            fig.write_image(path, *arg, **kwargs)
+            logger.info("Saved image to %s", path)
+            return
+        elif inp.casefold() == "n".casefold():
+            return
+        print(f"Input '{inp}' not recognized, please write 'y' or 'n'")
 
 
 # noinspection PyTypeChecker
@@ -58,10 +86,13 @@ def main_analyze_pi():
     constellation_name = input("Enter constellation name: ").strip()
     resource_names = input("Enter resources, seperated by a ';': ").strip().split(";")
     resource_names = [r.strip() for r in resource_names]
-    resource_names = filter(len, resource_names)
-    fig = data_utils.create_pi_boxplot(constellation_name, resource_names)
-    fig.write_image("images/plot.jpeg", height=600, width=len(resource_names) * 45)
-    logger.info("Saved image to images/plot.jpeg")
+    resource_names = list(filter(len, resource_names))
+    region_names = input("Enter Regions, seperated by a ';': ").strip().split(";")
+    region_names = [r.strip() for r in region_names]
+    region_names = list(filter(len, region_names))
+    fig, n = data_utils.create_pi_boxplot(constellation_name, resource_names, region_names)
+    safe_html(fig, "images/plot.html")
+    safe_image(fig, "images/plot.jpeg", "JPEG", height=600, width=n * 45)
     fig.show()
 
 

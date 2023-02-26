@@ -19,10 +19,19 @@ logger = logging.getLogger("data.db")
 
 
 class UniverseDatabase:
-    def __init__(self, db: DatabaseConnector) -> None:
+    def __init__(self,
+                 username: Optional[str],
+                 password: Optional[str],
+                 host: Optional[str],
+                 port: Optional[str],
+                 database: Optional[str]) -> None:
         super().__init__()
-        self.engine = create_engine(f"mariadb+mariadbconnector://"
-                                    f"{db.username}:{db.password}@{db.host}:{db.port}/{db.database}"
+        self.engine = create_engine("mariadb+mariadbconnector://{username}:{password}@{host}:{port}/{database}"
+                                    .format(username=username,
+                                            password=password,
+                                            host=host,
+                                            port=port,
+                                            database=database)
                                     )
         Region.__table__.create(bind=self.engine, checkfirst=True)
         Constellation.__table__.create(bind=self.engine, checkfirst=True)
@@ -40,7 +49,9 @@ class UniverseDatabase:
         with Session(self.engine, expire_on_commit=False) as conn:
             return conn.query(Celestial).filter(Celestial.name == planet_name).first()
 
-    def fetch_resources(self, constellation_name: str, res_names: Optional[List[str]] = None):
+    def fetch_resources(self, constellation_name: str,
+                        res_names: Optional[List[str]] = None,
+                        amount: Optional[int] = None) -> List[Dict[str, int]]:
         with Session(self.engine, expire_on_commit=False) as conn:
             logger.debug("Loading resources for constellation %s: %s", constellation_name, res_names)
             const_id_q = conn.query(Constellation.id).filter(Constellation.name.like(constellation_name))
@@ -53,24 +64,25 @@ class UniverseDatabase:
                 )
             )
             if res_names is None or len(res_names) == 0:
-                # noinspection PyTypeChecker
-                res = (
+                query = (
                     conn.query(Resource)
                     .options(joinedload(Resource.planet), joinedload(Resource.type))
-                    .filter(Resource.planet_id.in_(planet_ids)).all())
+                    .filter(Resource.planet_id.in_(planet_ids)))
             else:
                 res_ids = conn.query(Item.id).filter(Item.name.in_(res_names))
-                # noinspection PyTypeChecker
-                res = (
+                query = (
                     conn.query(Resource)
                     .options(joinedload(Resource.planet), joinedload(Resource.type))
                     .filter(
                         Resource.planet_id.in_(planet_ids),
                         Resource.type_id.in_(res_ids)
                     )
-                    .all()
-                )  # type: List[Resource]
+                )
             logger.debug("Resources loaded for %s", constellation_name)
+        if amount is None:
+            res = query.all()
+        else:
+            res = query.limit(amount).all()
         processed = list(map(lambda r: {
             "p_id": r.planet_id,
             "p_name": r.planet.name,
@@ -79,14 +91,28 @@ class UniverseDatabase:
         }, res))
         return processed
 
-    def fetch_max_resources(self):
+    def fetch_max_resources(self, region_names: Optional[List[str]] = None):
         with Session(self.engine, expire_on_commit=False) as conn:
-            stmt = (
-                select(Item.name, func.max(Resource.output))
-                .select_from(Resource)
-                .join(Item, Resource.type_id == Item.id)
-                .group_by(Resource.type_id)
-            )
+            if region_names is None or len(region_names) == 0:
+                stmt = (
+                    select(Item.name, func.max(Resource.output))
+                    .select_from(Resource)
+                    .join(Item, Resource.type_id == Item.id)
+                    .group_by(Resource.type_id)
+                )
+            else:
+                region_ids = (
+                    select(Region.id).select_from(Region).where(Region.name.in_(region_names))
+                )
+                stmt = (
+                    select(Item.name, func.max(Resource.output))
+                    .select_from(Resource)
+                    .join(Item, Resource.type_id == Item.id)
+                    .join(Celestial, Resource.planet_id == Celestial.id)
+                    .join(System, Celestial.system_id == System.id)
+                    .where(System.region_id.in_(region_ids))
+                    .group_by(Resource.type_id)
+                )
             result = conn.execute(stmt).all()
         # noinspection PyTypeChecker
         return dict(result)
@@ -118,9 +144,6 @@ class DatabaseInitializer(UniverseDatabase):
         Celestial.Type.asteroid_belt.groupID,
         Celestial.Type.unknown_anomaly.groupID
     ]
-
-    def __init__(self, db: DatabaseConnector) -> None:
-        super().__init__(db)
 
     def init_db_from_csv(self,
                          path: str,

@@ -95,7 +95,8 @@ config_structure = {
         "password": (str, "N/A"),
         "port": (int, -1),
         "host": (str, "N/A"),
-        "name": (str, "N/A")
+        "name": (str, "N/A"),
+        "universe_name": (str, "N/A")
     },
     "google_sheet": (str, "N/A"),
     "project_resources": (list, [],),
@@ -117,7 +118,13 @@ CONNECTOR = DatabaseConnector(
     host=config["db.host"],
     database=config["db.name"]
 )
-data_utils.db = UniverseDatabase(CONNECTOR)
+data_utils.db = UniverseDatabase(
+    username=config["db.user"],
+    password=config["db.password"],
+    port=config["db.port"],
+    host=config["db.host"],
+    database=config["db.universe_name"]
+)
 data_utils.resource_order = config["project_resources"]
 
 try:
@@ -372,7 +379,8 @@ async def on_raw_reaction_add(reaction):
 
 @bot.event
 async def on_raw_reaction_remove(reaction):
-    if reaction.emoji.name == "✅" and reaction.channel_id == config["logChannel"] and reaction.user_id in config["admins"]:
+    if reaction.emoji.name == "✅" and reaction.channel_id == config["logChannel"] and reaction.user_id in config[
+        "admins"]:
         logging.info(f"{reaction.user_id} removed checkmark from {reaction.message_id}!")
 
 

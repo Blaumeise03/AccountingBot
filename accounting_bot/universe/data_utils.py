@@ -4,7 +4,7 @@ import functools
 import logging
 import math
 from concurrent.futures import ThreadPoolExecutor
-from typing import List, Iterable, Iterator, Dict, Any
+from typing import List, Iterable, Iterator, Dict, Any, Tuple, Optional
 
 import numpy as np
 import plotly.express as px
@@ -22,16 +22,22 @@ executor = ThreadPoolExecutor(max_workers=5)
 loop = asyncio.get_event_loop()
 
 
-def create_pi_boxplot(constellation_name: str, resource_names: List[str]) -> go.Figure:
+def create_pi_boxplot(constellation_name: str,
+                      resource_names: List[str],
+                      region_names: Optional[List[str]] = None,
+                      vertical=False) -> Tuple[go.Figure, int]:
+    if region_names is not None and len(region_names) == 0:
+        region_names = None
     logger.info("Creating boxplot for constellation %s, resources: %s", constellation_name, resource_names)
     res = db.fetch_resources(constellation_name, resource_names)
-    res_max = db.fetch_max_resources()
+    res_max = db.fetch_max_resources(region_names)
     data = {}
     for r in res:
         if r["res"] in data:
             data[r["res"]].append(r["out"] / res_max[r["res"]])
         else:
             data[r["res"]] = [r["out"] / res_max[r["res"]]]
+    # noinspection PyTypeChecker
     data = collections.OrderedDict(sorted(data.items(), key=lambda x: resource_order.index(x[0])))
     data_keys = list(data)
     data_values = list(data.values())
@@ -39,26 +45,73 @@ def create_pi_boxplot(constellation_name: str, resource_names: List[str]) -> go.
     c = ['hsl(' + str(h) + ',50%' + ',50%)' for h in np.linspace(0, 360, N)]
 
     # noinspection PyTypeChecker
-    fig = go.Figure(data=[go.Box(
-        y=data_values[i],
-        name=data_keys[i],
-        marker_color=c[i]
-    ) for i in range(int(N))])
+    fig = go.Figure(
+        data=[
+            go.Box(
+                x=data_values[i] if vertical else None,
+                y=data_values[i] if not vertical else None,
+                name=data_keys[i],
+                marker_color=c[i]
+            ) for i in (range(int(N)) if not vertical else range(int(N) - 1, -1, -1))
+        ])
 
+    if region_names is None:
+        subtitle = "Compared to the best planet in <b>New Eden</b>."
+    else:
+        subtitle = "Compared to the best planet in "
+        for i, region in enumerate(region_names):
+            subtitle += f"<b>{region}</b>"
+            if len(region_names) > 1 and i == len(region_names) - 2:
+                subtitle += " and "
+                if vertical:
+                    subtitle += "<br>"
+            elif i < len(region_names) - 2:
+                subtitle += ", "
+                if vertical:
+                    subtitle += "<br>"
+        subtitle += "."
+    axis_percent = dict(zeroline=False, gridcolor="white", tickformat=",.0%")
+    axis_names = dict(showgrid=False, zeroline=False, showticklabels=True)
     # format the layout
     fig.update_layout(
-        xaxis=dict(showgrid=False, zeroline=False, showticklabels=True),
-        yaxis=dict(zeroline=False, gridcolor="white", tickformat=",.0%"),
+        xaxis=axis_names if not vertical else axis_percent,
+        yaxis=axis_percent if not vertical else axis_names,
         paper_bgcolor="rgb(233,233,233)",
         plot_bgcolor="rgb(233,233,233)",
         title=go.layout.Title(
-            text=f"Resources in <b>{constellation_name}</b> <br><sup><i>Compared to the best planet in New Eden</i></sup>",
+            text=f"Resources in <b>{constellation_name}</b> <br><sup><i>{subtitle}</i></sup>",
             xref="paper",
             x=0
         ),
         showlegend=False
     )
-    return fig
+    return fig, N
+
+
+async def create_pi_boxplot_async(constellation_name: str,
+                                  resource_names: List[str],
+                                  region_names: List[str],
+                                  vertical=False) -> Tuple[go.Figure, int]:
+    return await loop.run_in_executor(executor,
+                                      functools.partial(create_pi_boxplot,
+                                                        constellation_name, resource_names, region_names, vertical))
+
+
+async def get_best_pi_planets(constellation_name: str, resource_name: str, amount: Optional[int] = None) -> List[
+    Dict[str, int]]:
+    def _get_best_pi_planets(const_name: str, res_name: str, am: Optional[int] = None) -> List[Dict[str, int]]:
+        return db.fetch_resources(const_name, [res_name], am)
+
+    return await loop.run_in_executor(executor,
+                                      functools.partial(_get_best_pi_planets, constellation_name, resource_name,
+                                                        amount))
+
+
+async def create_image(*args, **kwargs) -> bytes:
+    def _create_image(fig: go.Figure, *_args, **_kwargs) -> bytes:
+        return fig.to_image(*_args, **_kwargs)
+
+    return await loop.run_in_executor(executor, functools.partial(_create_image, *args, **kwargs))
 
 
 def graph_map_to_figure(graph: nx.Graph, include_highsec=True, node_size=3.5) -> go.Figure:
@@ -208,7 +261,7 @@ def graph_map_to_figure(graph: nx.Graph, include_highsec=True, node_size=3.5) ->
             color=[],
             size=6,
             line_width=0,
-            ))
+        ))
 
     node_trace_normal.marker.color = node_marker_normal
     node_trace_normal.text = node_text_normal
@@ -237,6 +290,7 @@ def create_map_graph(inc_low_entries=False):
             if sec > s:
                 return level - 1
         return 10
+
     logger.info("Loading map")
     systems = db.fetch_map()
     logger.info("Map loaded")
@@ -326,14 +380,3 @@ def lowsec_pipe_analysis(graph: nx.Graph, lowsec_entries: List[str]):
         current_nodes = next_nodes
         next_nodes = []
     pass
-
-
-async def create_pi_boxplot_async(constellation_name: str, resource_names: List[str]) -> go.Figure:
-    return await loop.run_in_executor(executor, functools.partial(create_pi_boxplot, constellation_name, resource_names))
-
-
-async def create_image(*args, **kwargs) -> bytes:
-    def _create_image(fig: go.Figure, *_args, **_kwargs) -> bytes:
-        return fig.to_image(*_args, **_kwargs)
-    return await loop.run_in_executor(executor, functools.partial(_create_image, *args, **kwargs))
-

@@ -15,7 +15,8 @@ config_structure = {
         "password": (str, "N/A"),
         "port": (int, -1),
         "host": (str, "N/A"),
-        "name": (str, "N/A")
+        "name": (str, "N/A"),
+        "universe_name": (str, "N/A")
     },
     "google_sheet": (str, "N/A"),
     "project_resources": (list, [],),
@@ -37,13 +38,19 @@ class PlanetaryProductionTest(unittest.TestCase):
             password=cls.config["db.password"],
             port=cls.config["db.port"],
             host=cls.config["db.host"],
-            database=cls.config["db.name"]
+            database=cls.config["db.universe_name"]
         )
 
     def setUp(self) -> None:
         self.config = PlanetaryProductionTest.config
         self.connector = PlanetaryProductionTest.connector
-        self.db = UniverseDatabase(PlanetaryProductionTest.connector)
+        self.db = UniverseDatabase(
+            username=PlanetaryProductionTest.config["db.user"],
+            password=PlanetaryProductionTest.config["db.password"],
+            port=PlanetaryProductionTest.config["db.port"],
+            host=PlanetaryProductionTest.config["db.host"],
+            database=PlanetaryProductionTest.config["db.universe_name"]
+        )
 
     def test_system(self):
         with Session(self.db.engine) as conn:

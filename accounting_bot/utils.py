@@ -8,7 +8,7 @@ import traceback
 from abc import ABC, abstractmethod
 from enum import Enum
 from os.path import exists
-from typing import Union, Tuple, Optional, TYPE_CHECKING, Type
+from typing import Union, Tuple, Optional, TYPE_CHECKING, Type, List
 
 import cv2
 import discord
@@ -137,11 +137,21 @@ def string_to_file(text: str, filename="message.txt"):
     return discord.File(fp=data, filename=filename)
 
 
-def list_to_string(line: [str]):
+def list_to_string(line: List[str]):
     res = ""
     for s in line:
         res += s + "\n"
     return res
+
+
+def str_to_list(text: str, sep=";") -> List[str]:
+    if text is None:
+        text_list = []
+    else:
+        text_list = text.split(sep)
+        text_list = [r.strip() for r in text_list]
+        text_list = list(filter(len, text_list))
+    return text_list
 
 
 def get_main_account(name: str = None, discord_id: int = None) -> (Union[str, None], Union[str, None], bool):

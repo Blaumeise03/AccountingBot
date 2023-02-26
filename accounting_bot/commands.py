@@ -356,22 +356,50 @@ class BaseCommands(commands.Cog):
 class UniverseCommands(commands.Cog):
     def __init__(self, state: 'BotState'):
         self.state = state
+
     cmd_pi = SlashCommandGroup(name="pi", description="Access planetary production data.")
 
-    @cmd_pi.command(name="conststats", description="View statistical data for pi in a selected constellation.")
+    @cmd_pi.command(name="stats", description="View statistical data for pi in a selected constellation.")
     @option(name="const", description="Target Constellation", type=str, required=True)
     @option(name="resources", description="List of pi, seperated by ';'.", type=str, required=False)
-    async def cmd_const_stats(self, ctx: ApplicationContext, const: str, resources: str):
-        await ctx.response.defer(ephemeral=True)
-        if resources is None:
-            resource_names = []
-        else:
-            resource_names = resources.split(";")
-            resource_names = [r.strip() for r in resource_names]
-            resource_names = list(filter(len, resource_names))
-        figure = await data_utils.create_pi_boxplot_async(const, resource_names)
-        img_binary = await data_utils.create_image(figure, height=400, width=max(len(resource_names) * 45, 500))
+    @option(name="compare_regions",
+            description="List of regions, seperated by ';' to compare the selected constellation with.",
+            type=str, required=False)
+    @option(name="vertical", description="Create a vertical boxplot (default false)",
+            default=False, required=False)
+    @option(name="silent", description="Default false, if set to true, the command will be executed publicly.",
+            default=True, required=False)
+    async def cmd_const_stats(self, ctx: ApplicationContext, const: str, resources: str, compare_regions: str,
+                              vertical: bool, silent: bool):
+        await ctx.response.defer(ephemeral=silent)
+        resource_names = utils.str_to_list(resources, ";")
+        region_names = utils.str_to_list(compare_regions, ";")
+
+        figure, n = await data_utils.create_pi_boxplot_async(const, resource_names, region_names, vertical)
+        img_binary = await data_utils.create_image(figure,
+                                                   height=max(n * 45, 500) + 80 if vertical else 500,
+                                                   width=700 if vertical else max(n * 45, 500))
         arr = io.BytesIO(img_binary)
         arr.seek(0)
         file = discord.File(arr, "image.jpeg")
-        await ctx.followup.send("Analyse abgeschlossen:", file=file, ephemeral=True)
+        await ctx.followup.send(f"PI Analyse für {const} abgeschlossen:", file=file, ephemeral=silent)
+
+    @cmd_pi.command(name="find", description="Find a list with the best planets for selected pi.")
+    @option(name="const", description="Target Constellation", type=str, required=True)
+    @option(name="resource", description="Name of pi to search", type=str, required=True)
+    @option(name="amount", description="Number of planets to return", type=int, required=False)
+    @option(name="silent", description="Default false, if set to true, the command will be executed publicly",
+            default=True, required=False)
+    async def cmd_find_pi(self, ctx: ApplicationContext, const: str, resource: str, amount: int, silent: bool):
+        await ctx.response.defer(ephemeral=True)
+        resource = resource.strip()
+        result = await data_utils.get_best_pi_planets(const, resource, amount)
+        result = sorted(result, key=lambda r: r["out"], reverse=True)
+        msg = "Output in units per factory per hour\n```"
+        msg += f"{'Planet':<12}: Output\n"
+        for res in result:
+            msg += f"\n{res['p_name']:<12}: {res['out']:6.2f}"
+        msg += "\n```"
+        emb = discord.Embed(title=f"{resource} in {const}", color=discord.Color.green(),
+                            description="Kein Planet gefunden/ungültige Eingabe" if len(result) == 0 else msg)
+        await ctx.followup.send(embed=emb, ephemeral=silent)

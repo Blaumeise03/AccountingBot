@@ -2,6 +2,7 @@ logs/
 .idea/
 venv/
 images/
+.mypy_cache/
 
 # EVE Online Static Data Export (SDE) can be found on their website as a bundled zip
 # (https://developers.eveonline.com/resource), however this data is unprocessed
@@ -20,3 +21,4 @@ user_overwrites.json
 discord_ids*.json
 credentials.json
 accounting-bot-*.json
+*.zip
