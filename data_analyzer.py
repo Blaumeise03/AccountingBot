@@ -65,12 +65,38 @@ def main_analyze_pi():
     fig.show()
 
 
+def main_generate_map():
+    graph, lowsec_entries = data_utils.create_map_graph(inc_low_entries=True)
+    lowsec_names = list(map(lambda s: s.name, lowsec_entries))
+    data_utils.lowsec_pipe_analysis(graph, lowsec_names)
+    inp = input("Please enter the node size (float): ")
+    inp = float(inp)
+    fig = data_utils.graph_map_to_figure(graph, False, node_size=inp)
+    logger.info("Saving map")
+    fig.write_html("images/map.html")
+    logger.info("Saved map to images/map.html")
+    inp = input("Save as SVG [y/n]? ")
+    if inp.casefold() == "y".casefold():
+        logger.info("Saving image to SVG")
+        fig.write_image("images/map.svg", height=1024, width=2024)
+        logger.info("Saved map to images/map.svg")
+    inp = input("Save as JPEG [y/n]? ")
+    if inp.casefold() == "y".casefold():
+        logger.info("Saving image to JPEG")
+        fig.write_image("images/plot.jpeg", scale=4, height=1024, width=1024)
+        logger.info("Saved map to images/map.jpeg")
+    fig.show(config={"scrollZoom": True})
+
+
 if __name__ == '__main__':
     while True:
         inp = input("Please select action (help for list of available commands): ").casefold()
         if inp == "pi".casefold():
             main_analyze_pi()
-            exit()
+            exit(0)
+        elif inp == "map".casefold():
+            main_generate_map()
+            exit(0)
         elif inp == "help".casefold():
             print("pi: Find pi in a constellation")
         else:

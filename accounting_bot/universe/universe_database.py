@@ -5,14 +5,15 @@ import sys
 from multiprocessing.pool import ThreadPool
 from typing import Optional, Dict, Tuple, List
 
-from sqlalchemy import create_engine, update, between, func, select
+from sqlalchemy import create_engine, update, between, func, select, delete, or_
 from sqlalchemy.orm import Session, joinedload
 
 from accounting_bot.config import Config, ConfigTree
 from accounting_bot.database import DatabaseConnector
 from accounting_bot.exceptions import PlanetaryProductionException
 from accounting_bot.universe import models
-from accounting_bot.universe.models import Region, Constellation, Celestial, Item, Resource, Richness, System
+from accounting_bot.universe.models import Region, Constellation, Celestial, Item, Resource, Richness, System, \
+    SystemConnections
 
 logger = logging.getLogger("data.db")
 
@@ -87,10 +88,37 @@ class UniverseDatabase:
                 .group_by(Resource.type_id)
             )
             result = conn.execute(stmt).all()
+        # noinspection PyTypeChecker
         return dict(result)
+
+    def fetch_map(self) -> List[System]:
+        with Session(self.engine, expire_on_commit=False) as conn:
+            # noinspection PyTypeChecker
+            return (
+                conn.query(System)
+                .options(
+                    joinedload(System.stargates),
+                    joinedload(System.constellation).subqueryload(Constellation.region)
+                ).where(System.active.is_(True)).all()
+            )
 
 
 class DatabaseInitializer(UniverseDatabase):
+    regions = ["Aridia", "Black Rise", "Branch", "Cache", "Catch", "Cloud Ring", "Curse", "Deklein", "Delve", "Derelik",
+               "Detorid", "Devoid", "Domain", "Esoteria", "Essence", "Everyshore", "Fade", "Feythabolis", "Fountain",
+               "Geminate", "Genesis", "Great Wildlands", "Heimatar", "Immensea", "Impass", "Insmother", "Kador",
+               "Khanid", "Kor-Azor", "Lonetrek", "Metropolis", "Molden Heath", "Omist", "Outer Ring", "Paragon Soul",
+               "Period Basis", "Placid", "Providence", "Pure Blind", "Querious", "Region", "Scalding Pass",
+               "Sinq Laison", "Solitude", "Stain", "Syndicate", "Tash-Murkon", "Tenal", "Tenerifis", "The Bleak Lands",
+               "The Citadel", "The Forge", "Tribute", "Vale of the Silent", "Venal", "Verge Vendor", "Wicked Creek"]
+    cleanup_celestials = [
+        Celestial.Type.region.groupID,
+        Celestial.Type.constellation.groupID,
+        Celestial.Type.system.groupID,
+        Celestial.Type.asteroid_belt.groupID,
+        Celestial.Type.unknown_anomaly.groupID
+    ]
+
     def __init__(self, db: DatabaseConnector) -> None:
         super().__init__(db)
 
@@ -224,6 +252,46 @@ class DatabaseInitializer(UniverseDatabase):
                 conn.commit()
             logger.info("Stargates loaded")
 
+    def auto_cleanup_db(self):
+        with self.engine.begin() as conn:
+            # Disable Systems that are unavailable:
+            logger.info("Updating active systems")
+            stmt = (
+                update(System)
+                .values(active=False)
+            )
+            result = conn.execute(stmt)
+            logger.info("Set active of %s systems to false", result.rowcount)
+            region_ids = select(Region.id).select_from(Region).where(
+                Region.name.in_(DatabaseInitializer.regions))
+            stmt = (
+                update(System)
+                .where(System.region_id.isnot(None), System.constellation_id.isnot(None),
+                       System.region_id.in_(region_ids))
+                .values(active=True)
+            )
+            result = conn.execute(stmt)
+            logger.info("Set active of %s systems to true", result.rowcount)
+
+            logger.info("Deleting invalid system connections")
+            # Delete connections of inactive systems
+            stmt = (
+                SystemConnections.delete()
+                .where(or_(SystemConnections.c.a == System.id, SystemConnections.c.b == System.id))
+                .where(System.active.is_(False))
+            )
+            result = conn.execute(stmt)
+            logger.info("Deleted %s system connections", result.rowcount)
+
+            # Cleanup celestials
+            logger.info("Deleting wrong celestials from database")
+            stmt = (
+                delete(Celestial)
+                .where(Celestial.group_id.in_(DatabaseInitializer.cleanup_celestials))
+            )
+            result = conn.execute(stmt)
+            logger.info("Deleted %s celestials from database", result.rowcount)
+
 
 if __name__ == '__main__':
     formatter = logging.Formatter(fmt="[%(asctime)s][%(levelname)s][%(name)s][%(threadName)s]: %(message)s")
@@ -248,6 +316,8 @@ if __name__ == '__main__':
         "pytesseract_cmd_path": (str, "N/A"),
     }
     path = input("Enter path to config: ")
+    if path.strip() == "":
+        path = "../../config.json"
     config = Config(path, ConfigTree(config_structure))
     config.load_config()
 
@@ -261,7 +331,7 @@ if __name__ == '__main__':
     db = DatabaseInitializer(connector)
     inp = input(
         "Press enter 'i' to load the planetary production database. Enter 't' to initialize the item types. "
-        "Enter s to initialize stargates: ").casefold()
+        "Enter s to initialize stargates. Enter c to cleanup database: ").casefold()
     if inp == "i".casefold():
         print("Required format for planetary_production.csv")
         print("Planet ID;Region;Constellation;System;Planet Name;Planet Type;Resource;Richness;Output")
@@ -274,5 +344,7 @@ if __name__ == '__main__':
         db.auto_init_item_types(types)
     elif inp == "s".casefold():
         db.auto_init_stargates("../../resources/mapJumps.csv")
+    elif inp == "c".casefold():
+        db.auto_cleanup_db()
     else:
         print(f"Error, unknown input '{inp}'")

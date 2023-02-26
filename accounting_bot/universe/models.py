@@ -1,7 +1,7 @@
 import enum
 from typing import List, Optional, TYPE_CHECKING
 
-from sqlalchemy import String, ForeignKey, Float, Enum, BigInteger, Integer, Table, Column
+from sqlalchemy import String, ForeignKey, Float, Enum, BigInteger, Integer, Table, Column, Boolean
 from sqlalchemy.ext.hybrid import hybrid_property
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
@@ -61,6 +61,7 @@ class System(Base):
     constellation_id = mapped_column(ForeignKey("constellation.id", name="key_sys_const"))
     constellation: Mapped[Constellation] = relationship(back_populates="systems")
     name: Mapped[str] = mapped_column(String(30), index=True)
+    active: Mapped[bool] = mapped_column(Boolean, default=False)
     x: Mapped[int] = mapped_column(BigInteger, nullable=True)
     y: Mapped[int] = mapped_column(BigInteger, nullable=True)
     z: Mapped[int] = mapped_column(BigInteger, nullable=True)
