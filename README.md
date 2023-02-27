@@ -6,6 +6,10 @@ This is a bot for Eve Echoes to manage your corporation wallet using an accounti
 * [AccountingBot](#accountingbot)
   * [Table of Contents](#table-of-contents)
   * [Commands](#commands)
+    * [Basic Commands](#basic-commands)
+    * [Accounting-related commands:](#accounting-related-commands-)
+    * [Project-related commands:](#project-related-commands-)
+    * [Universe-related commands:](#universe-related-commands-)
     * [Example menu](#example-menu)
       * [Buttons](#buttons)
     * [Example transaction](#example-transaction)
@@ -16,24 +20,45 @@ This is a bot for Eve Echoes to manage your corporation wallet using an accounti
     * [Custom user overwrites](#custom-user-overwrites)
     * [Discord Accounts](#discord-accounts)
     * [Embeds](#embeds)
+  * [Universe Database](#universe-database)
+    * [Item Types](#item-types)
 <!-- TOC -->
 
 ## Commands
-All commands are slash commands.
-- setup: Posts the menu with the buttons and saves this menu to the config, so it will be loaded after restarting the bot.
-- setlogchannel: Sets the channel the command was used in as the accounting log channel. Bot must be restarted to take effect.
-- stop: Shuts down the bot after 10 seconds. Only for owner.
-- createshortcut: Creates a small shortcut menu with the buttons to create transactions.
-- indumenu: Sends an embed with different industrial roles that can be used for reaction roles.
-- loadprojects: Reloads the projects
-- listprojects: Returns a list of all projects (and the required resources)
-- insertinvestment: Insert a project investment into the Google sheet
-- listunregusers: Prints all unregistered discord users, or users without an active main character, that have a specific role
-- registeruser: Links an ingame player to a discord user
-- balance: Get the balance of your (or the specified user's) balance
+All commands are slash commands. A lot of commands have a `silent`-parameter, by default it is set to `true`. If set to
+`false`, the command will be executed publicly
+
+### Basic Commands
+- `help <selection: str> <silent: bool=True> <edit_msg: str>`:
+  Shows help information to either a selected command/module or lists all available commands. If a message id is given,
+  it will update this message instead of posting a new one.
+- `registeruser [ingame_name: str] [user: User]`: Links a discord user to an ingame account.
+- `listunregusers [role: Role]`: Prints all users with a selected role that have no linked account.
+- `indumenu <msg: str>`: Posts an embed with industrial roles. If a message id is given, it will update this message 
+  instead of posting a new one.
+- `stop`: Shuts down the bot.
+
+### Accounting-related commands:
+- `setup`: Posts the main menu for the bot and sets all required settings.
+- `setlogchannel`: Sets the current channel as the accounting log channel to post all transactions to.
+- `createshortcut`: Creates a shortcut menu that can be used to create transactions.
+
+### Project-related commands:
+- `loadprojects <silent: bool=True>`: Loads and lists all projects.
+- `listprojects <silent: bool=True>`: Lists all projects without reloading the cache.
+- `insertinvestment <skip_loading: bool=False> <priority_projects: str>`: Saves an investment into the sheet (an input
+  modal will open), by default the bot will reload the project cache. If priority projects (separated by `;`) are given,
+  those will be prioritized.
+
+### Universe-related commands:
+- `pi stats [const: str] <resources: str> <compare_regions: str> <vertical: bool=False> <silent: bool=True>`: 
+  Generates a boxplot for selected (or all) resources for a given constellation. By default, the boxplot is horizontally.
+- `pi find [const_sys: str] [resource: str] <distance: int> <amount: int> <silent: bool=True>`: Returns a list of a given
+  resource in a selected constellation or close to a selected system (a distance is required in that case). The amount of
+  planets can also be changed.
 
 ### Example menu
-The menu can be customised in the classes.py file. Just change the text to what you want it to be.
+The menu can be customised in the `resources/embeds.json` file. Just change the text to what you want it to be.
 
 ![Example menu](https://user-images.githubusercontent.com/43181741/181205554-dc8f02a1-6f9f-4869-b1e3-1068dec3d427.png)
 
@@ -107,8 +132,10 @@ All other settings have to be entered into the config.json, which will be genera
   "test_server": "ID of test server or same as above",
   "user_role": "ID of role for normal users",
   "logChannel": "ID of accounting log channel",
+  "adminLogChannel": "ID of channel to log verified transactions",
   "menuMessage": "ID of message with the menu",
   "menuChannel": "ID of the channel where the menu is posted",
+  "logToChannel": "If true, the bot will log all warnings + errors to the specified channel (errorLogChannel)",
   "errorLogChannel": "ID of the error log channel",
   "owner": "ID of owner",
   "admins": [
@@ -120,15 +147,19 @@ All other settings have to be entered into the config.json, which will be genera
     "password": "MariaDB password",
     "port": "MariaDB port",
     "host": "MariaDB host",
-    "name": "accountingBot"
+    "name": "accountingBot",
+    "universe_name": "universe"
   },
   "google_sheet": "SHEET_ID",
   "project_resources": [
     "Tritanium",
     "Pyerite",
     "...all other project resources, order is relevant"
-  ]
-  
+  ],
+  "pytesseract_cmd_path": "path to tesseract file",
+  "logger": {
+    "sheet": "loglevel"
+  }
 }
 ```
 Note: All ID's as well as the MariaDB Port should be saved as a number, not a string.
@@ -156,4 +187,59 @@ All discord IDs have to be put (or will be put by the bot) into the file `discor
 
 
 ### Embeds
-The embeds can be customized inside the config `embeds.json`
+The embeds can be customized inside the config `resources/embeds.json`
+
+## Universe Database
+The universe database contains all regions, constellations, system, celestials, stargates and planetary production data.
+It has to be set up manually. The general data (systems etc.) can be found on the Eve Online Wiki:
+https://wiki.eveuniversity.org/Static_Data_Export.
+
+The following files are required (and have to be imported in this order):
+- mapRegions.csv: Contains all regions with names and ids, has to be imported directly into the table `region`
+- mapConstellations.csv: Has to be imported into the table `constellation`
+- mapSolarSystems.csv: Has to be imported into the table `system`
+- mapDenormalized.csv: Required for the auto-setup to fill out the `celestial` table
+- mapJumps.csv: Needed for the auto-setup script to fill in the table `system_gates`
+
+Also, the planetary production export for eve echoes is required, it can be found here (export the `
+Planetary Production` worksheet as a csv): https://www.reddit.com/r/echoes/comments/hp7f27/planetary_production_all_planets_data_dump/
+
+Put the three files for the auto-setup into the `resources` folder. The other data has to be imported directly into the
+corresponding tables before executing the script. To start the script, go to `accounting_bot/universe` and execute
+the file `universe_database.py` (it has to be executed in this directory to detect the files). The script has four modes:
+- `i` to load the planetary production data from the csv file (columns separated by `;`)
+- `t` to load the item types (module/mineral/ore) from `resources/item_types.json` (you can customize the item types)
+- `s` to load the stargates from `resources/mapJumps.csv`
+- `c` to clean up the database (deleting wrong celestials, set in Eve Echoes unused/unreachable systems as deactivated and delete the connections)
+
+### Item Types
+The item types can be customized under `resources/item_types.json`. This file contains all item types as key and an array
+with the start and end id:
+```json
+{
+  "bp": [6010000000, 79999999999],
+  "component_c": [27011000000, 27020999999],
+  "component_s": [27000000000, 27010999999],
+  "datacore": [27021000000, 27021999999],
+  "dead_mats": [41302001000, 41302004999],
+  "debris": [44000000000, 44999999999],
+  "decryptor": [27121000000, 27122999999],
+  "drone": [14000000000, 15999999999],
+  "exp_data": [41705000000, 41705000099],
+  "gu": [16500001011, 16599999999],
+  "impl_mats": [41800000000, 41802000099],
+  "implant": [16000000000, 16099999999],
+  "minerals": [41000000000, 41000000009],
+  "mission": [28008000000, 28008999999],
+  "module": [11000000000, 11699999999],
+  "nano_mats": [41700000000, 41702000099],
+  "nanocore": [81000030010, 81999999999],
+  "ore": [51000000000, 51999999999],
+  "pi": [42001000000, 42002000017],
+  "repro_mats": [41400000000, 41400000099],
+  "rig": [11700000000, 11899999999],
+  "ship": [10000000000, 10999999999],
+  "structure": [23008000000, 26999999999],
+  "t4_rig_mats": [41900000000, 41900899999]
+}
+```
