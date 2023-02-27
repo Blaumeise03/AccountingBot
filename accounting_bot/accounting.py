@@ -606,6 +606,7 @@ async def send_transaction(embeds: List[Union[Embed, Transaction]], interaction:
     :param interaction: discord interaction for the response
     :param note: the note which should be sent
     """
+    msg = None
     for embed in embeds:
         if embed is None:
             continue
@@ -633,8 +634,8 @@ async def send_transaction(embeds: List[Union[Embed, Transaction]], interaction:
         except mariadb.Error as e:
             note += "\nFehler beim Eintragen in die Datenbank, die Transaktion wurde jedoch trotzdem im " \
                     f"Accountinglog gepostet. Informiere bitte einen Admin, danke.\n{e}"
-        return msg
     await interaction.response.send_message("Transaktion gesendet!" + note, ephemeral=True)
+    return msg
 
 
 # noinspection PyUnusedLocal
@@ -819,7 +820,10 @@ class ConfirmOCRView(AutoDisableView):
         if not STATE.is_online():
             raise BotOfflineException()
         msg = await send_transaction([self.transaction], interaction, self.note)
-        res_msg = f"Transaktion versendet: https://discord.com/channels/{SERVER}/{ACCOUNTING_LOG}/{msg.id}"
+        if msg is not None:
+            res_msg = f"Transaktion versendet: https://discord.com/channels/{SERVER}/{ACCOUNTING_LOG}/{msg.id}"
+        else:
+            res_msg = "Transaktion versendet!"
         if self.transaction.allow_self_verification:
             res_msg += "\nDu kannst diese Transaktion selbstständig verifizieren, klicke dazu im Accountinglog unter" \
                        "der Transaktion auf \"Verifizieren\"."
