@@ -129,20 +129,28 @@ class HelpCommand(commands.Cog):
             autocomplete=commands_autocomplete)
     @option(name="silent", description="Execute the command publicly.", type=bool, required=False, default=True,
             autocomplete=commands_autocomplete)
-    @option(name="edit_msg", description="Edit this message and update the embed", type=int, required=False,
+    @option(name="edit_msg", description="Edit this message and update the embed", type=str, required=False,
             default=None)
     async def help(self, ctx: ApplicationContext,
-                   selection: str, silent: bool, edit_msg: int
+                   selection: str, silent: bool, edit_msg: str
                    ):
         emb = HelpCommand.get_help_embed(self.state.bot, selection)
         if edit_msg is not None:
+            try:
+                edit_msg = int(edit_msg.strip())
+            except ValueError as e:
+                await ctx.response.send_message(f"Message id `'{edit_msg}'` is not a number:\n"
+                                                f"{str(e)}.", ephemeral=silent)
+                return
             await ctx.response.defer(ephemeral=silent)
             try:
                 msg = await ctx.channel.fetch_message(edit_msg)
                 await msg.edit(embed=emb)
                 await ctx.followup.send("Message edited", ephemeral=silent)
+                return
             except discord.NotFound:
                 await ctx.followup.send("Message not found in current channel", ephemeral=silent)
+                return
         await ctx.response.send_message(embed=emb, ephemeral=silent)
 
 
