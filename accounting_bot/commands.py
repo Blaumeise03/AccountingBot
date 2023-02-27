@@ -395,7 +395,7 @@ class UniverseCommands(commands.Cog):
     @option(name="const_sys", description="Target Constellation or origin system", type=str, required=True)
     @option(name="resource", description="Name of pi to search", type=str, required=True)
     @option(name="distance", description="Distance from origin system to look up",
-            type=int, min_value=0, max_value=5, required=False, default=None)
+            type=int, min_value=0, max_value=30, required=False, default=None)
     @option(name="amount", description="Number of planets to return", type=int, required=False)
     @option(name="silent", description="Default false, if set to true, the command will be executed publicly",
             default=True, required=False)

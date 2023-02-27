@@ -4,6 +4,7 @@ import difflib
 import io
 import json
 import logging
+import re
 import traceback
 from abc import ABC, abstractmethod
 from enum import Enum
@@ -21,6 +22,7 @@ from accounting_bot import exceptions
 from accounting_bot.config import Config
 from accounting_bot.database import DatabaseConnector
 from accounting_bot.exceptions import LoggedException
+from accounting_bot.universe import data_utils
 
 if TYPE_CHECKING:
     from bot import BotState
@@ -52,7 +54,6 @@ def log_error(logger: logging.Logger,
               error: Exception,
               location: Optional[Union[str, Type]] = None,
               ctx: Union[ApplicationContext, Interaction] = None):
-
     location = location if type(location) == str else f"class {location.__name__}" if location else "N/A"
     if error and error.__class__ == discord.errors.NotFound:
         logger.warning("discord.errors.NotFound Error at %s: %s", location, str(error))
@@ -80,7 +81,11 @@ def log_error(logger: logging.Logger,
         err_msg = "An error occurred at {}".format(location)
 
     logger.error(err_msg)
+    # regexp = re.compile(r"site-packages\\sqlalchemy")
     for line in full_error:
+        # if regexp.search(line):
+        # logger.exception("---Traceback Filter found, stopping log---", exc_info=False)
+        # break
         for line2 in line.split("\n"):
             if len(line2.strip()) > 0:
                 logger.exception(line2, exc_info=False)
@@ -335,8 +340,12 @@ async def terminate_bot(connector: DatabaseConnector):
     activity = discord.Activity(name="Shutting down...", type=ActivityType.custom)
     await BOT.change_presence(status=discord.Status.idle, activity=activity)
     logger.warning("Disabling discord commands")
-    BOT.remove_cog('BaseCommands')
-    BOT.remove_cog('ProjectCommands')
+    BOT.remove_cog("BaseCommands")
+    BOT.remove_cog("ProjectCommands")
+    BOT.remove_cog("UniverseCommands")
+    BOT.remove_cog("HelpCommand")
+    logger.warning("Stopping data_utils executor")
+    data_utils.executor.shutdown(wait=True)
     # Wait for all pending interactions to complete
     logger.warning("Waiting for interactions to complete")
     await asyncio.sleep(15)

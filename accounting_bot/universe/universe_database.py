@@ -16,6 +16,8 @@ from accounting_bot.universe.models import Region, Constellation, Celestial, Ite
     SystemConnections
 
 logger = logging.getLogger("data.db")
+# logger.setLevel(logging.DEBUG)
+# logging.getLogger('sqlalchemy.engine').setLevel(logging.INFO)
 
 
 class UniverseDatabase:
@@ -103,15 +105,16 @@ class UniverseDatabase:
         if amount is None:
             amount = 20
         with Session(self.engine) as conn:
-            logger.debug("Loading resource for system %s distance %s: %s", sys_name, distance, res_name)
+            logger.info("Loading resource for system %s distance %s: %s", sys_name, distance, res_name)
             systems = {}
             all_systems = []
             # noinspection PyTypeChecker
             system = (
                 conn.query(System)
-                .options(joinedload(System.celestials).subqueryload(Celestial.resources).subqueryload(Resource.type))
                 .filter(System.name == sys_name).first()
             )  # type: System
+
+            logger.debug("Loading item %s", res_name)
             # noinspection PyTypeChecker
             item = (
                 conn.query(Item)
@@ -121,25 +124,53 @@ class UniverseDatabase:
                 raise PlanetaryProductionException(f"System '{sys_name}' not found")
             if item is None:
                 raise PlanetaryProductionException(f"Resource '{res_name}' not found")
-            current_sys = [system]
-            next_sys = []
+            cache = [system]  # type: List[System]
+            not_cached = []  # type: List[System]
+            logger.debug("Caching constellation %s", system.constellation_id)
+            # noinspection PyTypeChecker
+            cache.extend(conn.query(System)
+                         .options(joinedload(System.stargates))
+                         .filter(System.constellation_id == system.constellation_id).all())
+            current_systems = [system]
+            next_systems = []
+            logger.debug("Loading systems into cache")
             d = 0
-            while d <= distance:
-                for s in current_sys:
-                    if s.id not in systems:
-                        systems[s.id] = d
-                        all_systems.append(s)
-                        for n in s.stargates:
-                            if n.id not in systems:
-                                next_sys.append(n)
-                current_sys = next_sys
-                next_sys = []
+            while len(current_systems) > 0 and d <= distance:
+                logger.debug("Processing %s systems with distance %s", len(current_systems), d)
+                for s in current_systems:
+                    all_systems.append(s)
+                    systems[s.id] = d
+                    for n in s.stargates:
+                        if n in all_systems:
+                            continue
+                        next_systems.append(n)
+                        if n not in cache:
+                            not_cached.append(n)
+                # Load new systems into cache
+                if len(not_cached) > 0:
+                    const_ids = [r.constellation_id for r in not_cached]
+                    logger.debug("Loading constellations %s into cache", const_ids)
+                    result = (
+                        conn.query(System)
+                        .options(joinedload(System.stargates))
+                        .filter(System.constellation_id.in_(const_ids))
+                    ).all()
+                    not_cached.clear()
+                    for r in result:
+                        if r not in cache:
+                            # noinspection PyTypeChecker
+                            cache.append(r)
+                    logger.debug("Systems cached")
+                current_systems = next_systems
+                next_systems = []
                 d += 1
-            system_ids = [s.id for s in all_systems]
+            logger.debug("Loading resources")
             stmt = (
                 select(Resource)
+                .options(joinedload(Resource.planet))
                 .join(Resource.planet)
-                .where(Celestial.system_id.in_(system_ids))
+                .where(Resource.type_id == item.id)
+                .where(Celestial.system_id.in_([i for i in systems]))
                 .order_by(Resource.output.desc())
             )
             # noinspection PyTypeChecker
@@ -154,6 +185,7 @@ class UniverseDatabase:
                 "out": r[0].output,
                 "distance": systems[r[0].planet.system.id]
             }, res))
+            logger.debug("%s resources loaded", len(processed))
             return processed
 
     def fetch_max_resources(self, region_names: Optional[List[str]] = None):
