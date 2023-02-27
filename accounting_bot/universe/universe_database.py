@@ -45,6 +45,10 @@ class UniverseDatabase:
         with Session(self.engine, expire_on_commit=False) as conn:
             return conn.query(System).filter(System.name == system_name).first()
 
+    def fetch_constellation(self, constellation_name: str) -> Optional[System]:
+        with Session(self.engine, expire_on_commit=False) as conn:
+            return conn.query(Constellation).filter(Constellation.name == constellation_name).first()
+
     def fetch_planet(self, planet_name: str) -> Optional[Celestial]:
         with Session(self.engine, expire_on_commit=False) as conn:
             return conn.query(Celestial).filter(Celestial.name == planet_name).first()
@@ -76,7 +80,7 @@ class UniverseDatabase:
                     .filter(
                         Resource.planet_id.in_(planet_ids),
                         Resource.type_id.in_(res_ids)
-                    )
+                    ).order_by(Resource.output.desc())
                 )
             logger.debug("Resources loaded for %s", constellation_name)
         if amount is None:
@@ -90,6 +94,67 @@ class UniverseDatabase:
             "out": r.output
         }, res))
         return processed
+
+    def fetch_ressource_by_planet(self,
+                                  sys_name: str,
+                                  distance: int,
+                                  res_name: Optional[str],
+                                  amount: Optional[int] = None) -> List[Dict[str, int]]:
+        if amount is None:
+            amount = 20
+        with Session(self.engine) as conn:
+            logger.debug("Loading resource for system %s distance %s: %s", sys_name, distance, res_name)
+            systems = {}
+            all_systems = []
+            # noinspection PyTypeChecker
+            system = (
+                conn.query(System)
+                .options(joinedload(System.celestials).subqueryload(Celestial.resources).subqueryload(Resource.type))
+                .filter(System.name == sys_name).first()
+            )  # type: System
+            # noinspection PyTypeChecker
+            item = (
+                conn.query(Item)
+                .filter(Item.name.like(res_name))
+            ).first()  # type: Item
+            if system is None:
+                raise PlanetaryProductionException(f"System '{sys_name}' not found")
+            if item is None:
+                raise PlanetaryProductionException(f"Resource '{res_name}' not found")
+            current_sys = [system]
+            next_sys = []
+            d = 0
+            while d <= distance:
+                for s in current_sys:
+                    if s.id not in systems:
+                        systems[s.id] = d
+                        all_systems.append(s)
+                        for n in s.stargates:
+                            if n.id not in systems:
+                                next_sys.append(n)
+                current_sys = next_sys
+                next_sys = []
+                d += 1
+            system_ids = [s.id for s in all_systems]
+            stmt = (
+                select(Resource)
+                .join(Resource.planet)
+                .where(Celestial.system_id.in_(system_ids))
+                .order_by(Resource.output.desc())
+            )
+            # noinspection PyTypeChecker
+            if amount is None:
+                res = conn.execute(stmt).all()
+            else:
+                res = conn.execute(stmt.limit(amount))
+            processed = list(map(lambda r: {
+                "p_id": r[0].planet_id,
+                "p_name": r[0].planet.name,
+                "res": r[0].type.name,
+                "out": r[0].output,
+                "distance": systems[r[0].planet.system.id]
+            }, res))
+            return processed
 
     def fetch_max_resources(self, region_names: Optional[List[str]] = None):
         with Session(self.engine, expire_on_commit=False) as conn:
@@ -332,7 +397,7 @@ if __name__ == '__main__':
             "password": (str, "N/A"),
             "port": (int, -1),
             "host": (str, "N/A"),
-            "name": (str, "N/A")
+            "universe_name": (str, "N/A")
         },
         "google_sheet": (str, "N/A"),
         "project_resources": (list, [],),
@@ -343,15 +408,12 @@ if __name__ == '__main__':
         path = "../../config.json"
     config = Config(path, ConfigTree(config_structure))
     config.load_config()
-
-    connector = DatabaseConnector(
+    db = DatabaseInitializer(
         username=config["db.user"],
         password=config["db.password"],
         port=config["db.port"],
         host=config["db.host"],
-        database=config["db.name"]
-    )
-    db = DatabaseInitializer(connector)
+        database=config["db.universe_name"])
     inp = input(
         "Press enter 'i' to load the planetary production database. Enter 't' to initialize the item types. "
         "Enter s to initialize stargates. Enter c to cleanup database: ").casefold()

@@ -16,6 +16,7 @@ from discord.ext import commands, tasks
 from discord.ext.commands import CommandOnCooldown
 from dotenv import load_dotenv
 
+import accounting_bot.commands
 from accounting_bot import accounting, sheet, projects, utils, corpmissionOCR, exceptions
 from accounting_bot.accounting import AccountingView, get_menu_embeds, Transaction
 from accounting_bot.commands import BaseCommands, HelpCommand, UniverseCommands
@@ -361,8 +362,9 @@ async def on_message(message: Message):
 
 @bot.event
 async def on_application_command(ctx: ApplicationContext):
-    logger.info("Command %s called by %s:%s in channel %s",
-                ctx.command.name,
+    cmd_name = accounting_bot.commands.get_cmd_name(ctx.command)
+    logger.info("Command '%s' called by %s:%s in channel %s",
+                cmd_name,
                 ctx.user.name,
                 ctx.user.id,
                 ctx.channel.id)
@@ -379,8 +381,11 @@ async def on_raw_reaction_add(reaction):
 
 @bot.event
 async def on_raw_reaction_remove(reaction):
-    if reaction.emoji.name == "✅" and reaction.channel_id == config["logChannel"] and reaction.user_id in config[
-        "admins"]:
+    if (
+            reaction.emoji.name == "✅" and
+            reaction.channel_id == config["logChannel"] and
+            reaction.user_id in config["admins"]
+    ):
         logging.info(f"{reaction.user_id} removed checkmark from {reaction.message_id}!")
 
 

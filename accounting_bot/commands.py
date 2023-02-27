@@ -1,7 +1,6 @@
-import asyncio
 import io
 import logging
-from typing import TYPE_CHECKING, List, Optional, Union
+from typing import TYPE_CHECKING, Optional, Union
 
 import discord
 from discord import Option, User, ApplicationContext, AutocompleteContext, option, Role, SlashCommand, SlashCommandGroup
@@ -385,21 +384,41 @@ class UniverseCommands(commands.Cog):
         await ctx.followup.send(f"PI Analyse für {const} abgeschlossen:", file=file, ephemeral=silent)
 
     @cmd_pi.command(name="find", description="Find a list with the best planets for selected pi.")
-    @option(name="const", description="Target Constellation", type=str, required=True)
+    @option(name="const_sys", description="Target Constellation or origin system", type=str, required=True)
     @option(name="resource", description="Name of pi to search", type=str, required=True)
+    @option(name="distance", description="Distance from origin system to look up",
+            type=int, min_value=0, max_value=5, required=False, default=None)
     @option(name="amount", description="Number of planets to return", type=int, required=False)
     @option(name="silent", description="Default false, if set to true, the command will be executed publicly",
             default=True, required=False)
-    async def cmd_find_pi(self, ctx: ApplicationContext, const: str, resource: str, amount: int, silent: bool):
+    async def cmd_find_pi(self, ctx: ApplicationContext, const_sys: str, resource: str, distance: int, amount: int, silent: bool):
         await ctx.response.defer(ephemeral=True)
         resource = resource.strip()
-        result = await data_utils.get_best_pi_planets(const, resource, amount)
+        const = await data_utils.get_constellation(const_sys)
+        has_sys = False
+        if const is not None:
+            result = await data_utils.get_best_pi_planets(const.name, resource, amount)
+            title = f"{resource} in {const_sys}"
+        else:
+            sys = await data_utils.get_system(const_sys)
+            if sys is None:
+                await ctx.followup.send(f"\"{const_sys}\" is not a system/constellation.", ephemeral=silent)
+                return
+            if distance is None:
+                await ctx.followup.send(f"An distance of jumps from the selected system is required.", ephemeral=silent)
+                return
+            result = await data_utils.get_best_pi_by_planet(sys.name, distance, resource, amount)
+            title = f"{resource} near {const_sys}"
+            has_sys = True
         result = sorted(result, key=lambda r: r["out"], reverse=True)
         msg = "Output in units per factory per hour\n```"
-        msg += f"{'Planet':<12}: Output\n"
+        msg += f"{'Planet':<12}: {'Output':<6}" + (f"  Jumps\n" if has_sys else "\n")
         for res in result:
-            msg += f"\n{res['p_name']:<12}: {res['out']:6.2f}"
+            msg += f"\n{res['p_name']:<12}: {res['out']:6.2f}" + (f"  {res['distance']}j" if has_sys else "")
+            if len(msg) > 3900:
+                msg += "\n**(Truncated)**"
+                break
         msg += "\n```"
-        emb = discord.Embed(title=f"{resource} in {const}", color=discord.Color.green(),
+        emb = discord.Embed(title=title, color=discord.Color.green(),
                             description="Kein Planet gefunden/ungültige Eingabe" if len(result) == 0 else msg)
         await ctx.followup.send(embed=emb, ephemeral=silent)
