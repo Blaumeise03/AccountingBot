@@ -23,6 +23,7 @@ from accounting_bot.commands import BaseCommands, HelpCommand, UniverseCommands
 from accounting_bot.config import Config, ConfigTree
 from accounting_bot.database import DatabaseConnector
 from accounting_bot.discordLogger import PycordHandler
+from accounting_bot.exceptions import InputException
 from accounting_bot.universe import data_utils
 from accounting_bot.universe.universe_database import UniverseDatabase
 from accounting_bot.utils import log_error, State, send_exception
@@ -216,10 +217,13 @@ async def on_application_command_error(ctx: ApplicationContext, err):
     """
     silent = False
     # Don't log command rate limit errors, but send a response to the interaction
-    if isinstance(err, CommandOnCooldown):
+    if isinstance(err, CommandOnCooldown) or isinstance(err, InputException):
         silent = True
+    location = accounting_bot.commands.get_cmd_name(ctx.command)
+    if location is not None:
+        location = "command " + location
     if not silent:
-        log_error(logging.getLogger(), err, ctx=ctx)
+        log_error(logging.getLogger(), err, location=location, ctx=ctx)
     await send_exception(err, ctx)
 
 

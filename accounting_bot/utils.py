@@ -81,14 +81,16 @@ def log_error(logger: logging.Logger,
         err_msg = "An error occurred at {}".format(location)
 
     logger.error(err_msg)
-    # regexp = re.compile(r"site-packages\\sqlalchemy")
+    regexp = re.compile(r" *File .*[/\\]site-packages[/\\]((discord)|(sqlalchemy)).*")
+    skipped = 0
     for line in full_error:
-        # if regexp.search(line):
-        # logger.exception("---Traceback Filter found, stopping log---", exc_info=False)
-        # break
+        if regexp.search(line):
+            skipped += 1
+            continue
         for line2 in line.split("\n"):
             if len(line2.strip()) > 0:
                 logger.exception(line2, exc_info=False)
+    logger.warning("Skipped %s traceback frames", skipped)
 
 
 async def send_exception(error: Exception, ctx: Union[ApplicationContext, Interaction]):

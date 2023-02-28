@@ -7,6 +7,10 @@ if TYPE_CHECKING:
 STATE = None  # type: BotState | None
 
 
+class InputException(Exception):
+    pass
+
+
 class LoggedException(ABC, Exception):
     """
     An abstract exception that contains an error log that may be made public to the end user.
@@ -57,5 +61,5 @@ class BotOfflineException(Exception):
         super().__init__(str(STATE.state) + ": " + str(message), *args)
 
 
-class PlanetaryProductionException(Exception):
+class PlanetaryProductionException(InputException):
     pass
