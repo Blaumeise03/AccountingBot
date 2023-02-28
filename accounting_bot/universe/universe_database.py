@@ -28,12 +28,15 @@ class UniverseDatabase:
                  port: Optional[str],
                  database: Optional[str]) -> None:
         super().__init__()
+        logger.info("Creating engine")
         self.engine = create_engine("mariadb+mariadbconnector://{username}:{password}@{host}:{port}/{database}"
                                     .format(username=username,
                                             password=password,
                                             host=host,
                                             port=port,
-                                            database=database)
+                                            database=database),
+                                    pool_pre_ping=True,
+                                    pool_recycle=True
                                     )
         Region.__table__.create(bind=self.engine, checkfirst=True)
         Constellation.__table__.create(bind=self.engine, checkfirst=True)
