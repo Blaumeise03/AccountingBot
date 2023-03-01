@@ -3,7 +3,7 @@ import logging
 import math
 import sys
 from multiprocessing.pool import ThreadPool
-from typing import Optional, Dict, Tuple, List
+from typing import Optional, Dict, Tuple, List, TYPE_CHECKING, Union
 
 from sqlalchemy import create_engine, update, between, func, select, delete, or_
 from sqlalchemy.orm import Session, joinedload
@@ -18,6 +18,20 @@ from accounting_bot.universe.models import Region, Constellation, Celestial, Ite
 logger = logging.getLogger("data.db")
 # logger.setLevel(logging.DEBUG)
 # logging.getLogger('sqlalchemy.engine').setLevel(logging.INFO)
+
+
+def get_file_len(path: str):
+    def _count_generator(reader):
+        b = reader(1024 * 1024)
+        while b:
+            yield b
+            b = reader(1024 * 1024)
+
+    with open(path, 'rb') as fp:
+        # noinspection PyUnresolvedReferences
+        c_generator = _count_generator(fp.raw.read)
+        # count each \n
+        return sum(buffer.count(b'\n') for buffer in c_generator)
 
 
 class UniverseDatabase:
@@ -225,7 +239,7 @@ class UniverseDatabase:
                 .options(
                     joinedload(System.stargates),
                     joinedload(System.constellation).subqueryload(Constellation.region)
-                ).where(System.active.is_(True)).all()
+                ).all()
             )
 
 
@@ -280,7 +294,7 @@ class DatabaseInitializer(UniverseDatabase):
                     if start_planet is not None and p_id < start_planet:
                         continue
 
-                    if line_i % 100 == 0:
+                    if line_i % 500 == 0:
                         if size is None or start is None:
                             logger.info("Processing line %s", line_i)
                         else:
@@ -299,19 +313,7 @@ class DatabaseInitializer(UniverseDatabase):
 
     def auto_init_pool(self, path: str, pool_size=20):
         pool = ThreadPool(processes=pool_size)
-
-        def _count_generator(reader):
-            b = reader(1024 * 1024)
-            while b:
-                yield b
-                b = reader(1024 * 1024)
-
-        with open(path, 'rb') as fp:
-            # noinspection PyUnresolvedReferences
-            c_generator = _count_generator(fp.raw.read)
-            # count each \n
-            file_length = sum(buffer.count(b'\n') for buffer in c_generator)
-
+        file_length = get_file_len(path)
         # Splitting file onto thread pool
         logger.info("Found %s lines in file %s, preparing thread pool with %s threads",
                     file_length, path, pool_size)
@@ -342,6 +344,7 @@ class DatabaseInitializer(UniverseDatabase):
             logger.info("Item types updated")
 
     def auto_init_stargates(self, file_path: str):
+        file_length = get_file_len(file_path)
         with open(file_path, "r") as f:
             with Session(self.engine) as conn:
                 line_i = 0
@@ -350,8 +353,8 @@ class DatabaseInitializer(UniverseDatabase):
                     line_i += 1
                     if line_i == 1:
                         continue
-                    if line_i % 100 == 0:
-                        logger.info("Processing line %s", line_i)
+                    if line_i % 500 == 0:
+                        logger.info("Processing line %s/%s (%s)", line_i, file_length, "{:.2%}".format(line_i / file_length))
                         conn.commit()
                     line = line.replace("\n", "").split(",")
                     gate_a_id = int(line[0])
@@ -377,34 +380,13 @@ class DatabaseInitializer(UniverseDatabase):
 
     def auto_cleanup_db(self):
         with self.engine.begin() as conn:
-            # Disable Systems that are unavailable:
-            logger.info("Updating active systems")
+            # Delete Regions that are unavailable:
             stmt = (
-                update(System)
-                .values(active=False)
+                delete(Region)
+                .where(Region.name.notin_(DatabaseInitializer.regions))
             )
             result = conn.execute(stmt)
-            logger.info("Set active of %s systems to false", result.rowcount)
-            region_ids = select(Region.id).select_from(Region).where(
-                Region.name.in_(DatabaseInitializer.regions))
-            stmt = (
-                update(System)
-                .where(System.region_id.isnot(None), System.constellation_id.isnot(None),
-                       System.region_id.in_(region_ids))
-                .values(active=True)
-            )
-            result = conn.execute(stmt)
-            logger.info("Set active of %s systems to true", result.rowcount)
-
-            logger.info("Deleting invalid system connections")
-            # Delete connections of inactive systems
-            stmt = (
-                SystemConnections.delete()
-                .where(or_(SystemConnections.c.a == System.id, SystemConnections.c.b == System.id))
-                .where(System.active.is_(False))
-            )
-            result = conn.execute(stmt)
-            logger.info("Deleted %s system connections", result.rowcount)
+            logger.info("Deleted %s inactive regions", result.rowcount)
 
             # Cleanup celestials
             logger.info("Deleting wrong celestials from database")
@@ -414,6 +396,51 @@ class DatabaseInitializer(UniverseDatabase):
             )
             result = conn.execute(stmt)
             logger.info("Deleted %s celestials from database", result.rowcount)
+
+    def auto_fix_systems(self, path: str, separator: str):
+        with Session(self.engine) as conn:
+            logger.info("Fixing systems")
+            file_length = get_file_len(path)
+            with open(path, "r") as file:
+                # all_systems = conn.query(System).all()
+                checked = []
+                line_i = 0
+                for line in file:
+                    line_i += 1
+                    if line_i == 1:
+                        continue
+                    if line_i % 3000 == 0:
+                        logger.info("Processing line %s/%s (%s)", line_i, file_length, "{:.2%}".format(line_i / file_length))
+                        conn.commit()
+                    line = line.replace("\n", "").split(separator)
+                    # Planet ID;Region;Constellation;System;Planet Name;Planet Type;Resource;Richness;Output
+                    p_id = int(line[0])
+                    r_name = line[1]
+                    c_name = line[2]
+                    s_name = line[3]
+                    planet = (
+                        conn.query(Celestial)
+                        .options(
+                            joinedload(Celestial.system)
+                            .joinedload(System.constellation)
+                            .joinedload(Constellation.region)
+                        ).filter(Celestial.id == p_id)
+                    ).first()
+                    system = planet.system
+                    constellation = system.constellation
+                    if system.name != s_name:
+                        logger.error("Planet %s system %s does not match with db %s", p_id, s_name, system.name)
+                    if constellation.name != c_name:
+                        logger.warning("System %s constellation %s does not match with db %s", s_name, c_name, constellation.name)
+                        constellation = conn.query(Constellation).filter(Constellation.name == c_name).first()
+                        system.constellation_id = constellation.id
+                        system.region_id = constellation.region.id
+                        conn.commit()
+                        logger.info("Fixed constellation")
+                    if constellation.region.name != r_name:
+                        logger.error("System '%s' region '%s' does not match with db '%s'", s_name, r_name, constellation.region.name)
+                    if system.region_id != constellation.region_id:
+                        logger.error("System %s has wrong region id %s, expected %s", system.name, system.region_id, constellation.region_id)
 
 
 if __name__ == '__main__':
@@ -449,22 +476,34 @@ if __name__ == '__main__':
         port=config["db.port"],
         host=config["db.host"],
         database=config["db.universe_name"])
-    inp = input(
-        "Press enter 'i' to load the planetary production database. Enter 't' to initialize the item types. "
-        "Enter s to initialize stargates. Enter c to cleanup database: ").casefold()
-    if inp == "i".casefold():
-        print("Required format for planetary_production.csv")
-        print("Planet ID;Region;Constellation;System;Planet Name;Planet Type;Resource;Richness;Output")
-        path = input("Enter path to planetary_production.csv: ")
-        db.auto_init_pool(path, pool_size=5)
-    elif inp == "t".casefold():
-        with open("../../resources/item_types.json") as f:
-            data = f.read()
-        types = json.loads(data)
-        db.auto_init_item_types(types)
-    elif inp == "s".casefold():
-        db.auto_init_stargates("../../resources/mapJumps.csv")
-    elif inp == "c".casefold():
-        db.auto_cleanup_db()
-    else:
-        print(f"Error, unknown input '{inp}'")
+    while True:
+        print("Available modes:\n"
+              "  i to initialize planetary production database\n"
+              "  t to initialize item types\n"
+              "  s to initialize system connections\n"
+              "  f to fix systems (correct their constellations)\n"
+              "  c to clean up database and delete wrong systems (execute 'f' beforehand!)\n"
+              "  Recommended order: (i), (t), s, f, c")
+        inp = input("Please enter the selection: ").casefold()
+        if inp == "i".casefold():
+            print("Required format for planetary_production.csv")
+            print("Planet ID;Region;Constellation;System;Planet Name;Planet Type;Resource;Richness;Output")
+            path = input("Enter path to planetary_production.csv: ")
+            db.auto_init_pool(path, pool_size=5)
+        elif inp == "t".casefold():
+            with open("../../resources/item_types.json") as f:
+                data = f.read()
+            types = json.loads(data)
+            db.auto_init_item_types(types)
+        elif inp == "s".casefold():
+            db.auto_init_stargates("../../resources/mapJumps.csv")
+        elif inp == "c".casefold():
+            db.auto_cleanup_db()
+        elif inp == "f".casefold():
+            print("Required format for planetary_production.csv")
+            print("Planet ID;Region;Constellation;System;Planet Name;Planet Type;Resource;Richness;Output")
+            path = input("Enter path to planetary_production.csv: ")
+            db.auto_fix_systems(path, ";")
+        else:
+            print(f"Error, unknown input '{inp}'")
+        logger.info("Completed")

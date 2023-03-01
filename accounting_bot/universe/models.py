@@ -1,7 +1,8 @@
 import enum
 from typing import List, Optional, TYPE_CHECKING
 
-from sqlalchemy import String, ForeignKey, Float, Enum, BigInteger, Integer, Table, Column, Boolean
+from sqlalchemy import String, ForeignKey, Float, Enum, BigInteger, Integer, Table, Column, Boolean, \
+    ForeignKeyConstraint
 from sqlalchemy.ext.hybrid import hybrid_property
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
@@ -32,7 +33,7 @@ class Constellation(Base):
     # regionID,constellationID,constellationName,x,y,z,xMin,xMax,yMin,yMax,zMin,zMax,factionID,radius
     __tablename__ = "constellation"
     id: Mapped[int] = mapped_column(primary_key=True)
-    region_id = mapped_column(ForeignKey("region.id", name="key_const_reg"))
+    region_id = mapped_column(ForeignKey("region.id", name="key_const_reg", ondelete="CASCADE"))
     region: Mapped[Region] = relationship(back_populates="constellations")
     name: Mapped[str] = mapped_column(String(30))
     x: Mapped[int] = mapped_column(BigInteger, nullable=True)
@@ -48,20 +49,19 @@ class Constellation(Base):
 
 SystemConnections = Table(
     "system_gates", Base.metadata,
-    Column("a", Integer, ForeignKey("system.id", name="key_sysgates_a")),
-    Column("b", Integer, ForeignKey("system.id", name="key_sysgates_b")))
+    Column("a", Integer, ForeignKey("solarsystem.id", name="key_sysgates_a", ondelete="CASCADE")),
+    Column("b", Integer, ForeignKey("solarsystem.id", name="key_sysgates_b", ondelete="CASCADE")))
 
 
 class System(Base):
     # Eve Online Static Export CSV format:
     # regionID,constellationID,solarSystemID,solarSystemName,x,y,z,xMin,xMax,yMin,yMax,zMin,zMax,luminosity,border,fringe,corridor,hub,international,regional,constellation,security,factionID,radius,sunTypeID,securityClass
-    __tablename__ = "system"
+    __tablename__ = "solarsystem"
     id: Mapped[int] = mapped_column(primary_key=True)
     region_id = mapped_column(ForeignKey("region.id", name="key_sys_reg"))
-    constellation_id = mapped_column(ForeignKey("constellation.id", name="key_sys_const"))
+    constellation_id = mapped_column(ForeignKey("constellation.id", name="key_sys_const", ondelete="CASCADE"))
     constellation: Mapped[Constellation] = relationship(back_populates="systems")
     name: Mapped[str] = mapped_column(String(30), index=True)
-    active: Mapped[bool] = mapped_column(Boolean, default=False)
     x: Mapped[int] = mapped_column(BigInteger, nullable=True)
     y: Mapped[int] = mapped_column(BigInteger, nullable=True)
     z: Mapped[int] = mapped_column(BigInteger, nullable=True)
@@ -160,7 +160,7 @@ class Celestial(Base):
     id: Mapped[int] = mapped_column(primary_key=True)
     type_id: Mapped[int] = mapped_column(Integer, nullable=True)
     group_id: Mapped[int] = mapped_column(Integer, nullable=True)
-    system_id = mapped_column(ForeignKey("system.id", name="key_celest_sys"))
+    system_id = mapped_column(ForeignKey("solarsystem.id", name="key_celest_sys", ondelete="CASCADE"))
     system: Mapped[System] = relationship(back_populates="celestials")
     orbit_id: Mapped[int] = mapped_column(Integer, nullable=True)
     x: Mapped[int] = mapped_column(BigInteger, nullable=True)
@@ -218,7 +218,7 @@ class Resource(Base):
     # Eve Echoes PI Static Data Export CSV format:
     # Planet ID;Region;Constellation;System;Planet Name;Planet Type;Resource;Richness;Output
     __tablename__ = "resources"
-    planet_id: Mapped[int] = mapped_column(ForeignKey("celestial.id", name="key_res_planet"), primary_key=True)
+    planet_id: Mapped[int] = mapped_column(ForeignKey("celestial.id", name="key_res_planet", ondelete="CASCADE"), primary_key=True)
     planet: Mapped[Celestial] = relationship(back_populates="resources")
     type_id: Mapped[int] = mapped_column(ForeignKey("item.id", name="key_res_item"), primary_key=True)
     type: Mapped[Item] = relationship()
