@@ -3,11 +3,12 @@ import logging
 import math
 import sys
 from multiprocessing.pool import ThreadPool
-from typing import Optional, Dict, Tuple, List, TYPE_CHECKING, Union
+from typing import Optional, Dict, Tuple, List, TYPE_CHECKING, Union, Any
 
 from sqlalchemy import create_engine, update, between, func, select, delete, or_
 from sqlalchemy.orm import Session, joinedload
 
+from accounting_bot import sheet
 from accounting_bot.config import Config, ConfigTree
 from accounting_bot.database import DatabaseConnector
 from accounting_bot.exceptions import PlanetaryProductionException
@@ -66,7 +67,32 @@ class UniverseDatabase:
         Resource.__table__.create(bind=self.engine, checkfirst=True)
         PiPlanSettings.__table__.create(bind=self.engine, checkfirst=True)
         PiPlanResource.__table__.create(bind=self.engine, checkfirst=True)
+        MarketPrice.__table__.create(bind=self.engine, checkfirst=True)
         logger.info("Setup completed")
+
+    def load_market_data(self, items: Dict[str, Dict[str, Any]]):
+        with Session(self.engine) as conn:
+            for item_name, prices in items.items():
+                db_item = (
+                    conn.query(Item)
+                    .options(joinedload(Item.prices))
+                    .filter(Item.name == item_name)
+                ).first()
+                if db_item is None:
+                    logger.warning("Item %s from market sheet not found in database", item_name)
+                    continue
+                for price_type, price in prices.items():
+                    found = False
+                    for p in db_item.prices:  # type: MarketPrice
+                        if p.price_type == price_type:
+                            p.value = price
+                            found = True
+                            break
+                    if not found:
+                        p = MarketPrice(price_type=price_type, value=price)
+                    db_item.prices.append(p)
+            conn.commit()
+        pass
 
     def fetch_system(self, system_name: str) -> Optional[System]:
         with Session(self.engine, expire_on_commit=False) as conn:

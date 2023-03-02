@@ -2,7 +2,7 @@ import enum
 from typing import List, Optional, TYPE_CHECKING
 
 from sqlalchemy import String, ForeignKey, Float, Enum, BigInteger, Integer, Table, Column, Boolean, \
-    ForeignKeyConstraint
+    ForeignKeyConstraint, DateTime, func, TIMESTAMP, text
 from sqlalchemy.ext.hybrid import hybrid_property
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
@@ -195,9 +195,19 @@ class Item(Base):
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
     name: Mapped[str] = mapped_column(String(60), index=True)
     type: Mapped[str] = mapped_column(String(15), nullable=True)
+    prices: Mapped[List["MarketPrice"]] = relationship()
 
     def __repr__(self) -> str:
         return f"Item(id={self.id!r}, name={self.name!r}, type={self.type!r})"
+
+
+class MarketPrice(Base):
+    __tablename__ = "price"
+    item_id: Mapped[int] = mapped_column(ForeignKey("item.id", name="key_item_price"), primary_key=True)
+    item: Mapped[Item] = relationship(back_populates="prices")
+    price_type: Mapped[str] = mapped_column(String(20), primary_key=True)
+    value: Mapped[float] = mapped_column(Float)
+    last_updated = mapped_column(TIMESTAMP, onupdate=func.now(), server_default=text('CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP'))
 
 
 class Richness(enum.Enum):

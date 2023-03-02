@@ -207,6 +207,15 @@ async def log_loop():
         log_loop.change_interval(minutes=10, seconds=0)
 
 
+@tasks.loop(hours=12)
+async def market_loop():
+    try:
+        logger.info("Reloading market data")
+        await data_utils.load_market_data()
+    except Exception as e:
+        utils.log_error(logger, e, location="market_loop")
+
+
 @bot.event
 async def on_application_command_error(ctx: ApplicationContext, err):
     """
@@ -274,7 +283,8 @@ async def on_ready():
     await sheet.setup_sheet(config["google_sheet"], config["project_resources"], config["logger.sheet"])
     await sheet.load_wallets(force=True, validate=True)
     logging.info("Google sheets API loaded.")
-
+    if not market_loop.is_running():
+        market_loop.start()
     # Updating unverified accountinglog entries
     logging.info("Setting up unverified accounting log entries")
     unverified = CONNECTOR.get_unverified()

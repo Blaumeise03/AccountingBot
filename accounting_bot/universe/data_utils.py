@@ -11,6 +11,7 @@ import plotly.express as px
 import plotly.graph_objects as go
 import networkx as nx
 
+from accounting_bot import sheet
 from accounting_bot.universe.models import System, PiPlanSettings
 from accounting_bot.universe.universe_database import UniverseDatabase
 
@@ -155,6 +156,7 @@ async def save_pi_plan(*args, **kwargs) -> None:
         return db.save_pi_plan(*_args, **_kwargs)
     return await execute_async(_save_pi_plan, *args, **kwargs)
 
+
 async def delete_pi_plan(*args, **kwargs) -> None:
     def _delete_pi_plan(*_args, **_kwargs):
         return db.delete_pi_plan(*_args, **_kwargs)
@@ -165,6 +167,15 @@ async def get_pi_plan(*args, **kwargs) -> Union[PiPlanSettings, List[PiPlanSetti
     def _get_pi_plan(*_args, **_kwargs):
         return db.get_pi_plan(*_args, **_kwargs)
     return await execute_async(_get_pi_plan, *args, **kwargs)
+
+
+async def load_market_data() -> None:
+    def _save_market_data(_items):
+        db.load_market_data(_items)
+    logger.info("Loading market data")
+    items = await sheet.get_market_data()
+    await execute_async(_save_market_data, items)
+    logger.info("Market data loaded")
 
 
 def graph_map_to_figure(graph: nx.Graph, include_highsec=True, node_size=3.5) -> go.Figure:

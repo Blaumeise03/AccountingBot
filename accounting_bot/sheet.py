@@ -36,6 +36,7 @@ SPREADSHEET_ID = ""
 SHEET_LOG_NAME = "Accounting Log"
 SHEET_ACCOUNTING_NAME = "Accounting"
 SHEET_OVERFLOW_NAME = "Projektüberlauf"
+SHEET_MARKET_NAME = "Ressourcenbedarf Projekte"
 sheet_name = "N/A"
 
 # Projekt worksheet names
@@ -56,6 +57,10 @@ MEMBERS_NAME_INDEX = 0  # The column index of the name
 MEMBERS_ACTIVE_INDEX = 10  # The column index of the "active" column
 MEMBERS_RANK_INDEX = 8  # The column index of the "rank" column
 MEMBERS_NOTE_INDEX = 14  # The column containing notes for users
+
+MARKET_PRICE_INDEXES = [6, 7, 9]
+MARKET_ITEM_INDEX = 0
+MARKET_AREA = "A:J"
 
 # All resources that exist, will be used to verify the integrity of the received data
 PROJECT_RESOURCES = []
@@ -229,6 +234,38 @@ async def get_investments(name: str, default: Optional[int] = None) -> int:
         if name in investments:
             return investments[name]
         return default
+
+
+async def get_market_data():
+    logger.info("Loading market data")
+    agc = await agcm.authorize()
+    sheet = await agc.open_by_key(SPREADSHEET_ID)
+    wk_market = await sheet.worksheet(SHEET_MARKET_NAME)
+    data = await wk_market.get_values(MARKET_AREA, value_render_option=ValueRenderOption.unformatted)
+    prices = {}
+    row_i = -1
+    price_names = {}
+    for row in data:
+        row_i += 1
+        if row_i == 0:
+            for col in MARKET_PRICE_INDEXES:
+                if len(row) < col:
+                    raise GoogleSheetException(f"Header row of {SHEET_MARKET_NAME} is to small")
+                price_names[row[col]] = col
+            continue
+        item = row[MARKET_ITEM_INDEX]
+        item_prices = {}
+        prices[item] = item_prices
+        for p_name, col in price_names.items():
+            if len(row) < col:
+                continue
+            value = row[col]
+            if type(value) == int or type(value) == float:
+                item_prices[p_name] = value
+            elif not value == "":
+                logger.warning("Market price '%s':%s for item '%s' in sheet '%s' is not a number: '%s'",
+                               p_name, col, item, SHEET_MARKET_NAME, value)
+    return prices
 
 
 async def find_projects():
