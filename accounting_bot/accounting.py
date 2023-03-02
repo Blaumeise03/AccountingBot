@@ -634,7 +634,7 @@ async def send_transaction(embeds: List[Union[Embed, Transaction]], interaction:
         except mariadb.Error as e:
             note += "\nFehler beim Eintragen in die Datenbank, die Transaktion wurde jedoch trotzdem im " \
                     f"Accountinglog gepostet. Informiere bitte einen Admin, danke.\n{e}"
-    await interaction.response.send_message("Transaktion gesendet!" + note, ephemeral=True)
+    await interaction.followup.send("Transaktion gesendet!" + note, ephemeral=True)
     return msg
 
 
@@ -710,7 +710,7 @@ class TransactionView(AutoDisableView):
     async def btn_verify_callback(self, button: discord.Button, interaction: Interaction):
         if not STATE.is_online():
             raise BotOfflineException()
-        await interaction.response.defer()
+        await interaction.response.defer(ephemeral=True, invisible=False)
         await verify_transaction(interaction.user.id, interaction.message, interaction)
 
     @discord.ui.button(label="Löschen", style=discord.ButtonStyle.red)
@@ -763,10 +763,12 @@ class ConfirmView(AutoDisableView):
         super().__init__(timeout=300)
 
     @discord.ui.button(label="Senden", style=discord.ButtonStyle.green)
-    async def btn_confirm_callback(self, button, interaction):
+    async def btn_confirm_callback(self, button, interaction: Interaction):
         if not STATE.is_online():
             raise BotOfflineException()
+        await interaction.response.defer(ephemeral=True, invisible=False)
         await send_transaction(interaction.message.embeds, interaction)
+        await self.message.delete()
 
 
 # noinspection PyUnusedLocal
@@ -819,6 +821,7 @@ class ConfirmOCRView(AutoDisableView):
     async def btn_confirm_callback(self, button, interaction):
         if not STATE.is_online():
             raise BotOfflineException()
+        await interaction.response.defer(ephemeral=True, invisible=False)
         msg = await send_transaction([self.transaction], interaction, self.note)
         if msg is not None:
             res_msg = f"Transaktion versendet: https://discord.com/channels/{SERVER}/{ACCOUNTING_LOG}/{msg.id}"

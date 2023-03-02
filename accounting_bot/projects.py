@@ -153,7 +153,7 @@ class ConfirmView(AutoDisableView):
             return
         if not STATE.is_online():
             raise BotOfflineException()
-        await interaction.response.send_message("Bitte warten...", ephemeral=True)
+        await interaction.response.defer(ephemeral=False, invisible=False)
 
         await interaction.message.edit(view=None)
         self.log.append("Inserting into sheet...")
@@ -203,7 +203,7 @@ class ConfirmOverflowView(AutoDisableView):
             return
         if not STATE.is_online():
             raise BotOfflineException()
-        await interaction.response.send_message("Bitte warten, wird berechnet...")
+        await interaction.response.defer(invisible=False)
         await interaction.message.edit(view=None)
         log = await sheet.apply_overflow_split(self.investments, self.changes)
         await interaction.followup.send("Überlauf wurde auf die Projekte verteilt!",
