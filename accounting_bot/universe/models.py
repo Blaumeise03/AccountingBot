@@ -227,3 +227,34 @@ class Resource(Base):
 
     def __repr__(self) -> str:
         return f"Resource(planet={self.planet_id}, res={self.type_id})"
+
+
+class PiPlanSettings(Base):
+    __tablename__ = "piplan"
+    user_id: Mapped[int] = mapped_column(BigInteger(), primary_key=True)
+    plan_num: Mapped[int] = mapped_column(Integer(), primary_key=True)
+    user_name: Mapped[str] = mapped_column(String(40))
+    arrays: Mapped[int] = mapped_column(Integer(), default=0)
+    planets: Mapped[int] = mapped_column(Integer(), default=0)
+    resources: Mapped[List["PiPlanResource"]] = relationship(back_populates="piplan", cascade="all, delete-orphan")
+    constellation_id: Mapped[int] = mapped_column(ForeignKey("constellation.id", name="key_piplan_const"), nullable=True)
+    constellation: Mapped[Constellation] = relationship()
+
+
+class PiPlanResource(Base):
+    __tablename__ = "piplan_resource"
+    user_id: Mapped[int] = mapped_column(BigInteger(), primary_key=True)
+    plan_num: Mapped[int] = mapped_column(Integer(), primary_key=True)
+    piplan: Mapped[PiPlanSettings] = relationship(back_populates="resources")
+    planet_id: Mapped[int] = mapped_column(Integer(), primary_key=True)
+    type_id: Mapped[int] = mapped_column(BigInteger(), primary_key=True)
+    resource: Mapped[Resource] = relationship(lazy="joined")
+    arrays: Mapped[int] = mapped_column(Integer(), default=0)
+    locked: Mapped[bool] = mapped_column(Boolean, default=False)
+    __table_args__ = (ForeignKeyConstraint([user_id, plan_num],
+                                           [PiPlanSettings.user_id, PiPlanSettings.plan_num],
+                                           name="fk_pires_piplan"),
+                      ForeignKeyConstraint([planet_id, type_id],
+                                           [Resource.planet_id, Resource.type_id],
+                                           name="fk_pires_res"),
+                      {})

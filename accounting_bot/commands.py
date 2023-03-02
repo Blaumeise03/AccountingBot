@@ -11,6 +11,7 @@ from accounting_bot.accounting import AccountingView
 from accounting_bot.config import Config
 from accounting_bot.database import DatabaseConnector
 from accounting_bot.universe import data_utils
+from accounting_bot.universe.pi_planer import PiPlaner, PiPlanningSession, PiPlanningView
 from accounting_bot.utils import State
 
 if TYPE_CHECKING:
@@ -23,7 +24,9 @@ def main_char_autocomplete(self: AutocompleteContext):
     return filter(lambda n: self.value is None or n.startswith(self.value.strip()), utils.main_chars)
 
 
-def get_cmd_name(cmd: Union[commands.Command, discord.ApplicationCommand]):
+def get_cmd_name(cmd: Union[commands.Command, discord.ApplicationCommand, None]) -> Optional[str]:
+    if cmd is None:
+        return None
     return f"{cmd.full_parent_name} {cmd.name}".strip()
 
 
@@ -430,3 +433,14 @@ class UniverseCommands(commands.Cog):
         emb = discord.Embed(title=title, color=discord.Color.green(),
                             description="Kein Planet gefunden/ungültige Eingabe" if len(result) == 0 else msg)
         await ctx.followup.send(embed=emb, ephemeral=silent)
+
+    @cmd_pi.command(name="planer", description="Open the pi planer to manage your planets")
+    async def cmd_pi_plan(self, ctx: ApplicationContext):
+        plan = PiPlanningSession(ctx.user)
+        await plan.load_plans()
+        msg = await ctx.user.send(
+            f"Du hast aktuell {len(plan.plans)} aktive Pi Pläne:",
+            embeds=plan.get_embeds(),
+            view=PiPlanningView(plan))
+        plan.message = msg
+        await ctx.response.send_message("Überprüfe deine Direktnachrichten", ephemeral=True)

@@ -12,10 +12,14 @@ from accounting_bot.config import Config, ConfigTree
 from accounting_bot.database import DatabaseConnector
 from accounting_bot.exceptions import PlanetaryProductionException
 from accounting_bot.universe import models
-from accounting_bot.universe.models import Region, Constellation, Celestial, Item, Resource, Richness, System, \
-    SystemConnections
+from accounting_bot.universe.models import *
+
+if TYPE_CHECKING:
+    from pi_planer import PiPlaner
 
 logger = logging.getLogger("data.db")
+
+
 # logger.setLevel(logging.DEBUG)
 # logging.getLogger('sqlalchemy.engine').setLevel(logging.INFO)
 
@@ -52,6 +56,7 @@ class UniverseDatabase:
                                     pool_pre_ping=True,
                                     pool_recycle=True
                                     )
+        logger.info("Creating tables if not exist")
         Region.__table__.create(bind=self.engine, checkfirst=True)
         Constellation.__table__.create(bind=self.engine, checkfirst=True)
         Item.__table__.create(bind=self.engine, checkfirst=True)
@@ -59,6 +64,9 @@ class UniverseDatabase:
         models.SystemConnections.create(bind=self.engine, checkfirst=True)
         Celestial.__table__.create(bind=self.engine, checkfirst=True)
         Resource.__table__.create(bind=self.engine, checkfirst=True)
+        PiPlanSettings.__table__.create(bind=self.engine, checkfirst=True)
+        PiPlanResource.__table__.create(bind=self.engine, checkfirst=True)
+        logger.info("Setup completed")
 
     def fetch_system(self, system_name: str) -> Optional[System]:
         with Session(self.engine, expire_on_commit=False) as conn:
@@ -241,6 +249,91 @@ class UniverseDatabase:
                     joinedload(System.constellation).subqueryload(Constellation.region)
                 ).all()
             )
+
+    def get_pi_plan(self, user_id: int, plan_num: Optional[int] = None) -> Union[PiPlanSettings, List[PiPlanSettings], None]:
+        with Session(self.engine) as conn:
+            if plan_num is not None:
+                return (conn.query(PiPlanSettings)
+                        .options(joinedload(PiPlanSettings.resources).subqueryload(Resource.type),
+                                 joinedload(PiPlanSettings.resources).subqueryload(Resource.planet),
+                                 joinedload(PiPlanSettings.constellation))
+                        .filter(PiPlanSettings.user_id == user_id, PiPlanSettings.plan_num == plan_num)
+                        .first())
+            else:
+                # noinspection PyTypeChecker
+                return (conn.query(PiPlanSettings)
+                        .options(joinedload(PiPlanSettings.resources).subqueryload(PiPlanResource.resource).subqueryload(Resource.type),
+                                 joinedload(PiPlanSettings.resources).subqueryload(PiPlanResource.resource).subqueryload(Resource.planet),
+                                 joinedload(PiPlanSettings.constellation))
+                        .filter(PiPlanSettings.user_id == user_id)
+                        .all())
+
+    def save_pi_plan(self, pi_plan: "PiPlaner"):
+        with Session(self.engine) as conn:
+            result = (
+                conn.query(PiPlanSettings)
+                .options(joinedload(PiPlanSettings.resources).subqueryload(PiPlanResource.resource).subqueryload(Resource.type))
+                .filter(PiPlanSettings.user_id == pi_plan.user_id, PiPlanSettings.plan_num == pi_plan.plan_num)
+                .first()
+            )  # type: PiPlanSettings | None
+            if result is None:
+                result = PiPlanSettings()
+                conn.add(result)
+            result.user_id = pi_plan.user_id
+            result.plan_num = pi_plan.plan_num
+            result.user_name = pi_plan.user_name
+            result.arrays = pi_plan.num_arrays
+            result.planets = pi_plan.num_planets
+            result.constellation_id = pi_plan.constellation_id
+            arrays = []
+            found_arrays = []
+            for res in result.resources:  # type: PiPlanResource
+                found = None
+                for array in pi_plan.arrays:
+                    if array.planet.id == res.planet_id:
+                        if array.resource == res.resource.type.name:
+                            found = array
+                            res.arrays = array.amount
+                            res.locked = array.locked
+                            found_arrays.append(array)
+                            arrays.append(res)
+                            break
+                        if found is not None:
+                            break
+                if found is not None:
+                    break
+            for array in pi_plan.arrays:
+                if array not in found_arrays:
+                    if array.resource_id is None:
+                        item = conn.query(Item).filter(Item.name.like(array.resource)).first()
+                        if item is None:
+                            raise PlanetaryProductionException(f"Resource {array.resource} not found!")
+                        array.resource = item.name
+                        array.resource_id = item.id
+                    arrays.append(PiPlanResource(
+                        user_id=pi_plan.user_id,
+                        plan_num=pi_plan.plan_num,
+                        planet_id=array.planet.id,
+                        type_id=array.resource_id,
+                        arrays=array.amount,
+                        locked=array.locked
+                    ))
+            result.resources.clear()
+            result.resources.extend(arrays)
+            conn.commit()
+
+    def delete_pi_plan(self, pi_plan: "PiPlaner"):
+        with Session(self.engine) as conn:
+            p = (
+                conn.query(PiPlanSettings)
+                .filter(PiPlanSettings.user_id == pi_plan.user_id,
+                        PiPlanSettings.plan_num == pi_plan.plan_num)
+                .first()
+            )
+            if p is None:
+                raise PlanetaryProductionException(f"Didn't found plan {pi_plan.user_id}:{pi_plan.plan_num} in database")
+            conn.delete(p)
+            conn.commit()
 
 
 class DatabaseInitializer(UniverseDatabase):

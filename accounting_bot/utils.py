@@ -75,7 +75,7 @@ def log_error(logger: logging.Logger,
             err_msg = "An error occurred at {} outside of a guild in channel {}, sent by {}:{} during execution of command \"%s\"" \
                 .format(location, ctx.channel_id, ctx.user.id, ctx.user.name, ctx.command.name)
     elif isinstance(ctx, Interaction):
-        err_msg = "An error occurred at {} during interaction in guild {} in channel {}, user %s: {}" \
+        err_msg = "An error occurred at {} during interaction in guild {} in channel {}, user {}: {}" \
             .format(location, ctx.guild_id, ctx.channel_id, ctx.user.id, ctx.user.name)
     else:
         err_msg = "An error occurred at {}".format(location)
@@ -323,7 +323,16 @@ class AutoDisableView(ErrorHandledView):
                     self.message.id if self.message is not None else "None",
                     self.message.channel.id if self.message is not None else "None")
         if self.message is not None:
-            await self.message.edit(view=None)
+            try:
+                await self.message.edit(view=None)
+            except discord.errors.HTTPException as e:
+                logger.info("Can't edit view: %s", e)
+                try:
+                    c = await STATE.bot.fetch_channel(self.message.channel.id)
+                    msg = await c.fetch_message(self.message.id)
+                    await msg.edit(view=None)
+                except discord.errors.HTTPException as e2:
+                    logger.info("Can't fetch message of view to edit: %s", e)
         self.clear_items()
         self.disable_all_items()
 

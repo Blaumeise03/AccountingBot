@@ -4,14 +4,14 @@ import functools
 import logging
 import math
 from concurrent.futures import ThreadPoolExecutor
-from typing import List, Iterable, Iterator, Dict, Any, Tuple, Optional, Callable, TypeVar
+from typing import List, Iterable, Iterator, Dict, Any, Tuple, Optional, Callable, TypeVar, Union
 
 import numpy as np
 import plotly.express as px
 import plotly.graph_objects as go
 import networkx as nx
 
-from accounting_bot.universe.models import System
+from accounting_bot.universe.models import System, PiPlanSettings
 from accounting_bot.universe.universe_database import UniverseDatabase
 
 logger = logging.getLogger("data.utils")
@@ -20,6 +20,11 @@ db = None  # type: UniverseDatabase | None
 resource_order = []  # type: List[str]
 executor = ThreadPoolExecutor(max_workers=5)
 loop = asyncio.get_event_loop()
+_T = TypeVar("_T")
+
+
+async def execute_async(func: Callable[..., _T], *args, **kwargs) -> _T:
+    return await loop.run_in_executor(executor, functools.partial(func, *args, **kwargs))
 
 
 def create_pi_boxplot(constellation_name: str,
@@ -88,13 +93,6 @@ def create_pi_boxplot(constellation_name: str,
     return fig, N
 
 
-_T = TypeVar("_T")
-
-
-async def execute_async(func: Callable[..., _T], *args, **kwargs) -> _T:
-    return await loop.run_in_executor(executor, functools.partial(func, *args, **kwargs))
-
-
 async def create_pi_boxplot_async(constellation_name: str,
                                   resource_names: List[str],
                                   region_names: List[str],
@@ -105,6 +103,21 @@ async def create_pi_boxplot_async(constellation_name: str,
 async def get_best_pi_planets(constellation_name: str,
                               resource_name: str,
                               amount: Optional[int] = None) -> List[Dict[str, int]]:
+    """
+    Searches the best planets in a constellation for a given resource
+
+    The list of dictionaries is as follows:
+        [{
+        "p_id": planet_id,
+        "p_name": planet.name,
+        "res": type.name,
+        "out": output
+        , ...]}
+    :param constellation_name:
+    :param resource_name:
+    :param amount:
+    :return:
+    """
     def _get_best_pi_planets(const_name: str, res_name: str, am: Optional[int] = None) -> List[Dict[str, int]]:
         return db.fetch_resources(const_name, [res_name], am)
     return await execute_async(_get_best_pi_planets, constellation_name, resource_name, amount)
@@ -135,6 +148,23 @@ async def create_image(*args, **kwargs) -> bytes:
     def _create_image(fig: go.Figure, *_args, **_kwargs) -> bytes:
         return fig.to_image(*_args, **_kwargs)
     return await execute_async(_create_image, *args, **kwargs)
+
+
+async def save_pi_plan(*args, **kwargs) -> None:
+    def _save_pi_plan(*_args, **_kwargs):
+        return db.save_pi_plan(*_args, **_kwargs)
+    return await execute_async(_save_pi_plan, *args, **kwargs)
+
+async def delete_pi_plan(*args, **kwargs) -> None:
+    def _delete_pi_plan(*_args, **_kwargs):
+        return db.delete_pi_plan(*_args, **_kwargs)
+    return await execute_async(_delete_pi_plan, *args, **kwargs)
+
+
+async def get_pi_plan(*args, **kwargs) -> Union[PiPlanSettings, List[PiPlanSettings], None]:
+    def _get_pi_plan(*_args, **_kwargs):
+        return db.get_pi_plan(*_args, **_kwargs)
+    return await execute_async(_get_pi_plan, *args, **kwargs)
 
 
 def graph_map_to_figure(graph: nx.Graph, include_highsec=True, node_size=3.5) -> go.Figure:
