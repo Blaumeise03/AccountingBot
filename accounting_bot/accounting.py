@@ -21,6 +21,7 @@ from accounting_bot import sheet, utils
 from accounting_bot.config import Config
 from accounting_bot.database import DatabaseConnector
 from accounting_bot.exceptions import BotOfflineException
+from accounting_bot.universe import pi_planer
 from accounting_bot.utils import AutoDisableView, State, ErrorHandledModal, TransactionLike
 
 if TYPE_CHECKING:
@@ -80,13 +81,14 @@ def set_up(config: Config,
     ADMINS = config["admins"]
     STATE = state
     logger.info("Loading embed config...")
-    with open("resources/embeds.json", "r") as embed_file:
+    with open("resources/embeds.json", "r", encoding="utf8") as embed_file:
         embeds = json.load(embed_file)
         EMBED_MENU_INTERNAL = Embed.from_dict(embeds["MenuEmbedInternal"])
         EMBED_MENU_EXTERNAL = Embed.from_dict(embeds["MenuEmbedExternal"])
         EMBED_MENU_VCB = Embed.from_dict(embeds["MenuEmbedVCB"])
         EMBED_MENU_SHORTCUT = Embed.from_dict(embeds["MenuShortcut"])
         EMBED_INDU_MENU = Embed.from_dict(embeds["InduRoleMenu"])
+        pi_planer.help_embed = Embed.from_dict(embeds["PiPlanerHelp"])
         logger.info("Embeds loaded.")
 
 

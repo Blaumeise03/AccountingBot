@@ -13,6 +13,7 @@ from accounting_bot.utils import ErrorHandledModal, AutoDisableView
 logger = logging.getLogger("data.pi")
 item_prices = {}  # type: Dict[str,Dict[str, Union[int, float]]]
 available_prices = []
+help_embed = None  # type: Embed | None
 
 
 def get_price(item: str, price_types: List[str]) -> Optional[Union[float, int]]:
@@ -21,10 +22,11 @@ def get_price(item: str, price_types: List[str]) -> Optional[Union[float, int]]:
     prices = item_prices[item]
     if price_types[0].casefold() == "max".casefold():
         return max(prices.values())
-    for t in price_types:
-        if t in prices:
-            return prices[t]
-    return None
+    p = 0
+    for t, v in prices.items():
+        if v > p and t in price_types:
+            p = v
+    return p
 
 
 class Array:
@@ -115,18 +117,19 @@ class PiPlaner:
                     description=desc,
                     color=color)
 
-        val = f"   n {'Resource':<21} Planet      Out @ Arrays = {'items/h':<6}"
+        val = f"   n {'Resource':<21} Planet     Base Out = {'items/h':<6}"
         resources = {}
         for i, array in enumerate(self.arrays):
+            array.amount = self.num_arrays
             val += (f"\n{'🔒' if array.locked else '  '}"
                     f"{i:>2} {array.resource:<21} {array.planet.name:<11} "
-                    f"{array.base_output:7.2f} @ {array.amount:2} = {array.base_output * array.amount:6.1f}")
+                    f"{array.base_output:7.2f} = {array.base_output * array.amount:6.1f}")
             if array.resource in resources:
                 resources[array.resource] += array.base_output * array.amount
             else:
                 resources[array.resource] = array.base_output * array.amount
         emb.add_field(name=f"Aktive Arrays", value=f"```\n{val}\n```", inline=False)
-        val = f"{'Resource':<21}: items/h  items/d    ISK/d"
+        val = f"{'Resource':<21}: items/h  items/d          ISK/d"
         resources = sorted(resources.items(), key=lambda res: data_utils.resource_order.index(res[0]))
         income_sum = 0
         for name, output in resources:
@@ -135,14 +138,14 @@ class PiPlaner:
             if price is not None:
                 income = output * price
             income_sum += income
-            val += f"\n{name:<21}: {output:7.2f}  {output*24:7,.0f}  {income*24:9,.0f} ISK"
+            val += f"\n{name:<21}: {output:7.2f}  {output * 24:7,.0f}  {income * 24:9,.0f} ISK"
         emb.add_field(name="Produktion", value=f"```\n{val}\n```", inline=False)
         emb.add_field(
             name="Einnahmen",
-            value=f"```\nZeitraum  Einnahmen\n"
+            value=f"```\nZeitraum          Einnahmen\n"
                   f"Pro Tag   {income_sum:13,.0f} ISK\n"
-                  f"Pro Woche {income_sum*24*7:13,.0f} ISK\n"
-                  f"Pro Monat {income_sum*24*7*30:13,.0f} ISK\n```")
+                  f"Pro Woche {income_sum * 24 * 7:13,.0f} ISK\n"
+                  f"Pro Monat {income_sum * 24 * 7 * 30:13,.0f} ISK\n```")
         return emb
 
 
@@ -153,17 +156,53 @@ class PiPlanningSession:
         self.plans = []  # type: List[PiPlaner]
         self._deleted = []  # type: List[PiPlaner]
         self._active = None
-        self.edit = None  # type: EditPlanView | None
+        self.main_view = None  # type: PiPlanningView | None
         self.message = None  # type: Message | None
 
+    def set_active(self, plan: Union[str, int, None]):
+        if len(self.plans) == 0:
+            self._active = None
+            return
+        if plan is None or plan == "min":
+            self._active = min(map(lambda p: p.plan_num, self.plans))
+            return
+        if type(plan) == int:
+            for p in self.plans:
+                if p.plan_num == plan:
+                    self._active = plan
+                    return
+            self.set_active(None)
+            return
+        if self._active is None:
+            self.set_active(None)
+            return
+        if plan == "prev":
+            self._active = min(map(lambda p: p.plan_num, filter(lambda p: p.plan_num <= self._active, self.plans)))
+            return
+        if plan == "next":
+            self._active = max(map(lambda p: p.plan_num, filter(lambda p: p.plan_num >= self._active, self.plans)))
+            return
+
+    def get_active_plan(self):
+        if self._active is None:
+            return None
+        else:
+            for plan in self.plans:
+                if plan.plan_num == self._active:
+                    return plan
+        return None
+
     async def refresh_msg(self):
-        if self.edit is not None:
-            await self.edit.refresh_msg()
+        if self._active is None:
+            self.set_active(None)
         if self.message is not None:
-            msg = f"Du hast {len(self.plans)} Pi Pläne\n"
             if self._active is not None:
-                msg += f"Aktuell is Plan #{self._active} ausgewählt"
-            await self.message.edit(content=msg, embeds=self.get_embeds())
+                await self.message.edit(
+                    content=f"Du hast {len(self.plans)} Pi Pläne\nAktuell is Plan #{self._active} ausgewählt",
+                    embed=self.get_active_plan().to_embed(Color.green()))
+                return
+            await self.message.edit(content="Du hast keinen Pi Plan, erstelle einen neuen.")
+            return
         else:
             logger.warning("Session %s:%s does not have an attached message", self.user_id, self.user.name)
 
@@ -189,21 +228,12 @@ class PiPlanningSession:
         self._deleted.clear()
 
     def get_embeds(self) -> List[Embed]:
+        if self._active is None:
+            self.set_active(None)
         embeds = []
-        for plan in self.plans:
-            if self._active is not None and plan.plan_num == self._active:
-                emb = plan.to_embed(color=Color.green())
-            else:
-                emb = plan.to_embed(color=Color.red())
-            embeds.append(emb)
+        if self._active is not None:
+            embeds.append(self.get_active_plan().to_embed())
         return embeds
-
-    def set_active(self, num: int) -> Optional[PiPlaner]:
-        for plan in self.plans:
-            if plan.plan_num == num - 1:
-                self._active = num - 1
-                return plan
-        return None
 
     def create_new_plan(self) -> PiPlaner:
         next_num = 0
@@ -217,25 +247,55 @@ class PiPlanningSession:
     def delete_plan(self, plan) -> None:
         self.plans.remove(plan)
         self._deleted.append(plan)
+        self.set_active(None)
 
 
 # noinspection PyUnusedLocal
 class PiPlanningView(AutoDisableView):
     def __init__(self, planning_session: PiPlanningSession):
-        super().__init__(timeout=60*20)
+        super().__init__(timeout=60 * 20)
         self.session = planning_session
+        self.session.main_view = self
 
-    @discord.ui.button(emoji="💾", style=discord.ButtonStyle.green)
+    @discord.ui.button(emoji="✖️", style=discord.ButtonStyle.red, row=0)
+    async def btn_close(self, button: Button, ctx: ApplicationContext):
+        await self.message.delete()
+        await ctx.response.send_message(f"Um die Änderungen zu speichern, klicke auf 💾", ephemeral=True)
+
+    @discord.ui.button(emoji="💾", style=discord.ButtonStyle.green, row=0)
     async def btn_save(self, button: Button, ctx: ApplicationContext):
         await ctx.response.defer(ephemeral=True)
         await self.session.save_plans()
         await ctx.followup.send("Änderungen gespeichert!", ephemeral=True)
 
-    @discord.ui.button(emoji="✏", style=discord.ButtonStyle.blurple)
-    async def btn_edit(self, button: Button, ctx: ApplicationContext):
-        await ctx.response.send_modal(ChangePlanModal(self.session))
+    @discord.ui.button(emoji="◀️", style=discord.ButtonStyle.grey, row=0)
+    async def btn_prev_plan(self, button: Button, ctx: ApplicationContext):
+        self.session.set_active("prev")
+        await ctx.response.defer(ephemeral=True, invisible=True)
+        await self.session.refresh_msg()
 
-    @discord.ui.button(emoji="➕", style=discord.ButtonStyle.blurple)
+    @discord.ui.button(emoji="▶️", style=discord.ButtonStyle.grey, row=0)
+    async def btn_next_plan(self, button: Button, ctx: ApplicationContext):
+        self.session.set_active("next")
+        await ctx.response.defer(ephemeral=True, invisible=True)
+        await self.session.refresh_msg()
+
+    @discord.ui.button(emoji="❓", style=discord.ButtonStyle.grey, row=0)
+    async def btn_help(self, button: Button, ctx: ApplicationContext):
+        await ctx.response.send_message(embed=help_embed, ephemeral=True)
+
+    @discord.ui.button(emoji="🗑️", style=discord.ButtonStyle.red, row=1)
+    async def btn_delete(self, button: Button, ctx: ApplicationContext):
+        async def _delete(_ctx: ApplicationContext):
+            self.session.delete_plan(self.plan)
+            self.plan = None
+            self.session.isEditing = False
+            await _ctx.response.send_message("Plan gelöscht", ephemeral=True)
+            await self.session.refresh_msg()
+        await ctx.response.send_message("Willst Du diesen Plan wirklich löschen?", view=ConfirmView(_delete),
+                                        ephemeral=True)
+
+    @discord.ui.button(emoji="➕", style=discord.ButtonStyle.blurple, row=1)
     async def btn_new(self, button: Button, ctx: ApplicationContext):
         plan = self.session.create_new_plan()
         plan.user_id = ctx.user.id
@@ -243,36 +303,29 @@ class PiPlanningView(AutoDisableView):
         await self.session.refresh_msg()
         await ctx.response.send_message(f"Es wurde ein neuer Plan erstellt: #{plan.plan_num + 1}", ephemeral=True)
 
-    @discord.ui.button(emoji="✖️", style=discord.ButtonStyle.red)
-    async def btn_close(self, button: Button, ctx: ApplicationContext):
-        await self.message.delete()
-        await ctx.response.send_message(f"Um die Änderungen zu speichern, klicke auf 💾", ephemeral=True)
+    @discord.ui.button(emoji="✏", style=discord.ButtonStyle.blurple, row=1)
+    async def btn_basic(self, button: Button, ctx: ApplicationContext):
+        await ctx.response.send_modal(EditPlanModal(self.session, "basic"))
 
+    @discord.ui.button(emoji="🗺️", style=discord.ButtonStyle.blurple, row=1)
+    async def btn_const(self, button: Button, ctx: ApplicationContext):
+        await ctx.response.send_modal(EditPlanModal(self.session, "const"))
 
-class ChangePlanModal(ErrorHandledModal):
-    def __init__(self, session: PiPlanningSession, *args, **kwargs):
-        super().__init__(title="Pi Plan auswählen", *args, **kwargs)
-        self.session = session
-        self.add_item(InputText(label="Nummer", placeholder="Die Nummer des Plans eingeben", required=True))
+    @discord.ui.button(emoji="💸", style=discord.ButtonStyle.blurple, row=1)
+    async def btn_prices(self, button: Button, ctx: ApplicationContext):
+        await ctx.response.send_modal(EditPlanModal(self.session, "prices"))
 
-    async def callback(self, interaction: Interaction):
-        num_raw = self.children[0].value
-        try:
-            num = int(num_raw.strip())
-        except ValueError:
-            await interaction.response.send_message(f"Die Eingabe \"{num_raw}\" ist keine Nummer", ephemeral=True)
-            return
-        plan = self.session.set_active(num)
-        if plan is not None:
-            view = EditPlanView(self.session, plan)
-            await interaction.response.send_message(f"Pi Plan #{num} wurde als aktiv gesetzt", view=view,
-                                                    embed=plan.to_embed(), ephemeral=False)
-            if self.session.edit is not None:
-                await self.session.edit.message.delete()
-            self.session.edit = view
-            await self.session.refresh_msg()
-            return
-        await interaction.response.send_message(f"Pi Plan #{num} wurde nicht gefunden", ephemeral=True)
+    @discord.ui.button(emoji="🗑️", label="Array", style=discord.ButtonStyle.red, row=2)
+    async def btn_del_array(self, button: Button, ctx: ApplicationContext):
+        await ctx.response.send_modal(EditPlanModal(self.session, "del_array"))
+
+    @discord.ui.button(emoji="🔓", label="Array", style=discord.ButtonStyle.blurple, row=2)
+    async def btn_lock_array(self, button: Button, ctx: ApplicationContext):
+        await ctx.response.send_modal(EditPlanModal(self.session, "lock_array"))
+
+    @discord.ui.button(emoji="➕", label="Array", style=discord.ButtonStyle.blurple, row=2)
+    async def btn_add_array(self, button: Button, ctx: ApplicationContext):
+        await ctx.response.send_modal(EditPlanModal(self.session, "add_array"))
 
 
 # noinspection PyUnusedLocal
@@ -282,51 +335,8 @@ class EditPlanView(AutoDisableView):
         self.session = planning_session
         self.plan = plan
 
-    async def refresh_msg(self):
-        if self.plan is not None:
-            await self.message.edit(f"Pi Plan #{self.plan.plan_num + 1} bearbeiten", embed=self.plan.to_embed())
-        else:
-            await self.message.delete()
-
-    @discord.ui.button(emoji="🗑️", style=discord.ButtonStyle.red)
-    async def btn_delete(self, button: Button, ctx: ApplicationContext):
-        async def _delete(_ctx: ApplicationContext):
-            self.session.delete_plan(self.plan)
-            self.plan = None
-            await _ctx.response.send_message("Plan gelöscht", ephemeral=True)
-            await self.session.refresh_msg()
-        await ctx.response.send_message("Willst Du diesen Plan wirklich löschen?", view=ConfirmView(_delete), ephemeral=True)
-
-    @discord.ui.button(emoji="✏", style=discord.ButtonStyle.blurple)
-    async def btn_basic(self, button: Button, ctx: ApplicationContext):
-        await ctx.response.send_modal(EditPlanModal(self, self.plan, "basic"))
-
-    @discord.ui.button(emoji="🗺️", style=discord.ButtonStyle.blurple)
-    async def btn_const(self, button: Button, ctx: ApplicationContext):
-        await ctx.response.send_modal(EditPlanModal(self, self.plan, "const"))
-
-    @discord.ui.button(emoji="💸", style=discord.ButtonStyle.blurple)
-    async def btn_prices(self, button: Button, ctx: ApplicationContext):
-        await ctx.response.send_modal(EditPlanModal(self, self.plan, "prices"))
-
-    @discord.ui.button(emoji="🗑️", label="Array", style=discord.ButtonStyle.red)
-    async def btn_del_array(self, button: Button, ctx: ApplicationContext):
-        await ctx.response.send_modal(EditPlanModal(self, self.plan, "del_array"))
-
-    @discord.ui.button(emoji="🔓", label="Array", style=discord.ButtonStyle.blurple)
-    async def btn_lock_array(self, button: Button, ctx: ApplicationContext):
-        await ctx.response.send_modal(EditPlanModal(self, self.plan, "lock_array"))
-
-    @discord.ui.button(emoji="➕", label="Array", style=discord.ButtonStyle.blurple)
-    async def btn_add_array(self, button: Button, ctx: ApplicationContext):
-        await ctx.response.send_modal(EditPlanModal(self, self.plan, "add_array"))
-
-    @discord.ui.button(emoji="✖️", style=discord.ButtonStyle.grey)
-    async def btn_close(self, button: Button, ctx: ApplicationContext):
-        self.session.edit = None
-        await self.message.delete()
-        # await ctx.response.send_message(f"Um die Änderungen zu speichern, klicke auf 💾", ephemeral=True)
-        await ctx.response.defer(ephemeral=True)
+    def refresh_plan(self):
+        self.plan = self.session.get_active_plan()
 
 
 # noinspection PyUnusedLocal
@@ -346,13 +356,23 @@ class SelectArrayView(AutoDisableView):
             await self.function(self.number, ctx)
             await self.view.message.edit(embed=self.view.build_embed())
 
-    def __init__(self, planning_session: PiPlanningSession, plan: PiPlaner, title: str, resources: List[Dict[str, Any]]):
+    def __init__(self, planning_session: PiPlanningSession, plan: PiPlaner, title: str,
+                 resources: List[Dict[str, Any]]):
         async def save_array(value: Union[str, int], ctx: ApplicationContext):
             if type(value) == int:
+                if len(self.plan.arrays) >= self.plan.num_planets:
+                    await ctx.response.send_message("Du hast bereits die maximale Anzahl an Planeten", ephemeral=True)
+                    return
+
                 num = int(value)
                 res = resources[num]
                 array = Array(resource=res["res"], base_output=res["out"], amount=plan.num_arrays)
                 array.planet = Planet(p_id=res["p_id"], name=res["p_name"])
+                for arr in self.plan.arrays:
+                    if arr.planet.id == array.planet.id:
+                        await ctx.response.send_message("Du hast bereits ein Array auf diesem Planeten",
+                                                        ephemeral=True)
+                        return
                 plan.arrays.append(array)
                 await ctx.response.send_message("Array wurde hinzugefügt", ephemeral=True)
                 await planning_session.refresh_msg()
@@ -361,8 +381,8 @@ class SelectArrayView(AutoDisableView):
                     NumberInputModal(title="Nummer eingeben",
                                      label="Nummer",
                                      placeholder="Nummer des Planeten",
-                                     callback=save_array)
-                )
+                                     callback=save_array))
+
         super().__init__(timeout=60 * 20)
         self.session = planning_session
         self.plan = plan
@@ -373,7 +393,7 @@ class SelectArrayView(AutoDisableView):
             self.add_item(SelectArrayView.NumberButton(i, save_array))
         self.add_item(SelectArrayView.NumberButton("...", save_array))
 
-    @discord.ui.button(emoji="✖️", style=discord.ButtonStyle.green)
+    @discord.ui.button(emoji="🆗", style=discord.ButtonStyle.green)
     async def btn_close(self, button: Button, ctx: ApplicationContext):
         await self.message.delete()
         await ctx.response.defer(ephemeral=True)
@@ -418,7 +438,7 @@ class NumberInputModal(ErrorHandledModal):
                  label: str,
                  placeholder: str,
                  callback: Callable[[int, ApplicationContext], Coroutine],
-                 *args,  **kwargs):
+                 *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.add_item(InputText(label=label, placeholder=placeholder, required=True))
         self.function = callback
@@ -433,10 +453,10 @@ class NumberInputModal(ErrorHandledModal):
 
 
 class EditPlanModal(ErrorHandledModal):
-    def __init__(self, edit: EditPlanView, plan: PiPlaner, data: str, *args, **kwargs):
+    def __init__(self, session: PiPlanningSession, data: str, *args, **kwargs):
         super().__init__(title="Pi Plan bearbeiten", *args, **kwargs)
-        self.edit = edit
-        self.plan = plan
+        self.session = session
+        self.plan = session.get_active_plan()
         self.data = data
         match data:
             case "basic":
@@ -448,9 +468,11 @@ class EditPlanModal(ErrorHandledModal):
                 self.add_item(InputText(label="Konstellation", placeholder="Die Konstellation des Plans oder leer",
                                         required=False))
             case "del_array":
-                self.add_item(InputText(label="Array", placeholder="Nummern der zu löschenden Arrays (mit ; getrennt)", required=True))
+                self.add_item(InputText(label="Array", placeholder="Nummern der zu löschenden Arrays (mit ; getrennt)",
+                                        required=True))
             case "lock_array":
-                self.add_item(InputText(label="Array", placeholder="Nummern der zu sperrenden Arrays (mit ; getrennt)", required=True))
+                self.add_item(InputText(label="Array", placeholder="Nummern der zu sperrenden Arrays (mit ; getrennt)",
+                                        required=True))
             case "add_array":
                 self.add_item(InputText(label="Resource", placeholder="Name der Resource", required=True))
             case "prices":
@@ -487,13 +509,14 @@ class EditPlanModal(ErrorHandledModal):
                 await interaction.response.send_message(
                     f"Die Einstellungen wurden verändert. Maximale Planeten: {self.plan.num_planets}, maximale "
                     f"Fabriken: {self.plan.num_arrays}.", ephemeral=True)
+                await self.session.refresh_msg()
                 return
             case "const":
                 if in1 is None or in1.strip() == "":
                     self.plan.constellation_id = None
                     self.plan.constellation_name = None
                     await interaction.response.send_message(f"Konstellation gelöscht", ephemeral=True)
-                    await self.edit.session.refresh_msg()
+                    await self.session.refresh_msg()
                     return
                 await interaction.response.defer(ephemeral=True)
                 const = await data_utils.get_constellation(in1.strip())
@@ -503,7 +526,7 @@ class EditPlanModal(ErrorHandledModal):
                 self.plan.constellation_name = const.name
                 self.plan.constellation_id = const.id
                 await interaction.followup.send(f"Konstellation `{const.name}` ausgewählt", ephemeral=True)
-                await self.edit.session.refresh_msg()
+                await self.session.refresh_msg()
                 return
             case "del_array":
                 to_delete = []
@@ -526,7 +549,7 @@ class EditPlanModal(ErrorHandledModal):
                 await interaction.response.send_message(
                     f"`Array(s) {msg.strip().strip(',')}` wurde(n) gelöscht",
                     ephemeral=True)
-                await self.edit.session.refresh_msg()
+                await self.session.refresh_msg()
                 return
             case "lock_array":
                 for num in in1.split(";"):
@@ -534,17 +557,17 @@ class EditPlanModal(ErrorHandledModal):
                         num = int(num.strip())
                     except ValueError:
                         await interaction.response.send_message(f"`{num}` ist keine Nummer", ephemeral=True)
-                        await self.edit.session.refresh_msg()
+                        await self.session.refresh_msg()
                         return
                     if num >= len(self.plan.arrays) or num < 0:
                         await interaction.response.send_message(
                             f"`{num}` ist keine Zahl zwischen 0 und {len(self.plan.arrays)}",
                             ephemeral=True)
-                        await self.edit.session.refresh_msg()
+                        await self.session.refresh_msg()
                         return
                     self.plan.arrays[num].locked = not self.plan.arrays[num].locked
                 await interaction.response.send_message("Arrays wurden gesperrt", ephemeral=True)
-                await self.edit.session.refresh_msg()
+                await self.session.refresh_msg()
                 return
             case "add_array":
                 if self.plan.constellation_name is None:
@@ -552,25 +575,27 @@ class EditPlanModal(ErrorHandledModal):
                     return
                 resources = await data_utils.get_best_pi_planets(self.plan.constellation_name, in1.strip())
                 if len(resources) == 0:
-                    await interaction.response.send_message(f"Resource '{in1}' nicht (in der Konstellation) gefunden!", ephemeral=True)
+                    await interaction.response.send_message(f"Resource '{in1}' nicht (in der Konstellation) gefunden!",
+                                                            ephemeral=True)
                     return
                 else:
                     in1 = resources[0]["res"]
-                view = SelectArrayView(self.edit.session, self.plan, f"{in1} in {self.plan.constellation_name}", resources)
+                view = SelectArrayView(self.session, self.plan, f"{in1} in {self.plan.constellation_name}",
+                                       resources)
                 await interaction.response.send_message(embed=view.build_embed(), view=view)
                 return
             case "prices":
                 if in1 is None:
                     self.plan.preferred_prices.clear()
                     await interaction.response.send_message("Preispriorität gelöscht", ephemeral=True)
-                    await self.edit.session.refresh_msg()
+                    await self.session.refresh_msg()
                     return
                 self.plan.preferred_prices.clear()
                 if in1.strip().casefold() == "max".casefold():
                     self.plan.preferred_prices = ["MAX"]
                     await interaction.response.send_message(
                         "Es wird nun der Bestpreis für deine Berechnungen zugrunde gelegt.", ephemeral=True)
-                    await self.edit.session.refresh_msg()
+                    await self.session.refresh_msg()
                     return
                 for p in in1.split(";"):
                     p = p.strip()
@@ -585,7 +610,7 @@ class EditPlanModal(ErrorHandledModal):
                     msg += f"{p} > "
                 msg = msg.strip().strip(">").strip()
                 await interaction.response.send_message(f"Preispriorität festgelegt:\n`{msg}`", ephemeral=True)
-                await self.edit.session.refresh_msg()
+                await self.session.refresh_msg()
                 return
             case _:
                 raise PlanetaryProductionException(f"Unknown data {self.data} for EditPlanModal")

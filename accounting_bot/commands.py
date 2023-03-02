@@ -5,6 +5,7 @@ from typing import TYPE_CHECKING, Optional, Union
 import discord
 from discord import Option, User, ApplicationContext, AutocompleteContext, option, Role, SlashCommand, SlashCommandGroup
 from discord.ext import commands
+from discord.ext.commands import Context
 
 from accounting_bot import accounting, sheet, utils
 from accounting_bot.accounting import AccountingView
@@ -444,3 +445,14 @@ class UniverseCommands(commands.Cog):
             view=PiPlanningView(plan))
         plan.message = msg
         await ctx.response.send_message("Überprüfe deine Direktnachrichten", ephemeral=True)
+
+    @commands.command(name="pi", hidden=True)
+    @commands.dm_only()
+    async def cmd_dm_pi_plan(self, ctx: Context):
+        plan = PiPlanningSession(ctx.author)
+        await plan.load_plans()
+        msg = await ctx.send(
+            f"Du hast aktuell {len(plan.plans)} aktive Pi Pläne:",
+            embeds=plan.get_embeds(),
+            view=PiPlanningView(plan))
+        plan.message = msg

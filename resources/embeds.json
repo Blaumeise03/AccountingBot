@@ -83,5 +83,27 @@
     "color": 3066993,
     "type": "rich",
     "title": "Industrierollen"
+  },
+  "PiPlanerHelp": {
+    "fields": [
+      {
+        "name": "Allgemeines",
+        "value": "Die erste Zeile steuert das allgemeine Menü. Es gibt folgende Knöpfe:\n:x:: Löscht alle Änderungen\n:floppy_disk:: Speichert alle Änderungen\nPfeile: Wechselt den Pi Plan durch",
+        "inline": false
+      },
+      {
+        "name": "Plan bearbeiten",
+        "value": "Die zweite Zeile bearbeitet den aktiven Plan.\n:wastebasket:: Löscht den aktuellen Plan\n:heavy_plus_sign:: Erstellt einen neuen Plan und aktiviert ihn\n:pencil2:: Bearbeitet die Grundeinstellungen (Planeten + Arrayanzahl)\n:map:: Bearbeitet die Konstellation\n:money_with_wings: Bearbeitet die Preispriorität\n\nDie dritte Zeile bearbeitet die Arrays des aktuellen Plans.",
+        "inline": false
+      },
+      {
+        "name": "Marktpreise",
+        "value": "Mit der Preispriorität wird festgelegt, welche Preise für die Berechnung eingesetzt werden. Durch drücken des Knopfes öffnet sich ein Eingabeformular, welches mit den zur Auswahl stehenden Preisen befüllt ist. Du kannst einen oder mehrere (mit \";\" getrennt) eingeben, es wird dann der höchste Preis pro Resource ausgewählt.",
+        "inline": false
+      }
+    ],
+    "color": 3066993,
+    "type": "rich",
+    "title": "Pi Planer Hilfe"
   }
 }
