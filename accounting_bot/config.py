@@ -116,7 +116,7 @@ class Config:
 
     def load_config(self):
         if exists(self.path):
-            with open(self.path) as json_file:
+            with open(self.path, encoding="utf8") as json_file:
                 raw_conf = json.load(json_file)
                 self.tree.load_from_dict(raw_conf)
         else:
@@ -127,8 +127,8 @@ class Config:
             logger.warning("Can't save config %s: Config mode is set to read-only", self.path)
             return
         logger.info("Saving config to %s...", self.path)
-        with open(self.path, "w") as outfile:
-            json.dump(self.tree.to_dict(), outfile, indent=4)
+        with open(self.path, "w", encoding="utf8") as outfile:
+            json.dump(self.tree.to_dict(), outfile, indent=4, ensure_ascii=False)
         logger.info("Config %s saved", self.path)
 
     def __getitem__(self, item: str):
