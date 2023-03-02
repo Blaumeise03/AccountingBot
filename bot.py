@@ -24,7 +24,7 @@ from accounting_bot.config import Config, ConfigTree
 from accounting_bot.database import DatabaseConnector
 from accounting_bot.discordLogger import PycordHandler
 from accounting_bot.exceptions import InputException
-from accounting_bot.universe import data_utils
+from accounting_bot.universe import data_utils, pi_planer
 from accounting_bot.universe.universe_database import UniverseDatabase
 from accounting_bot.utils import log_error, State, send_exception
 
@@ -211,7 +211,9 @@ async def log_loop():
 async def market_loop():
     try:
         logger.info("Reloading market data")
-        await data_utils.load_market_data()
+        await data_utils.init_market_data()
+        pi_planer.item_prices = await data_utils.get_market_data(item_type="pi")
+        pi_planer.available_prices = await data_utils.get_available_market_data("pi")
     except Exception as e:
         utils.log_error(logger, e, location="market_loop")
 

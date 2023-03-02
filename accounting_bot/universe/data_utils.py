@@ -169,13 +169,27 @@ async def get_pi_plan(*args, **kwargs) -> Union[PiPlanSettings, List[PiPlanSetti
     return await execute_async(_get_pi_plan, *args, **kwargs)
 
 
-async def load_market_data() -> None:
+async def init_market_data() -> None:
     def _save_market_data(_items):
-        db.load_market_data(_items)
+        db.save_market_data(_items)
     logger.info("Loading market data")
     items = await sheet.get_market_data()
     await execute_async(_save_market_data, items)
     logger.info("Market data loaded")
+
+
+async def get_market_data(
+        item_names: Optional[List[str]] = None,
+        item_type: Optional[str] = None) -> Dict[str, Dict[str, float]]:
+    def _get_market_data(*args, **kwargs):
+        return db.get_market_data(*args, **kwargs)
+    return await execute_async(_get_market_data, item_names, item_type)
+
+
+async def get_available_market_data(item_type: str) -> None:
+    def _get_available_market_data(*args, **kwargs):
+        return db.get_available_market_data(*args, **kwargs)
+    return await execute_async(_get_available_market_data, item_type)
 
 
 def graph_map_to_figure(graph: nx.Graph, include_highsec=True, node_size=3.5) -> go.Figure:

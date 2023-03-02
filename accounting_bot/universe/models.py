@@ -249,6 +249,7 @@ class PiPlanSettings(Base):
     resources: Mapped[List["PiPlanResource"]] = relationship(back_populates="piplan", cascade="all, delete-orphan")
     constellation_id: Mapped[int] = mapped_column(ForeignKey("constellation.id", name="key_piplan_const"), nullable=True)
     constellation: Mapped[Constellation] = relationship()
+    preferred_prices: Mapped[str] = mapped_column(String(100), nullable=True)
 
 
 class PiPlanResource(Base):

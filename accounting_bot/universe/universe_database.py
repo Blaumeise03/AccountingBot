@@ -70,7 +70,7 @@ class UniverseDatabase:
         MarketPrice.__table__.create(bind=self.engine, checkfirst=True)
         logger.info("Setup completed")
 
-    def load_market_data(self, items: Dict[str, Dict[str, Any]]):
+    def save_market_data(self, items: Dict[str, Dict[str, Any]]):
         with Session(self.engine) as conn:
             for item_name, prices in items.items():
                 db_item = (
@@ -93,6 +93,38 @@ class UniverseDatabase:
                     db_item.prices.append(p)
             conn.commit()
         pass
+
+    def get_market_data(self, item_names: Optional[List[str]] = None, item_type: Optional[str] = None):
+        with Session(self.engine) as conn:
+            if item_names is None:
+                if item_type is None:
+                    raise TypeError("One argument is required")
+                stmt = select(Item.name).filter(Item.type == item_type)
+                res = conn.execute(stmt).all()
+                item_names = [r[0] for r in res]
+            items = {}
+            for item_name in item_names:
+                db_item = (
+                    conn.query(Item)
+                    .options(joinedload(Item.prices))
+                    .filter(Item.name == item_name)
+                ).first()
+                prices = {}
+                for price in db_item.prices:
+                    prices[price.price_type] = price.value
+                items[db_item.name] = prices
+            return items
+
+    def get_available_market_data(self, item_type: str) -> List[str]:
+        with Session(self.engine) as conn:
+            stmt = (
+                select(MarketPrice.price_type)
+                .join(MarketPrice.item)
+                .where(Item.type == item_type)
+                .group_by(MarketPrice.price_type)
+            )
+            result = conn.execute(stmt).all()
+            return [r[0] for r in result]
 
     def fetch_system(self, system_name: str) -> Optional[System]:
         with Session(self.engine, expire_on_commit=False) as conn:
@@ -311,6 +343,14 @@ class UniverseDatabase:
             result.arrays = pi_plan.num_arrays
             result.planets = pi_plan.num_planets
             result.constellation_id = pi_plan.constellation_id
+            if len(pi_plan.preferred_prices) == 0:
+                result.preferred_prices = None
+            else:
+                prices = ""
+                for p in pi_plan.preferred_prices:
+                    prices += f"{p};"
+                prices = prices.strip(";")
+                result.preferred_prices = prices
             arrays = []
             found_arrays = []
             for res in result.resources:  # type: PiPlanResource

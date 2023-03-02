@@ -2,7 +2,7 @@ import logging
 from typing import List, Dict, Optional, Callable, Coroutine, Any, Union
 
 import discord
-from discord import User, Embed, Color, ApplicationContext, Interaction, Message
+from discord import User, Embed, Color, ApplicationContext, Interaction, Message, InputTextStyle
 from discord.ui import InputText, Button
 
 from accounting_bot.exceptions import PlanetaryProductionException
@@ -11,6 +11,20 @@ from accounting_bot.universe.models import PiPlanSettings, PiPlanResource
 from accounting_bot.utils import ErrorHandledModal, AutoDisableView
 
 logger = logging.getLogger("data.pi")
+item_prices = {}  # type: Dict[str,Dict[str, Union[int, float]]]
+available_prices = []
+
+
+def get_price(item: str, price_types: List[str]) -> Optional[Union[float, int]]:
+    if item not in item_prices or len(price_types) == 0:
+        return None
+    prices = item_prices[item]
+    if price_types[0].casefold() == "max".casefold():
+        return max(prices.values())
+    for t in price_types:
+        if t in prices:
+            return prices[t]
+    return None
 
 
 class Array:
@@ -48,6 +62,7 @@ class PiPlaner:
         self.num_arrays = arrays  # type: int
         self.num_planets = planets  # type: int
         self.arrays = []  # type: List[Array]
+        self.preferred_prices = []
 
     async def load_settings(self, settings: Optional[PiPlanSettings] = None):
         if settings is None:
@@ -73,6 +88,10 @@ class PiPlaner:
         if settings.constellation is not None:
             self.constellation_id = settings.constellation_id
             self.constellation_name = settings.constellation.name
+        self.preferred_prices.clear()
+        if settings.preferred_prices is not None:
+            for price in settings.preferred_prices.split(";"):
+                self.preferred_prices.append(price)
 
     async def save_settings(self):
         await data_utils.save_pi_plan(self)
@@ -85,10 +104,17 @@ class PiPlaner:
         desc = f"Dies ist dein aktueller Pi Plan.\nMaximale Planeten: `{self.num_planets}`\n" \
                f"Maximale Fabriken: `{self.num_arrays}`\n"
         if self.constellation_id is not None:
-            desc += f"Konstellation: `{self.constellation_name}`"
+            desc += f"Konstellation: `{self.constellation_name}`\n"
+        if len(self.preferred_prices) > 0:
+            desc += "Preispriorität: "
+        else:
+            desc += "*Keine Preispriorität festgelegt*"
+        for price in self.preferred_prices:
+            desc += f"`{price}` "
         emb = Embed(title=f"Pi Plan #{self.plan_num + 1}",
                     description=desc,
                     color=color)
+
         val = f"   n {'Resource':<21} Planet      Out @ Arrays = {'items/h':<6}"
         resources = {}
         for i, array in enumerate(self.arrays):
@@ -100,11 +126,23 @@ class PiPlaner:
             else:
                 resources[array.resource] = array.base_output * array.amount
         emb.add_field(name=f"Aktive Arrays", value=f"```\n{val}\n```", inline=False)
-        val = f"{'Resource':<21}: items/h  items/d    items/w"
+        val = f"{'Resource':<21}: items/h  items/d    ISK/d"
         resources = sorted(resources.items(), key=lambda res: data_utils.resource_order.index(res[0]))
+        income_sum = 0
         for name, output in resources:
-            val += f"\n{name:<21}: {output:7.2f}  {output*24:7,.0f}  {output*24*7:9,.0f}"
+            income = 0
+            price = get_price(name, self.preferred_prices)
+            if price is not None:
+                income = output * price
+            income_sum += income
+            val += f"\n{name:<21}: {output:7.2f}  {output*24:7,.0f}  {income*24:9,.0f} ISK"
         emb.add_field(name="Produktion", value=f"```\n{val}\n```", inline=False)
+        emb.add_field(
+            name="Einnahmen",
+            value=f"```\nZeitraum  Einnahmen\n"
+                  f"Pro Tag   {income_sum:13,.0f} ISK\n"
+                  f"Pro Woche {income_sum*24*7:13,.0f} ISK\n"
+                  f"Pro Monat {income_sum*24*7*30:13,.0f} ISK\n```")
         return emb
 
 
@@ -267,6 +305,10 @@ class EditPlanView(AutoDisableView):
     async def btn_const(self, button: Button, ctx: ApplicationContext):
         await ctx.response.send_modal(EditPlanModal(self, self.plan, "const"))
 
+    @discord.ui.button(emoji="💸", style=discord.ButtonStyle.blurple)
+    async def btn_prices(self, button: Button, ctx: ApplicationContext):
+        await ctx.response.send_modal(EditPlanModal(self, self.plan, "prices"))
+
     @discord.ui.button(emoji="🗑️", label="Array", style=discord.ButtonStyle.red)
     async def btn_del_array(self, button: Button, ctx: ApplicationContext):
         await ctx.response.send_modal(EditPlanModal(self, self.plan, "del_array"))
@@ -411,6 +453,17 @@ class EditPlanModal(ErrorHandledModal):
                 self.add_item(InputText(label="Array", placeholder="Nummern der zu sperrenden Arrays (mit ; getrennt)", required=True))
             case "add_array":
                 self.add_item(InputText(label="Resource", placeholder="Name der Resource", required=True))
+            case "prices":
+                placeholder = ""
+                for p in available_prices:
+                    placeholder += f"{p}; "
+                placeholder.strip().strip(",")
+                self.add_item(InputText(
+                    style=InputTextStyle.multiline,
+                    label="Marktpreispriorität",
+                    placeholder=placeholder,
+                    value=placeholder,
+                    required=False))
             case _:
                 raise PlanetaryProductionException(f"Unknown data {self.data} for EditPlanModal")
 
@@ -505,6 +558,34 @@ class EditPlanModal(ErrorHandledModal):
                     in1 = resources[0]["res"]
                 view = SelectArrayView(self.edit.session, self.plan, f"{in1} in {self.plan.constellation_name}", resources)
                 await interaction.response.send_message(embed=view.build_embed(), view=view)
+                return
+            case "prices":
+                if in1 is None:
+                    self.plan.preferred_prices.clear()
+                    await interaction.response.send_message("Preispriorität gelöscht", ephemeral=True)
+                    await self.edit.session.refresh_msg()
+                    return
+                self.plan.preferred_prices.clear()
+                if in1.strip().casefold() == "max".casefold():
+                    self.plan.preferred_prices = ["MAX"]
+                    await interaction.response.send_message(
+                        "Es wird nun der Bestpreis für deine Berechnungen zugrunde gelegt.", ephemeral=True)
+                    await self.edit.session.refresh_msg()
+                    return
+                for p in in1.split(";"):
+                    p = p.strip()
+                    if p not in available_prices:
+                        if p.strip() == "":
+                            continue
+                        await interaction.response.send_message(f"Preis '{p}' nicht gefunden", ephemeral=True)
+                        return
+                    self.plan.preferred_prices.append(p)
+                msg = ""
+                for p in self.plan.preferred_prices:
+                    msg += f"{p} > "
+                msg = msg.strip().strip(">").strip()
+                await interaction.response.send_message(f"Preispriorität festgelegt:\n`{msg}`", ephemeral=True)
+                await self.edit.session.refresh_msg()
                 return
             case _:
                 raise PlanetaryProductionException(f"Unknown data {self.data} for EditPlanModal")
