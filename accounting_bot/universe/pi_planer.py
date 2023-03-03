@@ -399,14 +399,14 @@ class SelectArrayView(AutoDisableView):
         await ctx.response.defer(ephemeral=True)
 
     def build_embed(self) -> Embed:
-        msg = "```\nA n: Planet    : Output"
+        msg = "```\nA n Planet     : Output"
         for i, res in enumerate(self.resources):
             duplicate = False
             for array in self.plan.arrays:
                 if array.planet.id == res["p_id"]:
                     duplicate = True
                     break
-            msg += f"\n{'A' if duplicate else ' '}{i:>2}: {res['p_name']:<10}: {res['out']:6.2f}"
+            msg += f"\n{'A' if duplicate else ' '}{i:>2} {res['p_name']:<11}: {res['out']:6.2f}"
         msg += "\n```"
         emb = Embed(title=f"{self.title}",
                     description="Drücke auf den Knopf mit der entsprechenden Zahl um diesen Planeten auszuwählen oder "

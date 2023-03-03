@@ -206,7 +206,7 @@ class MarketPrice(Base):
     item_id: Mapped[int] = mapped_column(ForeignKey("item.id", name="key_item_price"), primary_key=True)
     item: Mapped[Item] = relationship(back_populates="prices")
     price_type: Mapped[str] = mapped_column(String(20), primary_key=True)
-    value: Mapped[float] = mapped_column(Float)
+    price_value: Mapped[float] = mapped_column(Float)
     last_updated = mapped_column(TIMESTAMP, onupdate=func.now(), server_default=text('CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP'))
 
 

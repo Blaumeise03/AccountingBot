@@ -5,7 +5,7 @@ import sys
 from multiprocessing.pool import ThreadPool
 from typing import Optional, Dict, Tuple, List, TYPE_CHECKING, Union, Any
 
-from sqlalchemy import create_engine, update, between, func, select, delete, or_
+from sqlalchemy import create_engine, update, between, func, select, delete, or_, insert
 from sqlalchemy.orm import Session, joinedload
 
 from accounting_bot import sheet
@@ -71,6 +71,7 @@ class UniverseDatabase:
         logger.info("Setup completed")
 
     def save_market_data(self, items: Dict[str, Dict[str, Any]]):
+        logging.getLogger('sqlalchemy.engine').setLevel(logging.INFO)
         with Session(self.engine) as conn:
             for item_name, prices in items.items():
                 db_item = (
@@ -85,14 +86,15 @@ class UniverseDatabase:
                     found = False
                     for p in db_item.prices:  # type: MarketPrice
                         if p.price_type == price_type:
-                            p.value = price
+                            p.price_value = price
                             found = True
                             break
                     if not found:
-                        p = MarketPrice(price_type=price_type, value=price)
+                        # For whatever reason, inserting floats did not work
+                        p = MarketPrice(price_type=price_type, price_value=int(price))
                     db_item.prices.append(p)
-            conn.commit()
-        pass
+                conn.commit()
+        logging.getLogger('sqlalchemy.engine').setLevel(logging.NOTSET)
 
     def get_market_data(self, item_names: Optional[List[str]] = None, item_type: Optional[str] = None):
         with Session(self.engine) as conn:
@@ -111,7 +113,7 @@ class UniverseDatabase:
                 ).first()
                 prices = {}
                 for price in db_item.prices:
-                    prices[price.price_type] = price.value
+                    prices[price.price_type] = price.price_value
                 items[db_item.name] = prices
             return items
 
