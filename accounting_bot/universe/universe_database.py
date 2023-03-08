@@ -71,7 +71,6 @@ class UniverseDatabase:
         logger.info("Setup completed")
 
     def save_market_data(self, items: Dict[str, Dict[str, Any]]):
-        logging.getLogger('sqlalchemy.engine').setLevel(logging.INFO)
         with Session(self.engine) as conn:
             for item_name, prices in items.items():
                 db_item = (
@@ -90,11 +89,9 @@ class UniverseDatabase:
                             found = True
                             break
                     if not found:
-                        # For whatever reason, inserting floats did not work
-                        p = MarketPrice(price_type=price_type, price_value=int(price))
+                        p = MarketPrice(price_type=price_type, price_value=price)
                     db_item.prices.append(p)
-                conn.commit()
-        logging.getLogger('sqlalchemy.engine').setLevel(logging.NOTSET)
+            conn.commit()
 
     def get_market_data(self, item_names: Optional[List[str]] = None, item_type: Optional[str] = None):
         with Session(self.engine) as conn:
@@ -158,7 +155,9 @@ class UniverseDatabase:
                 query = (
                     conn.query(Resource)
                     .options(joinedload(Resource.planet), joinedload(Resource.type))
-                    .filter(Resource.planet_id.in_(planet_ids)))
+                    .filter(Resource.planet_id.in_(planet_ids))
+                    .order_by(Resource.output.desc())
+                )
             else:
                 res_ids = conn.query(Item.id).filter(Item.name.in_(res_names))
                 query = (

@@ -42,6 +42,87 @@ class Array:
         self.planet = None  # type: Planet | None
         self.locked = locked  # type: bool
 
+    def auto_init_planet(self, arrays: List["Array"], p_name: str, p_id: int):
+        for arr in arrays:
+            if arr.planet.id == p_id:
+                self.planet = arr.planet
+                return
+        self.planet = Planet(p_id=p_id, name=p_name)
+
+    @staticmethod
+    def build_table(arrays: List["Array"], mode="LnRhdi", price_types: List[str] =None):
+        if price_types is None:
+            price_types = []
+        msg = ""
+        for m in mode:
+            match m:
+                # Caps = Align left, lowercase = align right
+                case "L":
+                    msg += "🔒"
+                case "l":
+                    msg += "🔒"
+                case "n":
+                    msg += " n"
+                case "R":
+                    msg += "Resource             "
+                case "P":
+                    msg += f"Planet     "
+                case "b":
+                    msg += "  Base"
+                case "h":
+                    msg += "items/h"
+                case "d":
+                    msg += "items/d"
+                case "i":
+                    msg += "    ISK/d"
+                case _:
+                    msg += m
+        msg += "\n"
+        for i, array in enumerate(arrays):
+            for m in mode:
+                match m:
+                    case "L":
+                        msg += "🔒" if array.locked else "  "
+                    case "l":
+                        msg += "🔒" if array.locked else "  "
+                    case "n":
+                        msg += f"{i:>2}"
+                    case "R":
+                        msg += f"{array.resource:<21}"
+                    case "P":
+                        msg += f"{array.planet.name:<11}"
+                    case "b":
+                        msg += f"{array.base_output:6.2f}"
+                    case "h":
+                        msg += f"{array.base_output * array.amount:6.1f}"
+                    case "d":
+                        msg += f"{array.base_output * array.amount * 24:7,.0f}"
+                    case "i":
+                        msg += f"{array.base_output * array.amount * 24 * get_price(array.resource, price_types):9,.0f}"
+                    case _:
+                        msg += m
+            msg += "\n"
+        return msg
+
+    @staticmethod
+    def build_income_table(
+            arrays: Optional[List["Array"]] = None,
+            income_sum: Optional[float] = None,
+            price_types: List[str] = None):
+        if price_types is None:
+            price_types = []
+        if arrays is None and income_sum is None:
+            raise TypeError("Expected at least one argument for function build_income_table")
+        if income_sum is None:
+            income_sum = 0
+            for array in arrays:
+                income_sum += array.base_output * array.amount * get_price(array.resource, price_types)
+        msg = (f"Zeitraum           Einnahmen\n"
+               f"Pro Tag   {income_sum:14,.0f} ISK\n"
+               f"Pro Woche {income_sum * 24 * 7:14,.0f} ISK\n"
+               f"Pro Monat {income_sum * 24 * 7 * 30:14,.0f} ISK")
+        return msg
+
 
 class Planet:
     def __init__(self, p_id: Optional[int] = None, name: Optional[str] = None) -> None:
@@ -101,6 +182,53 @@ class PiPlaner:
     def sort_arrays(self):
         self.arrays = sorted(self.arrays, key=lambda a: (not a.locked, data_utils.resource_order.index(a.resource)))
 
+    def get_next_best_array(self, all_planets: List[Dict[str, Any]], arrays: List[Array]):
+        best_array = None
+        best_price = None
+        for res_name in item_prices.keys():
+            price = get_price(res_name, self.preferred_prices)
+            for p in all_planets:
+                if p["res"] == res_name:
+                    found = False
+                    for arr in arrays:
+                        if arr.planet.name == p["p_name"]:
+                            found = True
+                            break
+                    if found:
+                        continue
+                    price = price * p["out"]
+                    if best_price is None or price > best_price:
+                        best_price = price
+                        best_array = p
+                    break
+        if best_array is None:
+            return None
+        array = Array(
+            resource=best_array["res"],
+            base_output=best_array["out"],
+            amount=self.num_arrays
+        )
+        array.auto_init_planet(arrays, p_name=best_array["p_name"], p_id=best_array["p_id"])
+        return array
+
+    async def auto_select(self):
+        all_planets = await data_utils.get_all_pi_planets(self.constellation_name)
+        free_planets = self.num_planets
+        arrays = []
+        for arr in self.arrays:
+            if arr.locked:
+                free_planets -= 1
+                arrays.append(arr)
+        if free_planets <= 0:
+            return
+        while len(arrays) < self.num_planets:
+            # Find next array
+            array = self.get_next_best_array(all_planets, arrays)
+            if array is None:
+                break
+            arrays.append(array)
+        return arrays
+
     def to_embed(self, color: Optional[Color] = Color.dark_grey()) -> Embed:
         self.sort_arrays()
         desc = f"Dies ist dein aktueller Pi Plan.\nMaximale Planeten: `{self.num_planets}`\n" \
@@ -117,17 +245,14 @@ class PiPlaner:
                     description=desc,
                     color=color)
 
-        val = f"   n {'Resource':<21} Planet     Base Out = {'items/h':<6}"
         resources = {}
         for i, array in enumerate(self.arrays):
             array.amount = self.num_arrays
-            val += (f"\n{'🔒' if array.locked else '  '}"
-                    f"{i:>2} {array.resource:<21} {array.planet.name:<11} "
-                    f"{array.base_output:7.2f} = {array.base_output * array.amount:6.1f}")
             if array.resource in resources:
                 resources[array.resource] += array.base_output * array.amount
             else:
                 resources[array.resource] = array.base_output * array.amount
+        val = Array.build_table(self.arrays, mode="L n R P b h", price_types=self.preferred_prices)
         emb.add_field(name=f"Aktive Arrays", value=f"```\n{val}\n```", inline=False)
         val = f"{'Resource':<21}: items/h  items/d          ISK/d"
         resources = sorted(resources.items(), key=lambda res: data_utils.resource_order.index(res[0]))
@@ -142,10 +267,7 @@ class PiPlaner:
         emb.add_field(name="Produktion", value=f"```\n{val}\n```", inline=False)
         emb.add_field(
             name="Einnahmen",
-            value=f"```\nZeitraum          Einnahmen\n"
-                  f"Pro Tag   {income_sum:13,.0f} ISK\n"
-                  f"Pro Woche {income_sum * 24 * 7:13,.0f} ISK\n"
-                  f"Pro Monat {income_sum * 24 * 7 * 30:13,.0f} ISK\n```")
+            value=f"```\n{Array.build_income_table(income_sum=income_sum)}\n```")
         return emb
 
 
@@ -292,6 +414,7 @@ class PiPlanningView(AutoDisableView):
             self.session.isEditing = False
             await _ctx.response.send_message("Plan gelöscht", ephemeral=True)
             await self.session.refresh_msg()
+
         await ctx.response.send_message("Willst Du diesen Plan wirklich löschen?", view=ConfirmView(_delete),
                                         ephemeral=True)
 
@@ -327,16 +450,33 @@ class PiPlanningView(AutoDisableView):
     async def btn_add_array(self, button: Button, ctx: ApplicationContext):
         await ctx.response.send_modal(EditPlanModal(self.session, "add_array"))
 
-
-# noinspection PyUnusedLocal
-class EditPlanView(AutoDisableView):
-    def __init__(self, planning_session: PiPlanningSession, plan: PiPlaner):
-        super().__init__(timeout=60 * 20)
-        self.session = planning_session
-        self.plan = plan
-
-    def refresh_plan(self):
-        self.plan = self.session.get_active_plan()
+    @discord.ui.button(label="Auto", style=discord.ButtonStyle.blurple, row=2)
+    async def btn_auto_add_array(self, button: Button, ctx: ApplicationContext):
+        async def save(_ctx: ApplicationContext):
+            self.session.get_active_plan().arrays = arrays
+            await _ctx.response.send_message("Arrays geändert", ephemeral=True)
+            await self.session.refresh_msg()
+        plan = self.session.get_active_plan()
+        if plan is None:
+            await ctx.response.send_message("Es ist kein Plan ausgewählt!", ephemeral=True)
+            return
+        await ctx.response.defer(ephemeral=True, invisible=False)
+        arrays = await plan.auto_select()
+        msg = Array.build_table(arrays, mode="L n: R P d i", price_types=plan.preferred_prices)
+        emb = Embed(title="Auto Array",
+                    description="Es wurden die besten Planeten anhand ihrer ISK-Produktion gesucht. Willst Du diese"
+                                "in den Plan übernehmen?")
+        emb.add_field(name="Arrays", value=f"```\n{msg}```\n", inline=False)
+        emb.add_field(name="Einnahmen",
+                      value=f"```\n{Array.build_income_table(arrays, price_types=plan.preferred_prices)}\n```",
+                      inline=False)
+        view = ConfirmView(callback=save)
+        msg = await ctx.followup.send(
+            embed=emb,
+            view=view
+        )
+        if view.message is None:
+            view.message = msg
 
 
 # noinspection PyUnusedLocal
@@ -367,7 +507,7 @@ class SelectArrayView(AutoDisableView):
                 num = int(value)
                 res = resources[num]
                 array = Array(resource=res["res"], base_output=res["out"], amount=plan.num_arrays)
-                array.planet = Planet(p_id=res["p_id"], name=res["p_name"])
+                array.auto_init_planet(self.plan.arrays, p_name=res["p_name"], p_id=res["p_id"])
                 for arr in self.plan.arrays:
                     if arr.planet.id == array.planet.id:
                         await ctx.response.send_message("Du hast bereits ein Array auf diesem Planeten",

@@ -101,6 +101,14 @@ async def create_pi_boxplot_async(constellation_name: str,
     return await execute_async(create_pi_boxplot, constellation_name, resource_names, region_names, vertical)
 
 
+async def get_all_pi_planets(constellation_name: str,
+                             resource_names: List[str] = None,
+                             amount: Optional[int] = None) -> List[Dict[str, int]]:
+    def _get_all_pi_planets(*args, **kwargs):
+        return db.fetch_resources(*args, **kwargs)
+    return await execute_async(_get_all_pi_planets, constellation_name, resource_names, amount)
+
+
 async def get_best_pi_planets(constellation_name: str,
                               resource_name: str,
                               amount: Optional[int] = None) -> List[Dict[str, int]]:
