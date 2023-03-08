@@ -8,7 +8,7 @@ from discord.ui import InputText, Button
 from accounting_bot.exceptions import PlanetaryProductionException
 from accounting_bot.universe import data_utils
 from accounting_bot.universe.models import PiPlanSettings, PiPlanResource
-from accounting_bot.utils import ErrorHandledModal, AutoDisableView
+from accounting_bot.utils import ErrorHandledModal, AutoDisableView, Item
 
 logger = logging.getLogger("data.pi")
 item_prices = {}  # type: Dict[str,Dict[str, Union[int, float]]]
@@ -42,6 +42,9 @@ class Array:
         self.planet = None  # type: Planet | None
         self.locked = locked  # type: bool
 
+    def __repr__(self) -> str:
+        return f"Array({self.planet}:{self.resource}, out={self.base_output} {'locked ' if self.locked else ''})"
+
     def auto_init_planet(self, arrays: List["Array"], p_name: str, p_id: int):
         for arr in arrays:
             if arr.planet.id == p_id:
@@ -50,7 +53,7 @@ class Array:
         self.planet = Planet(p_id=p_id, name=p_name)
 
     @staticmethod
-    def build_table(arrays: List["Array"], mode="LnRhdi", price_types: List[str] =None):
+    def build_table(arrays: List["Array"], mode="LnRhdi", price_types: List[str] = None):
         if price_types is None:
             price_types = []
         msg = ""
@@ -128,6 +131,9 @@ class Planet:
     def __init__(self, p_id: Optional[int] = None, name: Optional[str] = None) -> None:
         self.id = p_id  # type: int | None
         self.name = name  # type: str | None
+
+    def __repr__(self) -> str:
+        return f"Planet({self.name})"
 
 
 class PiPlaner:
@@ -226,6 +232,57 @@ class PiPlaner:
             array = self.get_next_best_array(all_planets, arrays)
             if array is None:
                 break
+            arrays.append(array)
+        return arrays
+
+    async def auto_select_weighted(self, weights: Dict[str, float]):
+        """
+        Auto selects the best array using given weights. The selection works as follows-
+        :param weights:
+        :return:
+        """
+        free_planets = self.num_planets
+        arrays = []
+        for arr in self.arrays:
+            if arr.locked:
+                free_planets -= 1
+                arrays.append(arr)
+        if free_planets <= 0:
+            return
+
+        all_planets = await data_utils.get_all_pi_planets(self.constellation_name, resource_names=list(weights.keys()))
+        max_planets = await data_utils.get_max_pi_planets()
+        # Normalize weights (amount of arrays*hours needed when using the max planet in New Eden)
+        for item in weights:
+            if item in max_planets and weights[item] > 1:
+                weights[item] = weights[item] / max_planets[item]
+        # Calculate the ideal amount of planets
+        sum_w = sum(weights.values())
+        for item in weights:
+            weights[item] = weights[item] / sum_w * self.num_planets
+
+        while len(arrays) < self.num_planets:
+            if len(all_planets) == 0:
+                break
+            # Factoring in the efficiency of the planets into the weight, as good planets should get prioritized
+            for p in all_planets:
+                p["eff"] = p["out"] / max_planets[p["res"]]
+                p["weight"] = p["eff"] * weights[p["res"]]
+
+            # Get the planet with the highest weight
+            all_planets.sort(key=lambda p: p["weight"], reverse=True)
+            next_array = all_planets.pop(0)
+
+            # Reduce the targeted weights
+            sum_w = sum(weights.values())
+            weights[next_array["res"]] = weights[next_array["res"]] - (1 / self.num_planets) * sum_w
+
+            array = Array(
+                resource=next_array["res"],
+                base_output=next_array["out"],
+                amount=self.num_arrays
+            )
+            array.auto_init_planet(arrays, next_array["p_name"], next_array["p_id"])
             arrays.append(array)
         return arrays
 
@@ -452,31 +509,11 @@ class PiPlanningView(AutoDisableView):
 
     @discord.ui.button(label="Auto", style=discord.ButtonStyle.blurple, row=2)
     async def btn_auto_add_array(self, button: Button, ctx: ApplicationContext):
-        async def save(_ctx: ApplicationContext):
-            self.session.get_active_plan().arrays = arrays
-            await _ctx.response.send_message("Arrays geändert", ephemeral=True)
-            await self.session.refresh_msg()
         plan = self.session.get_active_plan()
         if plan is None:
             await ctx.response.send_message("Es ist kein Plan ausgewählt!", ephemeral=True)
             return
-        await ctx.response.defer(ephemeral=True, invisible=False)
-        arrays = await plan.auto_select()
-        msg = Array.build_table(arrays, mode="L n: R P d i", price_types=plan.preferred_prices)
-        emb = Embed(title="Auto Array",
-                    description="Es wurden die besten Planeten anhand ihrer ISK-Produktion gesucht. Willst Du diese"
-                                "in den Plan übernehmen?")
-        emb.add_field(name="Arrays", value=f"```\n{msg}```\n", inline=False)
-        emb.add_field(name="Einnahmen",
-                      value=f"```\n{Array.build_income_table(arrays, price_types=plan.preferred_prices)}\n```",
-                      inline=False)
-        view = ConfirmView(callback=save)
-        msg = await ctx.followup.send(
-            embed=emb,
-            view=view
-        )
-        if view.message is None:
-            view.message = msg
+        await ctx.response.send_modal(AutoSelectArrayModal(self.session, plan))
 
 
 # noinspection PyUnusedLocal
@@ -554,6 +591,59 @@ class SelectArrayView(AutoDisableView):
                                 f"gefunden. Planeten mit einem A vor der Zeile sind bereits aktiv")
         emb.add_field(name="Planeten", value=msg)
         return emb
+
+
+def get_weights(raw: str):
+    items = Item.parse_ingame_list(raw)
+    if len(items) == 0:
+        items = Item.parse_list(raw, skip_negative=True)
+    return dict(map(lambda i: (i.name, i.amount), items))
+
+
+class AutoSelectArrayModal(ErrorHandledModal):
+    def __init__(self,
+                 session: PiPlanningSession,
+                 plan: PiPlaner,
+                 title="Autoselect Arrays",
+                 *args, **kwargs):
+        super().__init__(title=title, *args, **kwargs)
+        self.session = session
+        self.plan = plan
+        self.add_item(InputText(style=InputTextStyle.multiline,
+                                label="Modus",
+                                placeholder="\"ISK\" oder Itemliste",
+                                required=True))
+
+    async def callback(self, ctx: ApplicationContext):
+        async def save(_ctx: ApplicationContext):
+            self.session.get_active_plan().arrays = arrays
+            await _ctx.response.send_message("Arrays geändert", ephemeral=True)
+            await self.session.refresh_msg()
+        await ctx.response.defer(ephemeral=True, invisible=False)
+        inp = self.children[0].value
+        if inp.strip().casefold() == "ISK".casefold():
+            arrays = await self.plan.auto_select()
+        else:
+            weights = get_weights(inp)
+            if len(weights) == 0:
+                await ctx.followup.send("Gewichtung nicht erkannt, bitte Eingabe überprüfen.")
+                return
+            arrays = await self.plan.auto_select_weighted(weights)
+        msg = Array.build_table(arrays, mode="L n: R P d i", price_types=self.plan.preferred_prices)
+        emb = Embed(title="Auto Array",
+                    description="Es wurden die besten Planeten anhand ihrer ISK-Produktion gesucht. Willst Du diese"
+                                "in den Plan übernehmen?")
+        emb.add_field(name="Arrays", value=f"```\n{msg}```\n", inline=False)
+        emb.add_field(name="Einnahmen",
+                      value=f"```\n{Array.build_income_table(arrays, price_types=self.plan.preferred_prices)}\n```",
+                      inline=False)
+        view = ConfirmView(callback=save)
+        msg = await ctx.followup.send(
+            embed=emb,
+            view=view
+        )
+        if view.message is None:
+            view.message = msg
 
 
 # noinspection PyUnusedLocal

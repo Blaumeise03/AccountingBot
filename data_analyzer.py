@@ -3,6 +3,7 @@
 import logging
 import os
 import sys
+from datetime import datetime, timedelta
 from typing import List
 
 import plotly.graph_objects as go
@@ -119,6 +120,77 @@ def main_generate_map():
     fig.show(config={"scrollZoom": True})
 
 
+def load_frp_csv(path):
+    data = []
+    i = -1
+    with open(path, "r") as file:
+        for line in file:
+            i += 1
+            if i == 0:
+                continue
+            line = line.split(",")
+            frp = {
+                "time": datetime.fromtimestamp(float(line[0])),
+                "sov": line[2],
+                "type": line[3],
+                "player": line[4],
+                "count": int(line[5])
+            }
+            data.append(frp)
+    data.sort(key=lambda f: f["time"])
+
+    def conv_time(day):
+        match day:
+            case 0:
+                return "Monday"
+            case 1:
+                return "Tuesday"
+            case 2:
+                return "Wednesday"
+            case 3:
+                return "Thursday"
+            case 4:
+                return "Friday"
+            case 5:
+                return "Saturday"
+            case 6:
+                return "Sunday"
+
+    def process_list(data, filter_key):
+        return list(map(conv_time, sorted(map(lambda f: f["time"].weekday(), filter(lambda f: f["type"] == filter_key, data)))))
+
+    times_frp = process_list(data, "FRP")
+    times_sfrp = process_list(data, "SFRP")
+    times_csq = process_list(data, "CSQ")
+
+    fig = go.Figure(
+        data=[
+            go.Histogram(
+                name="FRP",
+                x=times_frp
+            ),
+            go.Histogram(
+                name="SFRP",
+                x=times_sfrp
+            ),
+            go.Histogram(
+                name="CSQ",
+                x=times_csq
+            )
+        ],
+        layout=go.Layout(
+            title=f"<b>FRP Distribution</b><br><sup><i>Sorted by day of week</i></sup>",
+            titlefont_size=24,
+            showlegend=True,
+            hovermode="closest",
+            margin=dict(b=20, l=5, r=5, t=60),
+            xaxis=dict(showgrid=False, zeroline=True, showticklabels=True),
+            yaxis=dict(showgrid=False, zeroline=True, showticklabels=True))
+    )
+    fig.update_layout(barmode='stack')
+    fig.show()
+
+
 if __name__ == '__main__':
     while True:
         inp = input("Please select action (help for list of available commands): ").casefold()
@@ -127,6 +199,9 @@ if __name__ == '__main__':
             exit(0)
         elif inp == "map".casefold():
             main_generate_map()
+            exit(0)
+        elif inp == "frp".casefold():
+            load_frp_csv("resources/frpStatistic.eve.csv")
             exit(0)
         elif inp == "help".casefold():
             print("pi: Find pi in a constellation")

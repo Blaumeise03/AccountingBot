@@ -100,6 +100,11 @@
         "name": "Marktpreise",
         "value": "Mit der Preispriorität wird festgelegt, welche Preise für die Berechnung eingesetzt werden. Durch drücken des Knopfes öffnet sich ein Eingabeformular, welches mit den zur Auswahl stehenden Preisen befüllt ist. Du kannst einen oder mehrere (mit \";\" getrennt) eingeben, es wird dann der höchste Preis pro Resource ausgewählt.",
         "inline": false
+      },
+      {
+        "name": "Autoarrays",
+        "value": "Mit der Autoarray funktionieren werden alle nicht gesperrten Arrays automatisch verteilt. Dazu gibt es drei Modi:\n\n**ISK**: Es werden die Planeten mit dem höchsten ISK Ertrag (anhand der für den Plan eingestellten präferierten Preise) gesucht.\n\n**Itemliste** (absolute Zahlen, z.B. eine Ingameliste): Die Planeten werden anhand der Bedarfs Liste gewichtet. Die effektive Gewichtung hängt auch von der Effizienz der Planeten ab, außerdem wird die Liste anhand des jeweils besten Planeten im Universum normalisiert.\n\n**Prozentuale Liste**: Die Werte aus der Liste werden direkt für die Gewichtung genutzt und nicht normalisiert. Das Format der Liste muss `Item Gewicht` sein, wobei `Gewicht` eine Dezimalzahl (mit Punkt als Dezimalseparator) kleiner gleich 1 sein muss.",
+        "inline": false
       }
     ],
     "color": 3066993,

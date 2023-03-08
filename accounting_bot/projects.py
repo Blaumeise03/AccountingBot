@@ -1,7 +1,7 @@
 import logging
 import re
 from enum import Enum
-from typing import Dict, List
+from typing import Dict, List, Tuple
 from typing import TYPE_CHECKING
 
 import discord
@@ -15,7 +15,7 @@ from accounting_bot import sheet, utils, project_utils
 from accounting_bot.exceptions import GoogleSheetException, BotOfflineException
 from accounting_bot.project_utils import format_list
 from accounting_bot.utils import string_to_file, list_to_string, AutoDisableView, State, \
-    ErrorHandledModal
+    ErrorHandledModal, Item
 
 if TYPE_CHECKING:
     from bot import BotState
@@ -322,7 +322,7 @@ class ListModal(ErrorHandledModal):
             await interaction.followup.send(f"Fehler: Spieler \"{self.children[0].value}\" nicht gefunden!")
             return
         log.append("Parsing list...")
-        items = Project.Item.parse_list(self.children[1].value)
+        items = Item.parse_ingame_list(self.children[1].value)
         if not self.skip_loading:
             await interaction.followup.send(
                 "Eingabe verarbeitet, lade Projekte. Bitte warten, dies dauert nun einige Sekunden", ephemeral=True)
@@ -338,7 +338,7 @@ class ListModal(ErrorHandledModal):
         if not is_perfect:
             message = f"Meintest du \"{player}\"? (Deine Eingabe war \"{self.children[0].value}\").\n"
         msg_list = project_utils.format_list(split, [])
-        message += f"Eingelesene items: \n```\n{Project.Item.to_string(items)}\n```\n" \
+        message += f"Eingelesene items: \n```\n{Item.to_string(items)}\n```\n" \
                    f"Willst du diese Liste als Investition für {player} eintragen?\n" \
                    f"Sheet: `{sheet.sheet_name}`"
         msg_file = [utils.string_to_file(msg_list, "split.txt")]
@@ -355,7 +355,7 @@ class Project(object):
     def __init__(self, name: str):
         self.name = name
         self.exclude = Project.ExcludeSettings.none
-        self.pendingResources = []  # type: [Project.Item]
+        self.pendingResources = []  # type: List[Item]
         self.investments_range = None
 
     def get_pending_resource(self, resource: str) -> int:
@@ -372,12 +372,15 @@ class Project(object):
         elif self.exclude == Project.ExcludeSettings.investments:
             exclude = " (keine Investitionen)"
         res = f"{self.name}{exclude}\nRessource: ausstehende Menge"
-        for r in self.pendingResources:  # type: Project.Item
+        for r in self.pendingResources:  # type: Item
             res += f"\n{r.name}: {r.amount}"
         return res
 
     @staticmethod
-    def split_contract(items, project_list: ['Project'], priority_projects: [str] = None, extra_res: [int] = None) -> {str: [(str, int)]}:
+    def split_contract(items,
+                       project_list: List['Project'],
+                       priority_projects: List[str] = None,
+                       extra_res: List[int] = None) -> Dict[str, List[Tuple[str, int]]]:
         projects_ordered = project_list[::-1]  # Reverse the list
         item_names = sheet.PROJECT_RESOURCES
         if priority_projects is None:
@@ -389,7 +392,7 @@ class Project(object):
                         projects_ordered.remove(p)
                         projects_ordered.insert(0, p)
         split = {}  # type: {str: [(str, int)]}
-        for item in items:  # type: Project.Item
+        for item in items:  # type: Item
             left = item.amount
             split[item.name] = []
             for project in projects_ordered:  # type: Project
@@ -424,44 +427,6 @@ class Project(object):
                     investments[project] = [0] * len(item_names)
                 investments[project][index] += amount
         return investments
-
-    class Item(object):
-        def __init__(self, name: str, amount: int):
-            self.name = name
-            self.amount = amount
-
-        @staticmethod
-        def sort_list(items: [], order: [str]) -> None:
-            for item in items:  # type: Project.Item
-                if item.name not in order:
-                    order.append(item.name)
-            items.sort(key=lambda x: order.index(x.name))
-
-        @staticmethod
-        def parse_list(raw: str) -> []:
-            items = []  # type: [Project.Item]
-            for line in raw.split("\n"):
-                if re.fullmatch("[a-zA-Z ]*", line):
-                    continue
-                line = re.sub("\t", "    ", line.strip())  # Replace Tabs with spaces
-                line = re.sub("^\\d+ *", "", line.strip())  # Delete first column (numeric Index)
-                if len(re.findall("[0-9]+", line.strip())) > 1:
-                    line = re.sub(" *[0-9.]+$", "", line.strip())  # Delete last column (Valuation, decimal)
-                item = re.sub(" +\\d+$", "", line)
-                quantity = line.replace(item, "").strip()
-                if len(quantity) == 0:
-                    continue
-                item = item.strip()
-                items.append(Project.Item(item, int(quantity)))
-            Project.Item.sort_list(items, sheet.PROJECT_RESOURCES.copy())
-            return items
-
-        @staticmethod
-        def to_string(items):
-            res = ""
-            for item in items:
-                res += f"{item.name}: {item.amount}\n"
-            return res
 
     class ExcludeSettings(Enum):
         none = 0  # Don't exclude the project

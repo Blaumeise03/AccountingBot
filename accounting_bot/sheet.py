@@ -18,10 +18,11 @@ from accounting_bot import projects, utils
 from accounting_bot.exceptions import GoogleSheetException, BotOfflineException
 from accounting_bot.project_utils import find_player_row, calculate_changes, verify_batch_data, process_first_column
 from accounting_bot.projects import Project
-from accounting_bot.utils import State
+from accounting_bot.utils import State, Item
 
 if TYPE_CHECKING:
     from bot import BotState
+    from accounting_bot.accounting import Transaction
 
 logger = logging.getLogger("bot.sheet")
 logger.setLevel(logging.DEBUG)
@@ -163,7 +164,7 @@ def check_name_overwrites(name: str) -> str:
     return name
 
 
-async def add_transaction(transaction: 'classes.Transaction') -> None:
+async def add_transaction(transaction: 'Transaction') -> None:
     """
     Saves a transaction into the Accounting sheet. The usernames will be replaced with their defined overwrite (if any),
     see `sheet.check_name_overwrites`.
@@ -422,7 +423,7 @@ async def load_project(project_name: str, log: [str], sheet: gspread_asyncio.Asy
     for name in items_names:
         quantity = int(item_quantities[items_names.index(name)])
         if quantity > 0:
-            project.pendingResources.append(Project.Item(name, quantity))
+            project.pendingResources.append(Item(name, quantity))
     log.append(f"\"{project_name}\" processed!")
 
 
@@ -597,7 +598,7 @@ async def split_overflow(log=None) -> Tuple[Dict[str, Dict[str, List[int]]], Lis
     i = -1
     total_res = [0] * len(PROJECT_RESOURCES)
 
-    investments = {}  # type: {str: [Project.Item]}
+    investments = {}  # type: {str: [Item]}
     changes = []
     async with projects_lock:
         for res_cell in overflow:
@@ -622,7 +623,7 @@ async def split_overflow(log=None) -> Tuple[Dict[str, Dict[str, List[int]]], Lis
                 continue
             if player not in investments:
                 investments[player] = {}
-            split = Project.split_contract([Project.Item(item, amount)], allProjects, extra_res=total_res)
+            split = Project.split_contract([Item(item, amount)], allProjects, extra_res=total_res)
             invest = Project.calc_investments(split)
             new_value = 0
             if "overflow" in invest:

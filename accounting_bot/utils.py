@@ -4,6 +4,7 @@ import difflib
 import io
 import json
 import logging
+import math
 import re
 import traceback
 from abc import ABC, abstractmethod
@@ -261,6 +262,65 @@ def save_discord_id(name: str, discord_id: int):
 def save_discord_config():
     with open("discord_ids.json", "w") as outfile:
         json.dump(discord_users, outfile, indent=4)
+
+
+class Item(object):
+    def __init__(self, name: str, amount: Union[int, float]):
+        self.name = name
+        self.amount = amount
+
+    @staticmethod
+    def sort_list(items: List[Item], order: List[str]) -> None:
+        for item in items:  # type: Item
+            if item.name not in order:
+                order.append(item.name)
+        items.sort(key=lambda x: order.index(x.name) if x.name in order else math.inf)
+
+    @staticmethod
+    def parse_ingame_list(raw: str) -> List[Item]:
+        items = []  # type: List[Item]
+        for line in raw.split("\n"):
+            if re.fullmatch("[a-zA-Z ]*", line):
+                continue
+            line = re.sub("\t", "    ", line.strip())  # Replace Tabs with spaces
+            line = re.sub("^\\d+ *", "", line.strip())  # Delete first column (numeric Index)
+            if len(re.findall("[0-9]+", line.strip())) > 1:
+                line = re.sub(" *[0-9.]+$", "", line.strip())  # Delete last column (Valuation, decimal)
+            item = re.sub(" +\\d+$", "", line)
+            quantity = line.replace(item, "").strip()
+            if len(quantity) == 0:
+                continue
+            item = item.strip()
+            items.append(Item(item, int(quantity)))
+        Item.sort_list(items, data_utils.resource_order)
+        return items
+
+    @staticmethod
+    def parse_list(raw: str, skip_negative=False) -> List[Item]:
+        items = []  # type: List[Item]
+        for line in raw.split("\n"):
+            if re.fullmatch("[a-zA-Z ]*", line):
+                continue
+            line = re.sub("\t", "    ", line.strip())  # Replace Tabs with spaces
+            line = re.sub("^\\d+ *", "", line.strip())  # Delete first column (numeric Index)
+            item = re.sub(" +[0-9.]+$", "", line)
+            quantity = line.replace(item, "").strip()
+            if len(quantity) == 0:
+                continue
+            item = item.strip()
+            quantity = float(quantity)
+            if skip_negative and quantity < 0:
+                continue
+            items.append(Item(item, quantity))
+        Item.sort_list(items, data_utils.resource_order)
+        return items
+
+    @staticmethod
+    def to_string(items):
+        res = ""
+        for item in items:
+            res += f"{item.name}: {item.amount}\n"
+        return res
 
 
 # noinspection PyMethodMayBeStatic
