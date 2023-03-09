@@ -214,6 +214,8 @@ async def market_loop():
         await data_utils.init_market_data()
         pi_planer.item_prices = await data_utils.get_market_data(item_type="pi")
         pi_planer.available_prices = await data_utils.get_available_market_data("pi")
+        logger.info("Market data reload completed")
+        await pi_planer.reload_pending_resources()
     except Exception as e:
         utils.log_error(logger, e, location="market_loop")
 

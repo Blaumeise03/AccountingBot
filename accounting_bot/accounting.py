@@ -89,6 +89,8 @@ def set_up(config: Config,
         EMBED_MENU_SHORTCUT = Embed.from_dict(embeds["MenuShortcut"])
         EMBED_INDU_MENU = Embed.from_dict(embeds["InduRoleMenu"])
         pi_planer.help_embed = Embed.from_dict(embeds["PiPlanerHelp"])
+        pi_planer.autoarray_help_a = embeds["PiPlanAutoSelectHelpA"]
+        pi_planer.autoarray_help_b = embeds["PiPlanAutoSelectHelpB"]
         logger.info("Embeds loaded.")
 
 

@@ -309,6 +309,14 @@ class UniverseDatabase:
                 ).all()
             )
 
+    def fetch_items(self, item_type: str):
+        with Session(self.engine, expire_on_commit=False) as conn:
+            return (
+                conn.query(Item)
+                .filter(Item.type == item_type)
+                .all()
+            )
+
     def get_pi_plan(self, user_id: int, plan_num: Optional[int] = None) -> Union[PiPlanSettings, List[PiPlanSettings], None]:
         with Session(self.engine) as conn:
             if plan_num is not None:

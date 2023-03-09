@@ -1,10 +1,14 @@
+import difflib
 import logging
+import re
+from datetime import datetime, timedelta
 from typing import List, Dict, Optional, Callable, Coroutine, Any, Union
 
 import discord
 from discord import User, Embed, Color, ApplicationContext, Interaction, Message, InputTextStyle
 from discord.ui import InputText, Button
 
+from accounting_bot import sheet
 from accounting_bot.exceptions import PlanetaryProductionException
 from accounting_bot.universe import data_utils
 from accounting_bot.universe.models import PiPlanSettings, PiPlanResource
@@ -13,7 +17,25 @@ from accounting_bot.utils import ErrorHandledModal, AutoDisableView, Item
 logger = logging.getLogger("data.pi")
 item_prices = {}  # type: Dict[str,Dict[str, Union[int, float]]]
 available_prices = []
+pending_resources = {}  # type: Dict[str, float]
+last_reload = datetime(1907, 1, 1)
+pi_resources = []
 help_embed = None  # type: Embed | None
+autoarray_help_a = "N/A"
+autoarray_help_b = "N/A"
+
+
+async def reload_pending_resources():
+    global pending_resources, pi_resources, last_reload
+    difference = datetime.now() - last_reload
+    if difference < timedelta(minutes=15):
+        return
+    logger.info("Reloading pending resources")
+    items = await sheet.load_pending_resources()
+    pending_resources = items
+    pi_resources = list(map(lambda i: i.name, await data_utils.get_items_by_type("pi")))
+    last_reload = datetime.now()
+    logger.info("Pending resources loaded")
 
 
 def get_price(item: str, price_types: List[str]) -> Optional[Union[float, int]]:
@@ -27,6 +49,27 @@ def get_price(item: str, price_types: List[str]) -> Optional[Union[float, int]]:
         if v > p and t in price_types:
             p = v
     return p
+
+
+def build_debug_table(debug_data: Dict):
+    d_msg = "**Normalized + Ideal**\n```\nResource      Normalized Weight  Ideal"
+    for n, w in debug_data["normalized"].items():
+        if w <= 0:
+            continue
+        d_msg += f"\n{n:<21} {w:9,.0f}  {debug_data['ideal'][n]:4.2f}"
+    d_msg += "\n```\n**Selection**\n```Resource                 Out  Eff   AW   RW  NRW"
+    for v in debug_data["selection"]:
+        d_msg += (f"\n{v['res']:<21} "
+                  f"{v['out']:5.2f} "
+                  f"{v['eff']:5.1%} "
+                  f"{v['aweight']:4.2} "
+                  f"{v['rweight']:4.2f} "
+                  f"{v['nrweight']:4.2f}")
+        if len(d_msg) > 900:
+            d_msg += "\n(Truncated)"
+            break
+    d_msg += "\n```"
+    return d_msg
 
 
 class Array:
@@ -235,12 +278,7 @@ class PiPlaner:
             arrays.append(array)
         return arrays
 
-    async def auto_select_weighted(self, weights: Dict[str, float]):
-        """
-        Auto selects the best array using given weights. The selection works as follows-
-        :param weights:
-        :return:
-        """
+    async def auto_select_weighted(self, weights: Dict[str, float], debug_data=None):
         free_planets = self.num_planets
         arrays = []
         for arr in self.arrays:
@@ -256,11 +294,15 @@ class PiPlaner:
         for item in weights:
             if item in max_planets and weights[item] > 1:
                 weights[item] = weights[item] / max_planets[item]
+        if debug_data is not None:
+            debug_data["normalized"] = {k: v for k, v in sorted(weights.items(), key=lambda i: i[1], reverse=True)}
         # Calculate the ideal amount of planets
-        sum_w = sum(weights.values())
+        sum_w = sum(filter(lambda i: i > 0, weights.values()))
         for item in weights:
-            weights[item] = weights[item] / sum_w * self.num_planets
-
+            weights[item] = weights[item] / sum_w * free_planets
+        if debug_data is not None:
+            debug_data["ideal"] = {k: v for k, v in sorted(weights.items(), key=lambda i: i[1], reverse=True)}
+            debug_data["selection"] = []
         while len(arrays) < self.num_planets:
             if len(all_planets) == 0:
                 break
@@ -272,11 +314,20 @@ class PiPlaner:
             # Get the planet with the highest weight
             all_planets.sort(key=lambda p: p["weight"], reverse=True)
             next_array = all_planets.pop(0)
+            debug_array = None
+            if debug_data is not None:
+                debug_array = {"res": next_array["res"],
+                               "out": next_array["out"],
+                               "eff": next_array["eff"],
+                               "aweight": next_array["weight"],
+                               "rweight": weights[next_array["res"]]}
 
             # Reduce the targeted weights
-            sum_w = sum(weights.values())
-            weights[next_array["res"]] = weights[next_array["res"]] - (1 / self.num_planets) * sum_w
-
+            sum_w = sum(filter(lambda i: i > 0, weights.values()))
+            weights[next_array["res"]] = weights[next_array["res"]] - (1 / free_planets) * sum_w
+            if debug_data is not None:
+                debug_array["nrweight"] = weights[next_array["res"]]
+                debug_data["selection"].append(debug_array)
             array = Array(
                 resource=next_array["res"],
                 base_output=next_array["out"],
@@ -611,7 +662,7 @@ class AutoSelectArrayModal(ErrorHandledModal):
         self.plan = plan
         self.add_item(InputText(style=InputTextStyle.multiline,
                                 label="Modus",
-                                placeholder="\"ISK\" oder Itemliste",
+                                placeholder="\"ISK\", \"Projekte\" oder Itemliste\nOptional \"Debug\"",
                                 required=True))
 
     async def callback(self, ctx: ApplicationContext):
@@ -619,16 +670,29 @@ class AutoSelectArrayModal(ErrorHandledModal):
             self.session.get_active_plan().arrays = arrays
             await _ctx.response.send_message("Arrays geändert", ephemeral=True)
             await self.session.refresh_msg()
+
         await ctx.response.defer(ephemeral=True, invisible=False)
         inp = self.children[0].value
+        debug_data = None
+        re_debug = re.compile(re.escape('debug'), re.IGNORECASE)
+        if re_debug.search(inp):
+            debug_data = {}
+            inp = re_debug.sub("", inp, 1)
         if inp.strip().casefold() == "ISK".casefold():
             arrays = await self.plan.auto_select()
+        elif difflib.SequenceMatcher(None, "Projekt".casefold(), inp.strip().casefold()).ratio() > 0.75:
+            await reload_pending_resources()
+            weights = {k: v for k, v in pending_resources.items() if k in pi_resources}
+            if len(weights) == 0:
+                await ctx.followup.send("Ressourcenbedarf nicht gefunden.")
+                return
+            arrays = await self.plan.auto_select_weighted(weights, debug_data)
         else:
             weights = get_weights(inp)
             if len(weights) == 0:
                 await ctx.followup.send("Gewichtung nicht erkannt, bitte Eingabe überprüfen.")
                 return
-            arrays = await self.plan.auto_select_weighted(weights)
+            arrays = await self.plan.auto_select_weighted(weights, debug_data)
         msg = Array.build_table(arrays, mode="L n: R P d i", price_types=self.plan.preferred_prices)
         emb = Embed(title="Auto Array",
                     description="Es wurden die besten Planeten anhand ihrer ISK-Produktion gesucht. Willst Du diese"
@@ -637,6 +701,10 @@ class AutoSelectArrayModal(ErrorHandledModal):
         emb.add_field(name="Einnahmen",
                       value=f"```\n{Array.build_income_table(arrays, price_types=self.plan.preferred_prices)}\n```",
                       inline=False)
+        if debug_data is not None and len(debug_data) > 0:
+            emb.add_field(name="Debug", value=build_debug_table(debug_data), inline=False)
+            emb.add_field(name="Erklärung", value=autoarray_help_a)
+            emb.add_field(name="Finale Auswahl", value=autoarray_help_b)
         view = ConfirmView(callback=save)
         msg = await ctx.followup.send(
             embed=emb,

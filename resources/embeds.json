@@ -103,12 +103,14 @@
       },
       {
         "name": "Autoarrays",
-        "value": "Mit der Autoarray funktionieren werden alle nicht gesperrten Arrays automatisch verteilt. Dazu gibt es drei Modi:\n\n**ISK**: Es werden die Planeten mit dem höchsten ISK Ertrag (anhand der für den Plan eingestellten präferierten Preise) gesucht.\n\n**Itemliste** (absolute Zahlen, z.B. eine Ingameliste): Die Planeten werden anhand der Bedarfs Liste gewichtet. Die effektive Gewichtung hängt auch von der Effizienz der Planeten ab, außerdem wird die Liste anhand des jeweils besten Planeten im Universum normalisiert.\n\n**Prozentuale Liste**: Die Werte aus der Liste werden direkt für die Gewichtung genutzt und nicht normalisiert. Das Format der Liste muss `Item Gewicht` sein, wobei `Gewicht` eine Dezimalzahl (mit Punkt als Dezimalseparator) kleiner gleich 1 sein muss.",
+        "value": "Mit der Autoarray funktionieren werden alle nicht gesperrten Arrays automatisch verteilt. Dazu gibt es drei Modi:\n\n*ISK*: Es werden die Planeten mit dem höchsten ISK Ertrag (anhand der für den Plan eingestellten präferierten Preise) gesucht.\n\n*Projekte*: Verwende automatisch den aktuellen Ressourcenbedarf der Projekte als Gewichtung\n\n*Itemliste* (absolute Zahlen, z.B. eine Ingameliste): Die Planeten werden anhand der Bedarfs Liste gewichtet. Die effektive Gewichtung hängt auch von der Effizienz der Planeten ab, außerdem wird die Liste anhand des jeweils besten Planeten im Universum normalisiert.\n\n*Prozentuale Liste*: Die Werte aus der Liste werden direkt für die Gewichtung genutzt und nicht normalisiert. Das Format der Liste muss `Item Gewicht` sein, wobei `Gewicht` eine Dezimalzahl (mit Punkt als Dezimalseparator) kleiner gleich 1 sein muss.\n\n*Debugmodus*: Schreibe \"Debug\" vor die Eingabe um Details zur Gewichtung der Planeten zu bekommen.",
         "inline": false
       }
     ],
     "color": 3066993,
     "type": "rich",
     "title": "Pi Planer Hilfe"
-  }
+  },
+  "PiPlanAutoSelectHelpA": "*Normalisierte Gewichtung*:\nDer absolute Bedarf anhand des besten Planeten in New Eden in \"Arraystunden\" umgerechnet, d.h. in die Anzahl von Arrays\\*Stunden, die der beste Planet benötigen würde um den Bedarf zu produzieren. Z.b.: `6 Arraystunden` ≙ 1 `Array 6 Stunden lang` oder `6 Arrays 1 Stunde lang` oder `3 Arrays 2 Stunden lang` usw.\n\n*Idealverteilung*:\nEs wird berechnet, wie viele von den verfügbaren Planeten anhand der normalisierten Gewichtung verwendet werden können. Eine Ressource mit dem doppelten Gewicht einer anderen werden auch doppelt so viele Planeten gutgeschrieben.\n\n",
+  "PiPlanAutoSelectHelpB": "*Selection*:\nDies sind die Planeten, die am Ende ausgewählt wurden. *Out* ist der Standardoutput des Planeten, *Eff* die Effizienz des Planeten im Vergleich zum besten Planeten in New Eden.\n*AW*: Die Endgewichtung dieses Planeten entspricht der Formel `AW = RW * Eff` und wird für die Finale Auswahl genutzt.\n*RW*:Die normalisierte Gewichtung der Ressource, wobei nach jedem ausgewählten Planeten von dieser Ressource reduziert wird. Die Formel lautet `New RW = (1 / num_planets) * sum_weights`, wobei `sum_weights` die Summe aller Gewichte ist, siehe Spalte *NRW*."
 }

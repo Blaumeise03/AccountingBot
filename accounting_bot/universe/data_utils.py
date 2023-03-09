@@ -12,7 +12,7 @@ import plotly.graph_objects as go
 import networkx as nx
 
 from accounting_bot import sheet
-from accounting_bot.universe.models import System, PiPlanSettings
+from accounting_bot.universe.models import System, PiPlanSettings, Item
 from accounting_bot.universe.universe_database import UniverseDatabase
 
 logger = logging.getLogger("data.utils")
@@ -184,10 +184,8 @@ async def get_pi_plan(*args, **kwargs) -> Union[PiPlanSettings, List[PiPlanSetti
 async def init_market_data() -> None:
     def _save_market_data(_items):
         db.save_market_data(_items)
-    logger.info("Loading market data")
     items = await sheet.get_market_data()
     await execute_async(_save_market_data, items)
-    logger.info("Market data loaded")
 
 
 async def get_market_data(
@@ -198,10 +196,14 @@ async def get_market_data(
     return await execute_async(_get_market_data, item_names, item_type)
 
 
-async def get_available_market_data(item_type: str) -> None:
+async def get_available_market_data(item_type: str) -> List[str]:
     def _get_available_market_data(*args, **kwargs):
         return db.get_available_market_data(*args, **kwargs)
     return await execute_async(_get_available_market_data, item_type)
+
+
+async def get_items_by_type(item_type: str) -> List[Item]:
+    return await execute_async(db.fetch_items, item_type)
 
 
 def graph_map_to_figure(graph: nx.Graph, include_highsec=True, node_size=3.5) -> go.Figure:

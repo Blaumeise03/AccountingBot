@@ -38,6 +38,7 @@ SHEET_LOG_NAME = "Accounting Log"
 SHEET_ACCOUNTING_NAME = "Accounting"
 SHEET_OVERFLOW_NAME = "Projektüberlauf"
 SHEET_MARKET_NAME = "Ressourcenbedarf Projekte"
+SHEET_OVERVIEW_NAME = "Ressourcenbedarf Projekte"
 sheet_name = "N/A"
 
 # Projekt worksheet names
@@ -59,9 +60,13 @@ MEMBERS_ACTIVE_INDEX = 10  # The column index of the "active" column
 MEMBERS_RANK_INDEX = 8  # The column index of the "rank" column
 MEMBERS_NOTE_INDEX = 14  # The column containing notes for users
 
-MARKET_PRICE_INDEXES = [6, 7, 9]
-MARKET_ITEM_INDEX = 0
-MARKET_AREA = "A:J"
+MARKET_PRICE_INDEXES = [6, 7, 9]  # The columns containing market prices
+MARKET_ITEM_INDEX = 0  # The column containing the item names
+MARKET_AREA = "A:J"  # The total area
+
+OVERVIEW_AREA = "A:B"
+OVERVIEW_ITEM_INDEX = 0
+OVERVIEW_QUANTITY_INDEX = 1
 
 # All resources that exist, will be used to verify the integrity of the received data
 PROJECT_RESOURCES = []
@@ -266,7 +271,26 @@ async def get_market_data():
             elif not value == "":
                 logger.warning("Market price '%s':%s for item '%s' in sheet '%s' is not a number: '%s'",
                                p_name, col, item, SHEET_MARKET_NAME, value)
+    logger.info("Market data loaded")
     return prices
+
+
+async def load_pending_resources():
+    logger.info("Loading pending resources")
+    agc = await agcm.authorize()
+    sheet = await agc.open_by_key(SPREADSHEET_ID)
+    wk_overview = await sheet.worksheet(SHEET_OVERVIEW_NAME)
+    data = await wk_overview.get_values(OVERVIEW_AREA, value_render_option=ValueRenderOption.unformatted)
+    items = {}
+    row_i = -1
+    for row in data:
+        row_i += 1
+        if row_i == 0:
+            continue
+        if len(row) < max(OVERVIEW_ITEM_INDEX, OVERVIEW_QUANTITY_INDEX):
+            continue
+        items[row[OVERVIEW_ITEM_INDEX]] = float(row[OVERVIEW_QUANTITY_INDEX])
+    return items
 
 
 async def find_projects():
