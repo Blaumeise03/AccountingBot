@@ -11,6 +11,10 @@ class InputException(Exception):
     pass
 
 
+class AccountingException(InputException):
+    pass
+
+
 class LoggedException(ABC, Exception):
     """
     An abstract exception that contains an error log that may be made public to the end user.

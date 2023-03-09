@@ -92,6 +92,7 @@ config_structure = {
     "logToChannel": (bool, False),
     "errorLogChannel": (int, -1),
     "admins": (list, []),
+    "shipyard_admins": (list, []),
     "db": {
         "user": (str, "N/A"),
         "password": (str, "N/A"),
@@ -336,7 +337,7 @@ async def on_ready():
             # Updating the message View, so it can be used by the users
             await msg.edit(view=accounting.TransactionView())
             if len(msg.embeds) > 0:
-                transaction = Transaction.from_embed(msg.embeds[0])
+                transaction = accounting.transaction_from_embed(msg.embeds[0])
                 state = await transaction.get_state()
                 if state == 2:
                     await msg.add_reaction("⚠️")

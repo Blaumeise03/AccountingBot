@@ -323,8 +323,14 @@ class Item(object):
         return res
 
 
+class TransactionBase(ABC):
+    @abstractmethod
+    def has_permissions(self, user_name: int) -> bool:
+        pass
+
+
 # noinspection PyMethodMayBeStatic
-class TransactionLike(ABC):
+class TransactionLike(TransactionBase, ABC):
     def get_from(self) -> Optional[str]:
         return None
 

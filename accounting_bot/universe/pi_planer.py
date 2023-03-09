@@ -695,7 +695,7 @@ class AutoSelectArrayModal(ErrorHandledModal):
             arrays = await self.plan.auto_select_weighted(weights, debug_data)
         msg = Array.build_table(arrays, mode="L n: R P d i", price_types=self.plan.preferred_prices)
         emb = Embed(title="Auto Array",
-                    description="Es wurden die besten Planeten anhand ihrer ISK-Produktion gesucht. Willst Du diese"
+                    description="Es wurden die besten Planeten gesucht. Willst Du diese "
                                 "in den Plan übernehmen?")
         emb.add_field(name="Arrays", value=f"```\n{msg}```\n", inline=False)
         emb.add_field(name="Einnahmen",

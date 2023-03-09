@@ -1,7 +1,9 @@
+import asyncio
 import json
 import logging
 import os
 import re
+from abc import ABC, abstractmethod
 from asyncio import Lock
 from datetime import datetime
 from typing import TYPE_CHECKING, Optional
@@ -20,7 +22,7 @@ from numpy import ndarray
 from accounting_bot import sheet, utils
 from accounting_bot.config import Config
 from accounting_bot.database import DatabaseConnector
-from accounting_bot.exceptions import BotOfflineException
+from accounting_bot.exceptions import BotOfflineException, AccountingException
 from accounting_bot.universe import pi_planer
 from accounting_bot.utils import AutoDisableView, State, ErrorHandledModal, TransactionLike
 
@@ -38,10 +40,12 @@ ACCOUNTING_LOG = None  # type: int | None
 ADMIN_LOG = None  # type: int | None
 SERVER = None  # type: int | None
 ADMINS = []  # type: [int]
+SHIPYARD_ADMINS = []
 CONNECTOR = None  # type: DatabaseConnector | None
 USER_ROLE = None  # type: int | None
 STATE = None  # type: BotState | None
 IMG_WORKING_DIR = None  # type: str | None
+NAME_SHIPYARD = "Buyback Program"
 
 # All embeds
 EMBED_MENU_INTERNAL = None  # type: Embed | None
@@ -67,7 +71,7 @@ def set_up(config: Config,
     :param bot: the discord bot instance
     :param state: the global state of the bot
     """
-    global CONNECTOR, CONFIG, BOT, ACCOUNTING_LOG, ADMIN_LOG, SERVER, USER_ROLE, STATE, ADMINS
+    global CONNECTOR, CONFIG, BOT, ACCOUNTING_LOG, ADMIN_LOG, SERVER, USER_ROLE, STATE, ADMINS, SHIPYARD_ADMINS
     global EMBED_MENU_INTERNAL, EMBED_MENU_EXTERNAL, EMBED_MENU_VCB, EMBED_MENU_SHORTCUT, EMBED_INDU_MENU
     CONNECTOR = new_connector
     CONFIG = config
@@ -79,6 +83,7 @@ def set_up(config: Config,
     SERVER = config["server"]
     USER_ROLE = config["user_role"]
     ADMINS = config["admins"]
+    SHIPYARD_ADMINS = config["shipyard_admins"]
     STATE = state
     logger.info("Loading embed config...")
     with open("resources/embeds.json", "r", encoding="utf8") as embed_file:
@@ -180,43 +185,23 @@ async def inform_player(transaction, discord_id, receive):
                        time_formatted)
 
 
-async def save_embeds(msg, user_id):
-    """
-    Saves the transaction of a message into the sheet
-
-    :param msg:     The message with the transaction embed
-    :param user_id: The user ID that verified the transaction
-    """
-    if not STATE.is_online():
-        raise BotOfflineException("Can't verify transactions when the bot is not online")
-    if len(msg.embeds) == 0:
-        return
-    elif len(msg.embeds) > 1:
-        logging.warning(f"Message {msg.id} has more than one embed ({msg.embeds})!")
-    # Getting embed of the message, should contain only one
-    embed = msg.embeds[0]
-    # Convert embed to Transaction
-    transaction = Transaction.from_embed(embed)
+async def save_transaction(transaction: "Transaction", msg: Message, user_id: int):
     # Check if transaction is valid
     if transaction.amount is None or (not transaction.name_from and not transaction.name_to) or not transaction.purpose:
-        logging.error(f"Invalid embed in message {msg.id}! Can't parse transaction data: {transaction}")
-        return
+        logger.error(f"Invalid embed in message {msg.id}! Can't parse transaction data: {transaction}")
+        raise AccountingException("Transaction verification failed: Invalid embed")
     time_formatted = transaction.timestamp.astimezone(pytz.timezone("Europe/Berlin")).strftime("%d.%m.%Y %H:%M")
 
-    async with database_lock:
-        is_unverified = CONNECTOR.is_unverified_transaction(msg.id)
-        if not is_unverified:
-            logger.warning(
-                f"Attempted to verify an already verified transaction {msg.id} ({time_formatted}), user: {user_id}.")
-            return
-        # Save transaction to sheet
-        await sheet.add_transaction(transaction=transaction)
-        user = await BOT.get_or_fetch_user(user_id)
-        logger.info(f"Verified transaction {msg.id} ({time_formatted}). Verified by {user.name} ({user.id}).")
-        # Set message as verified
-        CONNECTOR.set_verification(msg.id, verified=1)
-    await msg.edit(content=f"Verifiziert von {user.name}", view=None)
+    # Save transaction to sheet
+    await sheet.add_transaction(transaction=transaction)
+    user = await BOT.get_or_fetch_user(user_id)
+    logger.info(f"Verified transaction {msg.id} ({time_formatted}). Verified by {user.name} ({user.id}).")
 
+    # Set message as verified
+    CONNECTOR.set_verification(msg.id, verified=1)
+
+
+async def inform_players(transaction: "Transaction"):
     # Update wallets
     if transaction.name_from and transaction.name_from in sheet.wallets:
         sheet.wallets[transaction.name_from] = sheet.wallets[transaction.name_from] - transaction.amount
@@ -236,8 +221,57 @@ async def save_embeds(msg, user_id):
             id_to = None
         await inform_player(transaction, id_to, receive=True)
 
-    await msg.remove_reaction("⚠️", BOT.user)
-    await msg.remove_reaction("❌", BOT.user)
+
+async def save_embeds(msg, user_id):
+    """
+    Saves the transaction of a message into the sheet
+
+    :param msg:     The message with the transaction embed
+    :param user_id: The user ID that verified the transaction
+    """
+    if not STATE.is_online():
+        raise BotOfflineException("Can't verify transactions when the bot is not online")
+    if len(msg.embeds) == 0:
+        return
+    elif len(msg.embeds) > 1:
+        logging.warning(f"Message {msg.id} has more than one embed ({msg.embeds})!")
+    # Getting embed of the message, should contain only one
+    embed = msg.embeds[0]
+    # Convert embed to Transaction
+    transaction = transaction_from_embed(embed)
+    if isinstance(transaction, PackedTransaction):
+        transactions = transaction.get_transactions()
+    else:
+        transactions = [transaction]
+    async with database_lock:
+        is_unverified = CONNECTOR.is_unverified_transaction(msg.id)
+        if not is_unverified:
+            time_formatted = transaction.timestamp.astimezone(pytz.timezone("Europe/Berlin")).strftime("%d.%m.%Y %H:%M")
+            logger.warning(
+                f"Attempted to verify an already verified transaction {msg.id} ({time_formatted}), user: {user_id}.")
+            return
+        for transaction in transactions:
+            await save_transaction(transaction, msg, user_id)
+    user = await BOT.get_or_fetch_user(user_id)
+    await asyncio.gather(
+        msg.edit(content=f"Verifiziert von {user.name}", view=None),
+        msg.remove_reaction("⚠️", BOT.user),
+        msg.remove_reaction("❌", BOT.user),
+        *[inform_players(transaction) for transaction in transactions]
+    )
+
+
+async def get_wallet_state(wallet, amount) -> int:
+    bal = await sheet.get_balance(wallet, 0)
+    inv = await sheet.get_investments(wallet, 0)
+    if bal > amount:
+        return 0
+    elif (bal + inv * INVESTMENT_RATIO) > amount:
+        return 1
+    elif (bal + inv) >= amount:
+        return 2
+    else:
+        return 3
 
 
 async def verify_transaction(user_id: int, message: Message, interaction: Interaction = None):
@@ -259,14 +293,14 @@ async def verify_transaction(user_id: int, message: Message, interaction: Intera
         if interaction:
             await interaction.followup.send(content="Error: Embeds not found", ephemeral=True)
         return
-    transaction = Transaction.from_embed(message.embeds[0])
+    transaction = transaction_from_embed(message.embeds[0])
     if not transaction:
         if interaction:
             await interaction.followup.send(content="Error: Couldn't parse embed", ephemeral=True)
         return
     has_permissions = user_id in ADMINS
     user = await BOT.get_or_fetch_user(user_id)
-    if not has_permissions and transaction.name_from and transaction.name_to:
+    if not has_permissions and isinstance(transaction, Transaction) and transaction.name_from and transaction.name_to:
         # Only transactions between two players can be self-verified
         owner_id, _, _ = await utils.get_or_find_discord_id(player_name=transaction.name_from)
         if owner_id and user_id == owner_id:
@@ -302,14 +336,16 @@ async def verify_transaction(user_id: int, message: Message, interaction: Intera
                         ephemeral=True)
                 return
             has_permissions = True
-            logger.info("User " + str(user_id) + " is owner of transaction " + transaction.__str__() + " and has sufficient balance")
+            logger.info("User " + str(
+                user_id) + " is owner of transaction " + transaction.__str__() + " and has sufficient balance")
     ocr_verified = False
-    if transaction.detect_type() == 1:
+    if isinstance(transaction, Transaction) and transaction.detect_type() == 1:
         owner_id, _, _ = await utils.get_or_find_discord_id(player_name=transaction.name_to)
         if owner_id and user_id == owner_id:
             ocr_verified = CONNECTOR.get_ocr_verification(message.id)
             has_permissions = has_permissions or ocr_verified
-
+    if isinstance(transaction, ShipyardTransaction) and not has_permissions:
+        has_permissions = user_id in SHIPYARD_ADMINS
     if not has_permissions:
         if interaction:
             await interaction.followup.send(content="Fehler: Du hast dazu keine Berechtigung. Nur der Kontoinhaber und "
@@ -349,7 +385,7 @@ async def verify_transaction(user_id: int, message: Message, interaction: Intera
             file = None
             if os.path.exists(IMG_WORKING_DIR + f"/transactions/{str(message.id)}.jpg"):
                 file = discord.File(IMG_WORKING_DIR + f"/transactions/{str(message.id)}.jpg")
-            msg = "Transaction `{}` was self-verified by `{}:{}`:\nhttps://discord.com/channels/{}/{}/{}\n"\
+            msg = "Transaction `{}` was self-verified by `{}:{}`:\nhttps://discord.com/channels/{}/{}/{}\n" \
                 .format(transaction, user.name, user_id, SERVER, ACCOUNTING_LOG, message.id)
             if ocr_verified:
                 msg += "*Transaction was OCR verified*"
@@ -362,7 +398,13 @@ async def verify_transaction(user_id: int, message: Message, interaction: Intera
             await interaction.followup.send("Transaktion verifiziert!", ephemeral=True)
 
 
-class Transaction:
+def transaction_from_embed(embed: Embed):
+    if embed.title == "Shipyard Bestellung":
+        return ShipyardTransaction.from_embed(embed)
+    return Transaction.from_embed(embed)
+
+
+class Transaction(TransactionLike):
     """
     Represents a transaction
 
@@ -376,6 +418,18 @@ class Transaction:
         the amount of the transaction
 
     """
+
+    def has_permissions(self, user, operation="") -> bool:
+        match operation:
+            case "delete":
+                if self.name_from and utils.get_main_account(self.name_from) == user:
+                    return True
+                elif self.name_to and utils.get_main_account(self.name_to) == user:
+                    return True
+                return False
+            case "verify":
+                return user in ADMINS
+        return False
 
     # Transaction types
     NAMES = {
@@ -415,6 +469,27 @@ class Transaction:
     def __str__(self):
         return f"<Transaction: time {self.timestamp}; from {self.name_from}; to {self.name_to}; amount {self.amount}; " \
                f"purpose \"{self.purpose}\"; reference \"{self.reference}\">"
+
+    def get_from(self) -> Optional[str]:
+        return self.name_from
+
+    def get_to(self) -> Optional[str]:
+        return self.name_to
+
+    def get_amount(self) -> int:
+        return self.amount
+
+    def get_time(self) -> Optional[datetime]:
+        return self.timestamp
+
+    def get_purpose(self) -> str:
+        return self.purpose
+
+    def get_reference(self) -> Optional[str]:
+        return self.reference
+
+    def self_verification(self) -> bool:
+        return self.allow_self_verification
 
     def detect_type(self) -> int:
         """
@@ -470,17 +545,8 @@ class Transaction:
 
     async def get_state(self):
         if self.name_from is None:
-            return 0
-        bal = await sheet.get_balance(self.name_from, 0)
-        inv = await sheet.get_investments(self.name_from, 0)
-        if bal > self.amount:
-            return 0
-        elif (bal + inv * INVESTMENT_RATIO) > self.amount:
-            return 1
-        elif (bal + inv) >= self.amount:
-            return 2
-        else:
-            return 3
+            return None
+        return await get_wallet_state(self.name_from, self.amount)
 
     @staticmethod
     async def from_modal(modal: Modal, author: str, user: int = None) -> ('Transaction', str):
@@ -564,7 +630,7 @@ class Transaction:
         return transaction, warnings
 
     @staticmethod
-    def from_embed(embed: Embed) -> 'Transaction':
+    def from_embed(embed: Embed) -> Optional['Transaction']:
         """
         Creates a Transaction from an existing :class:`Embed`.
 
@@ -587,6 +653,8 @@ class Transaction:
         transaction.timestamp = embed.timestamp.astimezone(pytz.timezone("Europe/Berlin"))
         if embed.footer is not None:
             transaction.author = embed.footer.text
+        if not transaction.is_valid():
+            return None
         return transaction
 
     @staticmethod
@@ -601,7 +669,133 @@ class Transaction:
         return transaction
 
 
-async def send_transaction(embeds: List[Union[Embed, Transaction]], interaction: Interaction, note="") -> Optional[Message]:
+class PackedTransaction(ABC):
+    @abstractmethod
+    def get_transactions(self) -> List[Transaction]:
+        pass
+
+    @abstractmethod
+    def self_verification(self) -> bool:
+        pass
+
+    @abstractmethod
+    def to_embed(self) -> Embed:
+        pass
+
+    @abstractmethod
+    async def get_state(self) -> int:
+        pass
+
+    @staticmethod
+    @abstractmethod
+    def from_embed(embed: Embed) -> "PackedTransaction":
+        pass
+
+
+class ShipyardTransaction(PackedTransaction):
+    def __init__(self,
+                 author: Union[str, None] = None,
+                 buyer: Union[str, None] = None,
+                 price: Union[int, None] = None,
+                 ship: Union[str, None] = None,
+                 station_fees: Union[int, None] = None,
+                 builder: Union[str, None] = None,
+                 timestamp: Union[datetime, None] = None
+                 ):
+        self.author = author
+        if timestamp is None:
+            self.timestamp = datetime.now()
+        else:
+            self.timestamp = timestamp
+        self.ship = ship
+        self.price = price
+        self.station_fees = station_fees
+        self.buyer = buyer
+        self.builder = builder
+        self.authorized = False
+
+    def __str__(self):
+        return f"ShipyardTransaction(from={self.buyer}, price={self.price}, station={self.station_fees}" \
+               f"ship={self.ship}; builder=\"{self.builder}\"time={self.timestamp})"
+
+    def get_transactions(self) -> List[Transaction]:
+        transactions = [
+            Transaction(
+                name_from=self.buyer,
+                name_to=NAME_SHIPYARD,
+                amount=self.price,
+                purpose=f"Kauf {self.ship}",
+                timestamp=self.timestamp,
+                author=self.author
+            ),
+            Transaction(
+                name_from=NAME_SHIPYARD,
+                amount=self.station_fees,
+                purpose=f"Stationsgebühren {self.ship}",
+                timestamp=self.timestamp,
+                author=self.author
+            )]
+        slot_price = min(int(self.price * 0.02 / 100000) * 100000, 50000000)
+        if self.builder is not None and slot_price >= 1000000:
+            transactions.append(
+                Transaction(
+                    name_from=NAME_SHIPYARD,
+                    name_to=self.builder,
+                    amount=slot_price,
+                    purpose=f"Slotgebühr {self.ship}",
+                    timestamp=self.timestamp,
+                    author=self.author
+                )
+            )
+        return transactions
+
+    async def get_state(self) -> Optional[int]:
+        if self.buyer is None:
+            return None
+        return await get_wallet_state(self.buyer, self.price)
+
+    def self_verification(self):
+        return self.authorized
+
+    def to_embed(self):
+        embed = Embed(
+            title="Shipyard Bestellung",
+            color=Color.orange()
+        )
+        embed.add_field(name="Käufer", value=self.buyer, inline=True)
+        embed.add_field(name="Produkt", value=self.ship, inline=True)
+        embed.add_field(name="Preis", value="{:,} ISK".format(self.price), inline=True)
+        embed.add_field(name="Stationsgebühr", value="{:,} ISK".format(self.station_fees), inline=True)
+        if self.builder is not None:
+            embed.add_field(name="Bauer", value=self.builder, inline=True)
+        embed.timestamp = self.timestamp
+        if self.author is not None and len(self.author) > 0:
+            embed.set_footer(text=self.author)
+        return embed
+
+    @staticmethod
+    def from_embed(embed: Embed) -> "ShipyardTransaction":
+        transaction = ShipyardTransaction()
+        for field in embed.fields:
+            name = field.name.casefold()
+            if name == "Käufer".casefold():
+                transaction.buyer = field.value
+            if name == "Produkt".casefold():
+                transaction.ship = field.value
+            if name == "Preis".casefold():
+                transaction.price = parse_number(field.value)[0]
+            if name == "Stationsgebühr".casefold():
+                transaction.station_fees = parse_number(field.value)[0]
+            if name == "Bauer".casefold():
+                transaction.builder = field.value
+        transaction.timestamp = embed.timestamp.astimezone(pytz.timezone("Europe/Berlin"))
+        if embed.footer is not None:
+            transaction.author = embed.footer.text
+        return transaction
+
+
+async def send_transaction(embeds: List[Union[Embed, Transaction, PackedTransaction]], interaction: Interaction,
+                           note="") -> Optional[Message]:
     """
     Sends the embeds into the accounting log channel. Will send a response to the :class:`Interaction` containing the
     note and an error message in case any :class:`mariadb.Error` occurred.
@@ -618,22 +812,31 @@ async def send_transaction(embeds: List[Union[Embed, Transaction]], interaction:
         if isinstance(embed, Transaction):
             transaction = embed
             embed = embed.create_embed()
+        if isinstance(embed, PackedTransaction):
+            transaction = embed
+            embed = transaction.to_embed()
         msg = await BOT.get_channel(ACCOUNTING_LOG).send(embeds=[embed], view=TransactionView())
         try:
             CONNECTOR.add_transaction(msg.id, interaction.user.id)
             if transaction is None:
-                transaction = Transaction.from_embed(embed)
+                transaction = transaction_from_embed(embed)
+                if isinstance(transaction, ShipyardTransaction):
+                    transaction = ShipyardTransaction.from_embed(embed)
+                    if interaction.user.id in SHIPYARD_ADMINS:
+                        transaction.authorized = True
+                        note += "\nDu kannst diese Transaktion selbst verifizieren"
             if not transaction:
                 logger.warning("Embed in message %s is not a transaction", msg.id)
-                return
-            if transaction.name_from:
-                state = await transaction.get_state()
-                if state == 2:
-                    await msg.add_reaction("⚠️")
-                elif state == 3:
-                    await msg.add_reaction("❌")
+                continue
+
+            state = await transaction.get_state()
+            if state == 2:
+                await msg.add_reaction("⚠️")
+            elif state == 3:
+                await msg.add_reaction("❌")
+            if state is not None:
                 CONNECTOR.set_state(msg.id, state)
-            if transaction.allow_self_verification:
+            if transaction.self_verification():
                 CONNECTOR.set_ocr_verification(msg.id, True)
         except mariadb.Error as e:
             note += "\nFehler beim Eintragen in die Datenbank, die Transaktion wurde jedoch trotzdem im " \
@@ -722,14 +925,11 @@ class TransactionView(AutoDisableView):
         if not STATE.is_online():
             raise BotOfflineException()
         (owner, verified) = CONNECTOR.get_owner(interaction.message.id)
-        transaction = Transaction.from_embed(interaction.message.embeds[0])
+        transaction = transaction_from_embed(interaction.message.embeds[0])
         user_name = utils.get_main_account(discord_id=interaction.user.id)
         has_perm = owner == interaction.user.id or interaction.user.id in ADMINS
-        if transaction.name_from and utils.get_main_account(transaction.name_from) == user_name:
-            has_perm = True
-        elif transaction.name_to and utils.get_main_account(transaction.name_to) == user_name:
-            has_perm = True
-
+        if not has_perm:
+            has_perm = transaction.has_permissions(user_name, "delete")
         if not verified and has_perm:
             await interaction.message.delete()
             CONNECTOR.delete(interaction.message.id)
@@ -801,7 +1001,9 @@ class ConfirmEditView(AutoDisableView):
     async def btn_confirm_callback(self, button, interaction):
         if not STATE.is_online():
             raise BotOfflineException()
-        transaction = Transaction.from_embed(interaction.message.embeds[0])
+        transaction = transaction_from_embed(interaction.message.embeds[0])
+        if not isinstance(transaction, Transaction):
+            raise TypeError(f"Expected Transaction, but got {type(transaction)}")
         warnings = ""
         if self.original.name_to != transaction.name_to or self.original.name_from != transaction.name_from or \
                 self.original.amount != transaction.amount or self.original.purpose != transaction.purpose:
@@ -934,7 +1136,11 @@ class EditModal(TransferModal):
         if not STATE.is_online():
             raise BotOfflineException()
         transaction, warnings = await Transaction.from_modal(self, interaction.user.name, interaction.user.id)
-        original = Transaction.from_embed(interaction.message.embeds[0])  # type: Transaction
+        original = transaction_from_embed(interaction.message.embeds[0])
+        if not isinstance(original, Transaction):
+            await interaction.response.send_message("Nur normale Transaktionen können aktuell bearbeitet werden",
+                                                    ephemeral=True)
+            return
         if transaction is not None and len(warnings) > 0:
             await interaction.response.send_message(
                 warnings, embed=transaction.create_embed(),
@@ -997,37 +1203,23 @@ class ShipyardModal(ErrorHandledModal):
                 "1,000,000 ISK\n100000\n1 000 000 ISK\n1,000,000.00", ephemeral=True)
             return
 
-        embeds = []
-        transaction_ship = Transaction(
-            name_from=buyer,
-            name_to="Buyback Program",
-            amount=price,
-            purpose=f"Kauf {ship}",
-            author=interaction.user.name
-        )
-        embeds.append(transaction_ship.create_embed())
-
-        transaction_fees = Transaction(
-            name_from="Buyback Program",
-            amount=station_fees,
-            purpose=f"Stationsgebühren {ship}",
-            author=interaction.user.name
-        )
-        embeds.append(transaction_fees.create_embed())
-
         slot_price = min(int(price * 0.02 / 100000) * 100000, 50000000)
         if slot_price < 1000000:
             warnings += f"Warnung: Slotgebühr ist mit {slot_price} zu gering, sie wird nicht eingetragen."
-        if builder is not None and slot_price >= 1000000:
-            transaction_builder = Transaction(
-                name_from="Buyback Program",
-                name_to=builder,
-                amount=slot_price,
-                purpose=f"Slotgebühr {ship}",
-                author=interaction.user.name
-            )
-            embeds.append(transaction_builder.create_embed())
+            builder = None
+
+        transaction = ShipyardTransaction(
+            author=interaction.user.name,
+            buyer=buyer,
+            price=price,
+            ship=ship,
+            station_fees=station_fees,
+            builder=builder)
 
         if len(warnings) == 0:
             warnings = "Möchtest du diese Transaktion abschicken?"
-        await interaction.response.send_message(warnings, embeds=embeds, ephemeral=True, view=ConfirmView())
+        await interaction.response.send_message(
+            warnings,
+            embed=transaction.to_embed(),
+            ephemeral=True,
+            view=ConfirmView())
