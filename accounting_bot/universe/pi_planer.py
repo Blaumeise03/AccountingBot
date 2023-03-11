@@ -8,7 +8,7 @@ import discord
 from discord import User, Embed, Color, ApplicationContext, Interaction, Message, InputTextStyle
 from discord.ui import InputText, Button
 
-from accounting_bot import sheet
+from accounting_bot import sheet, utils
 from accounting_bot.exceptions import PlanetaryProductionException
 from accounting_bot.universe import data_utils
 from accounting_bot.universe.models import PiPlanSettings, PiPlanResource
@@ -229,7 +229,7 @@ class PiPlaner:
         await data_utils.save_pi_plan(self)
 
     def sort_arrays(self):
-        self.arrays = sorted(self.arrays, key=lambda a: (not a.locked, data_utils.resource_order.index(a.resource)))
+        self.arrays = sorted(self.arrays, key=lambda a: (not a.locked, utils.resource_order.index(a.resource)))
 
     def get_next_best_array(self, all_planets: List[Dict[str, Any]], arrays: List[Array]):
         best_array = None
@@ -363,7 +363,7 @@ class PiPlaner:
         val = Array.build_table(self.arrays, mode="L n R P b h", price_types=self.preferred_prices)
         emb.add_field(name=f"Aktive Arrays", value=f"```\n{val}\n```", inline=False)
         val = f"{'Resource':<21}: items/h  items/d          ISK/d"
-        resources = sorted(resources.items(), key=lambda res: data_utils.resource_order.index(res[0]))
+        resources = sorted(resources.items(), key=lambda res: utils.resource_order.index(res[0]))
         income_sum = 0
         for name, output in resources:
             income = 0

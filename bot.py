@@ -26,7 +26,7 @@ from accounting_bot.discordLogger import PycordHandler
 from accounting_bot.exceptions import InputException
 from accounting_bot.universe import data_utils, pi_planer
 from accounting_bot.universe.universe_database import UniverseDatabase
-from accounting_bot.utils import log_error, State, send_exception
+from accounting_bot.utils import log_error, State, send_exception, get_cmd_name
 
 logger = logging.getLogger()
 log_filename = "logs/" + datetime.now().strftime("%Y-%m-%d_%H-%M-%S") + ".log"
@@ -128,7 +128,7 @@ data_utils.db = UniverseDatabase(
     host=config["db.host"],
     database=config["db.universe_name"]
 )
-data_utils.resource_order = config["project_resources"]
+utils.resource_order = config["project_resources"]
 
 try:
     if config["pytesseract_cmd_path"] != "N/A":
@@ -238,6 +238,20 @@ async def on_application_command_error(ctx: ApplicationContext, err):
         location = "command " + location
     if not silent:
         log_error(logging.getLogger(), err, location=location, ctx=ctx)
+    await send_exception(err, ctx)
+
+
+@bot.event
+async def on_command_error(ctx: commands.Context, err: commands.CommandError):
+    silent = False
+    # Don't log command rate limit errors, but send a response to the interaction
+    if isinstance(err, CommandOnCooldown) or isinstance(err, InputException):
+        silent = True
+    location = get_cmd_name(ctx.command)
+    if location is not None:
+        location = "prefixed command " + location
+    if not silent:
+        log_error(logging.getLogger(), err, location=location)
     await send_exception(err, ctx)
 
 

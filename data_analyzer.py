@@ -8,6 +8,7 @@ from typing import List
 
 import plotly.graph_objects as go
 
+from accounting_bot import utils
 from accounting_bot.config import Config, ConfigTree
 from accounting_bot.database import DatabaseConnector
 from accounting_bot.universe import data_utils
@@ -53,7 +54,7 @@ db = UniverseDatabase(
     database=config["db.universe_name"]
 )
 data_utils.db = db
-data_utils.resource_order = resource_order
+utils.resource_order = resource_order
 
 
 def safe_html(fig: go.Figure, path: str):

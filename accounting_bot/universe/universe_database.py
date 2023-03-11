@@ -70,7 +70,7 @@ class UniverseDatabase:
         MarketPrice.__table__.create(bind=self.engine, checkfirst=True)
         logger.info("Setup completed")
 
-    def save_market_data(self, items: Dict[str, Dict[str, Any]]):
+    def save_market_data(self, items: Dict[str, Dict[str, Any]]) -> None:
         with Session(self.engine) as conn:
             for item_name, prices in items.items():
                 db_item = (
@@ -93,7 +93,9 @@ class UniverseDatabase:
                     db_item.prices.append(p)
             conn.commit()
 
-    def get_market_data(self, item_names: Optional[List[str]] = None, item_type: Optional[str] = None):
+    def get_market_data(self,
+                        item_names: Optional[List[str]] = None,
+                        item_type: Optional[str] = None) -> Dict[str, Dict[str, float]]:
         with Session(self.engine) as conn:
             if item_names is None:
                 if item_type is None:
@@ -309,8 +311,9 @@ class UniverseDatabase:
                 ).all()
             )
 
-    def fetch_items(self, item_type: str):
+    def fetch_items(self, item_type: str) -> List[Item]:
         with Session(self.engine, expire_on_commit=False) as conn:
+            # noinspection PyTypeChecker
             return (
                 conn.query(Item)
                 .filter(Item.type == item_type)

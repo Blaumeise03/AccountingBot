@@ -13,7 +13,7 @@ from accounting_bot.config import Config
 from accounting_bot.database import DatabaseConnector
 from accounting_bot.universe import data_utils
 from accounting_bot.universe.pi_planer import PiPlaner, PiPlanningSession, PiPlanningView
-from accounting_bot.utils import State
+from accounting_bot.utils import State, get_cmd_name
 
 if TYPE_CHECKING:
     from bot import BotState
@@ -23,12 +23,6 @@ logger = logging.getLogger("bot.commands")
 
 def main_char_autocomplete(self: AutocompleteContext):
     return filter(lambda n: self.value is None or n.startswith(self.value.strip()), utils.main_chars)
-
-
-def get_cmd_name(cmd: Union[commands.Command, discord.ApplicationCommand, None]) -> Optional[str]:
-    if cmd is None:
-        return None
-    return f"{cmd.full_parent_name} {cmd.name}".strip()
 
 
 class HelpCommand(commands.Cog):

@@ -1,6 +1,7 @@
 import asyncio
 import datetime
 import difflib
+import functools
 import io
 import json
 import logging
@@ -8,14 +9,15 @@ import math
 import re
 import traceback
 from abc import ABC, abstractmethod
+from concurrent.futures import ThreadPoolExecutor
 from enum import Enum
 from os.path import exists
-from typing import Union, Tuple, Optional, TYPE_CHECKING, Type, List
+from typing import Union, Tuple, Optional, TYPE_CHECKING, Type, List, Callable, TypeVar
 
 import cv2
 import discord
 from discord import Interaction, ApplicationContext, InteractionResponded, ActivityType
-from discord.ext.commands import Bot
+from discord.ext.commands import Bot, Context, Command
 from discord.ui import View, Modal, Item
 from numpy import ndarray
 
@@ -23,7 +25,6 @@ from accounting_bot import exceptions
 from accounting_bot.config import Config
 from accounting_bot.database import DatabaseConnector
 from accounting_bot.exceptions import LoggedException
-from accounting_bot.universe import data_utils
 
 if TYPE_CHECKING:
     from bot import BotState
@@ -44,17 +45,77 @@ discord_users = {}  # type: {str: int}
 ingame_twinks = {}
 ingame_chars = []
 main_chars = []
+resource_order = []  # type: List[str]
 
 if exists("discord_ids.json"):
     with open("discord_ids.json") as json_file:
         discord_users = json.load(json_file)
+
+executor = ThreadPoolExecutor(max_workers=5)
+loop = asyncio.get_event_loop()
+_T = TypeVar("_T")
+
+
+def wrap_async(func: Callable[..., _T]):
+    @functools.wraps(func)
+    async def run(*args, **kwargs) -> _T:
+        return await loop.run_in_executor(executor, functools.partial(func, *args, **kwargs))
+    return run
+
+
+def get_cmd_name(cmd: Union[Command, discord.ApplicationCommand, None]) -> Optional[str]:
+    if cmd is None:
+        return None
+    return f"{cmd.full_parent_name} {cmd.name}".strip()
+
+
+def get_error_location(ctx: Union[ApplicationContext, Interaction, Context]):
+    if isinstance(ctx, Interaction):
+        location = "interaction in channel {} in guild {}, user {}:{}" \
+            .format(ctx.channel_id, ctx.guild_id, ctx.user.name, ctx.user.id)
+    elif isinstance(ctx, Context):
+        location = "prefixed command in channel {} in guild {}, user {}:{} during execution of command \"{}\"" \
+            .format(ctx.channel.id,
+                    ctx.guild.id if ctx.guild is not None else "N/A",
+                    ctx.author.id,
+                    ctx.author.name,
+                    get_cmd_name(ctx.command))
+    elif isinstance(ctx, ApplicationContext):
+        location = "command in channel {} in guild {}, user {}:{} during execution of command \"{}\"" \
+            .format(ctx.channel.id,
+                    ctx.guild.id if ctx.guild is not None else "N/A",
+                    ctx.user.id,
+                    ctx.user.name,
+                    get_cmd_name(ctx.command))
+    else:
+        raise TypeError(f"Expected Interaction or ApplicationContext, got {type(ctx)}")
+    return location
+
+
+def get_user_error_msg(error: Exception):
+    error_chain = ""
+    err = error
+    while err is not None:
+        if err is error:
+            err = err.__cause__
+            continue
+        error_chain += err.__class__.__name__ + ": " + str(err) + "\n"
+        if err.__cause__ is not None:
+            error_chain += "caused by "
+        err = err.__cause__
+    error_chain.strip("\n")
+    if isinstance(error, LoggedException):
+        return f"An unexpected error occurred: \n```\n{error_chain}\n```\n" \
+               f"For more details, take a look at the attached log."
+    else:
+        return f"An unexpected error occurred: \n```\n{error_chain}\n```"
 
 
 # noinspection PyShadowingNames
 def log_error(logger: logging.Logger,
               error: Exception,
               location: Optional[Union[str, Type]] = None,
-              ctx: Union[ApplicationContext, Interaction] = None):
+              ctx: Union[ApplicationContext, Interaction, Context] = None):
     location = location if type(location) == str else f"class {location.__name__}" if location else "N/A"
     if error and error.__class__ == discord.errors.NotFound:
         logger.warning("discord.errors.NotFound Error at %s: %s", location, str(error))
@@ -66,18 +127,8 @@ def log_error(logger: logging.Logger,
         if len(full_error) > 2:
             full_error = [full_error[0], full_error[-2], full_error[-1]]
 
-    if isinstance(ctx, ApplicationContext):
-        if ctx.guild is not None:
-            # Error occurred inside a server
-            err_msg = "An error occurred at {} in guild {} in channel {}, sent by {}:{} during execution of command \"{}\"" \
-                .format(location, ctx.guild.id, ctx.channel_id, ctx.user.id, ctx.user.name, ctx.command.name)
-        else:
-            # Error occurred inside a direct message
-            err_msg = "An error occurred at {} outside of a guild in channel {}, sent by {}:{} during execution of command \"%s\"" \
-                .format(location, ctx.channel_id, ctx.user.id, ctx.user.name, ctx.command.name)
-    elif isinstance(ctx, Interaction):
-        err_msg = "An error occurred at {} during interaction in guild {} in channel {}, user {}: {}" \
-            .format(location, ctx.guild_id, ctx.channel_id, ctx.user.id, ctx.user.name)
+    if ctx is not None:
+        err_msg = "An error occurred at {} caused by {}".format(location, get_error_location(ctx))
     else:
         err_msg = "An error occurred at {}".format(location)
 
@@ -94,37 +145,37 @@ def log_error(logger: logging.Logger,
     logger.warning("Skipped %s traceback frames", skipped)
 
 
-async def send_exception(error: Exception, ctx: Union[ApplicationContext, Interaction]):
-    if isinstance(ctx, Interaction):
-        location = "interaction in channel {} in guild {}, user {}" \
-            .format(ctx.channel_id, ctx.guild_id, ctx.user.id)
-    else:
-        location = "command in channel {} in guild {}, user {}:{}" \
-            .format(ctx.channel_id, ctx.guild_id, ctx.user.id, ctx.user.name)
+async def send_exception(error: Exception, ctx: Union[ApplicationContext, Context, Interaction]):
+    location = get_error_location(ctx)
     if isinstance(error, discord.NotFound):
         logger.info("Ignoring NotFound error caused by %s", location)
         return
-    if not isinstance(ctx, Interaction) and not isinstance(ctx, ApplicationContext):
-        raise TypeError(f"Expected Interaction or ApplicationContext, got {type(ctx)}")
+
+    if isinstance(ctx, Context):
+        try:
+            await ctx.author.send(f"An unexpected error occurred: {error.__class__.__name__}\n{str(error)}")
+        except discord.Forbidden:
+            pass
+        return
+    err_msg = get_user_error_msg(error)
     try:
         try:
             # Defer interaction to ensure we can use a followup
-            await ctx.response.defer(ephemeral=True)
+            await ctx.response.defer(ephemeral=True, invisible=False)
         except InteractionResponded:
             pass
         if isinstance(error, LoggedException):
             # Append additional log
-            await ctx.followup.send(f"Error: {str(error)}.\nFor more details, take a look at the log below.",
-                                    file=string_to_file(error.get_log()), ephemeral=True)
+            await ctx.followup.send(err_msg, file=string_to_file(error.get_log()), ephemeral=True)
         else:
-            await ctx.followup.send(f"An unexpected error occurred: \n{error.__class__.__name__}\n{str(error)}",
-                                    ephemeral=True)
+            await ctx.followup.send(err_msg, ephemeral=True)
     except discord.NotFound:
         try:
-            await ctx.user.send(f"An unexpected error occurred: \n{error.__class__.__name__}\n{str(error)}")
+            await ctx.user.send(err_msg)
         except discord.Forbidden:
             pass
-        logger.warning("Can't send error message for \"%s\", caused by %s: NotFound", error.__class__.__name__,
+        logger.warning("Can't send error message for \"%s\", caused by %s: NotFound",
+                       error.__class__.__name__,
                        location)
 
 
@@ -292,7 +343,7 @@ class Item(object):
                 continue
             item = item.strip()
             items.append(Item(item, int(quantity)))
-        Item.sort_list(items, data_utils.resource_order)
+        Item.sort_list(items, resource_order)
         return items
 
     @staticmethod
@@ -312,7 +363,7 @@ class Item(object):
             if skip_negative and quantity < 0:
                 continue
             items.append(Item(item, quantity))
-        Item.sort_list(items, data_utils.resource_order)
+        Item.sort_list(items, resource_order)
         return items
 
     @staticmethod
@@ -398,7 +449,7 @@ class AutoDisableView(ErrorHandledView):
                     msg = await c.fetch_message(self.message.id)
                     await msg.edit(view=None)
                 except discord.errors.HTTPException as e2:
-                    logger.info("Can't fetch message of view to edit: %s", e)
+                    logger.info("Can't fetch message of view to edit: %s", e2)
         self.clear_items()
         self.disable_all_items()
 
@@ -422,7 +473,7 @@ async def terminate_bot(connector: DatabaseConnector):
     BOT.remove_cog("UniverseCommands")
     BOT.remove_cog("HelpCommand")
     logger.warning("Stopping data_utils executor")
-    data_utils.executor.shutdown(wait=True)
+    executor.shutdown(wait=True)
     # Wait for all pending interactions to complete
     logger.warning("Waiting for interactions to complete")
     await asyncio.sleep(15)

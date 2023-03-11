@@ -2,30 +2,21 @@ import asyncio
 import collections
 import functools
 import logging
-import math
 from concurrent.futures import ThreadPoolExecutor
-from typing import List, Iterable, Iterator, Dict, Any, Tuple, Optional, Callable, TypeVar, Union
+from typing import List, Dict, Tuple, Optional, Callable, TypeVar
 
-import numpy as np
-import plotly.express as px
-import plotly.graph_objects as go
 import networkx as nx
+import numpy as np
+import plotly.graph_objects as go
 
 from accounting_bot import sheet
-from accounting_bot.universe.models import System, PiPlanSettings, Item
+from accounting_bot.universe.models import System
 from accounting_bot.universe.universe_database import UniverseDatabase
+from accounting_bot.utils import wrap_async, resource_order
 
 logger = logging.getLogger("data.utils")
 
 db = None  # type: UniverseDatabase | None
-resource_order = []  # type: List[str]
-executor = ThreadPoolExecutor(max_workers=5)
-loop = asyncio.get_event_loop()
-_T = TypeVar("_T")
-
-
-async def execute_async(func: Callable[..., _T], *args, **kwargs) -> _T:
-    return await loop.run_in_executor(executor, functools.partial(func, *args, **kwargs))
 
 
 def create_pi_boxplot(constellation_name: str,
@@ -47,6 +38,7 @@ def create_pi_boxplot(constellation_name: str,
     data = collections.OrderedDict(sorted(data.items(), key=lambda x: resource_order.index(x[0])))
     data_keys = list(data)
     data_values = list(data.values())
+    # noinspection PyPep8Naming
     N = len(data)
     c = ['hsl(' + str(h) + ',50%' + ',50%)' for h in np.linspace(0, 360, N)]
 
@@ -94,24 +86,25 @@ def create_pi_boxplot(constellation_name: str,
     return fig, N
 
 
-async def create_pi_boxplot_async(constellation_name: str,
-                                  resource_names: List[str],
-                                  region_names: List[str],
-                                  vertical=False) -> Tuple[go.Figure, int]:
-    return await execute_async(create_pi_boxplot, constellation_name, resource_names, region_names, vertical)
+@wrap_async
+def create_pi_boxplot_async(constellation_name: str,
+                            resource_names: List[str],
+                            region_names: List[str],
+                            vertical=False):
+    return create_pi_boxplot(constellation_name, resource_names, region_names, vertical)
 
 
-async def get_all_pi_planets(constellation_name: str,
-                             resource_names: List[str] = None,
-                             amount: Optional[int] = None) -> List[Dict[str, Any]]:
-    def _get_all_pi_planets(*args, **kwargs):
-        return db.fetch_resources(*args, **kwargs)
-    return await execute_async(_get_all_pi_planets, constellation_name, resource_names, amount)
+@wrap_async
+def get_all_pi_planets(constellation_name: str,
+                       resource_names: List[str] = None,
+                       amount: Optional[int] = None):
+    return db.fetch_resources(constellation_name, resource_names, amount)
 
 
-async def get_best_pi_planets(constellation_name: str,
-                              resource_name: str,
-                              amount: Optional[int] = None) -> List[Dict[str, int]]:
+@wrap_async
+def get_best_pi_planets(constellation_name: str,
+                        resource_name: str,
+                        amount: Optional[int] = None) -> List[Dict[str, int]]:
     """
     Searches the best planets in a constellation for a given resource
 
@@ -127,83 +120,76 @@ async def get_best_pi_planets(constellation_name: str,
     :param amount:
     :return:
     """
-    def _get_best_pi_planets(const_name: str, res_name: str, am: Optional[int] = None) -> List[Dict[str, int]]:
-        return db.fetch_resources(const_name, [res_name], am)
-    return await execute_async(_get_best_pi_planets, constellation_name, resource_name, amount)
+    return db.fetch_resources(constellation_name, [resource_name], amount)
 
 
-async def get_best_pi_by_planet(constellation_name: str,
-                                distance: int,
-                                resource_name: str,
-                                amount: Optional[int] = None) -> List[Dict[str, int]]:
-    def _get_pi(*args, **kwargs) -> List[Dict[str, int]]:
-        return db.fetch_ressource_by_planet(*args, **kwargs)
-    return await execute_async(_get_pi, constellation_name, distance, resource_name, amount)
+@wrap_async
+def get_best_pi_by_planet(constellation_name: str,
+                          distance: int,
+                          resource_name: str,
+                          amount: Optional[int] = None) -> List[Dict[str, int]]:
+    return db.fetch_ressource_by_planet(constellation_name, distance, resource_name, amount)
 
 
-async def get_max_pi_planets(region_names: Optional[List[str]] = None):
-    return await execute_async(db.fetch_max_resources, region_names)
+@wrap_async
+def get_max_pi_planets(region_names: Optional[List[str]] = None):
+    return db.fetch_max_resources(region_names)
 
 
-async def get_system(system_name: str):
-    def _get_system(sys_name: str):
-        return db.fetch_system(sys_name)
-    return await execute_async(_get_system, system_name)
+@wrap_async
+def get_system(system_name: str):
+    return db.fetch_system(system_name)
 
 
-async def get_constellation(constellation_name: str):
-    def _get_const(const_name: str):
-        return db.fetch_constellation(const_name)
-    return await execute_async(_get_const, constellation_name)
+def get_constellation(constellation_name: str):
+    return db.fetch_constellation(constellation_name)
 
 
-async def create_image(*args, **kwargs) -> bytes:
-    def _create_image(fig: go.Figure, *_args, **_kwargs) -> bytes:
-        return fig.to_image(*_args, **_kwargs)
-    return await execute_async(_create_image, *args, **kwargs)
+@wrap_async
+def create_image(fig: go.Figure, *args, **kwargs):
+    return fig.to_image(*args, **kwargs)
 
 
-async def save_pi_plan(*args, **kwargs) -> None:
-    def _save_pi_plan(*_args, **_kwargs):
-        return db.save_pi_plan(*_args, **_kwargs)
-    return await execute_async(_save_pi_plan, *args, **kwargs)
+@wrap_async
+def save_pi_plan(*args, **kwargs):
+    return db.save_pi_plan(*args, **kwargs)
 
 
-async def delete_pi_plan(*args, **kwargs) -> None:
-    def _delete_pi_plan(*_args, **_kwargs):
-        return db.delete_pi_plan(*_args, **_kwargs)
-    return await execute_async(_delete_pi_plan, *args, **kwargs)
+@wrap_async
+def delete_pi_plan(*args, **kwargs):
+    return db.delete_pi_plan(*args, **kwargs)
 
 
-async def get_pi_plan(*args, **kwargs) -> Union[PiPlanSettings, List[PiPlanSettings], None]:
-    def _get_pi_plan(*_args, **_kwargs):
-        return db.get_pi_plan(*_args, **_kwargs)
-    return await execute_async(_get_pi_plan, *args, **kwargs)
+@wrap_async
+def get_pi_plan(*args, **kwargs):
+    return db.get_pi_plan(*args, **kwargs)
 
 
-async def init_market_data() -> None:
-    def _save_market_data(_items):
-        db.save_market_data(_items)
+@wrap_async
+def save_market_data(items):
+    db.save_market_data(items)
+
+
+async def init_market_data():
     items = await sheet.get_market_data()
-    await execute_async(_save_market_data, items)
+    await save_market_data(items)
 
 
-async def get_market_data(
+@wrap_async
+def get_market_data(
         item_names: Optional[List[str]] = None,
-        item_type: Optional[str] = None) -> Dict[str, Dict[str, float]]:
-    def _get_market_data(*args, **kwargs):
-        return db.get_market_data(*args, **kwargs)
-    return await execute_async(_get_market_data, item_names, item_type)
+        item_type: Optional[str] = None):
+    return db.get_market_data(item_names, item_type)
 
 
-async def get_available_market_data(item_type: str) -> List[str]:
-    def _get_available_market_data(*args, **kwargs):
-        return db.get_available_market_data(*args, **kwargs)
-    return await execute_async(_get_available_market_data, item_type)
+@wrap_async
+def get_available_market_data(item_type: str):
+    return db.get_available_market_data(item_type)
 
 
-async def get_items_by_type(item_type: str) -> List[Item]:
-    return await execute_async(db.fetch_items, item_type)
+@wrap_async
+def get_items_by_type(item_type: str):
+    return db.fetch_items(item_type)
 
 
 def graph_map_to_figure(graph: nx.Graph, include_highsec=True, node_size=3.5) -> go.Figure:
@@ -214,8 +200,6 @@ def graph_map_to_figure(graph: nx.Graph, include_highsec=True, node_size=3.5) ->
     for n1, n2, data in graph.edges(data=True):
         sec1 = graph.nodes[n1]["security"]
         sec2 = graph.nodes[n2]["security"]
-        s1 = graph.nodes[n1]["sucs"]
-        s2 = graph.nodes[n2]["sucs"]
         if not include_highsec and sec1 > 0 and sec2 > 0:
             continue
         x0, y0 = graph.nodes[n1]["pos"]
@@ -337,6 +321,7 @@ def graph_map_to_figure(graph: nx.Graph, include_highsec=True, node_size=3.5) ->
                 titleside="right"
             ),
             line_width=0))
+    # noinspection PyTypeChecker
     node_trace_low_entry = go.Scatter(
         x=node_x_low_entry, y=node_y_low_entry,
         mode="markers+text",
@@ -361,6 +346,7 @@ def graph_map_to_figure(graph: nx.Graph, include_highsec=True, node_size=3.5) ->
     node_trace_low_entry.marker.color = node_marker_low_entry
     node_trace_low_entry.text = node_text_low_entry
 
+    # noinspection PyTypeChecker
     fig = go.Figure(data=edge_traces + [node_trace_normal] + [node_trace_low_entry],
                     layout=go.Layout(
                         title=f"Lowsec Autopilot Routes</b> <br><sup><i>Shortest route from every nullsec system to "
