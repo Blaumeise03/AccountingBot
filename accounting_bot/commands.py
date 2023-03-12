@@ -3,17 +3,20 @@ import logging
 from typing import TYPE_CHECKING, Optional, Union
 
 import discord
-from discord import Option, User, ApplicationContext, AutocompleteContext, option, Role, SlashCommand, SlashCommandGroup
+from discord import Option, User, ApplicationContext, AutocompleteContext, option, Role, SlashCommand, \
+    SlashCommandGroup
 from discord.ext import commands
 from discord.ext.commands import Context
+from discord.ui import InputText
 
 from accounting_bot import accounting, sheet, utils
 from accounting_bot.accounting import AccountingView
 from accounting_bot.config import Config
 from accounting_bot.database import DatabaseConnector
+from accounting_bot.exceptions import InputException
 from accounting_bot.universe import data_utils
-from accounting_bot.universe.pi_planer import PiPlaner, PiPlanningSession, PiPlanningView
-from accounting_bot.utils import State, get_cmd_name
+from accounting_bot.universe.pi_planer import PiPlanningSession, PiPlanningView
+from accounting_bot.utils import State, get_cmd_name, ErrorHandledModal
 
 if TYPE_CHECKING:
     from bot import BotState
@@ -356,6 +359,93 @@ class BaseCommands(commands.Cog):
             await utils.terminate_bot(connector=self.connector)
         else:
             await ctx.respond("Fehler! Berechtigungen fehlen.", ephemeral=True)
+
+    @commands.slash_command(name="parse_killmails")
+    @option(name="after", description="ID of message to start the search (exclusive)", required=True)
+    async def cmd_parse_killmails(self, ctx: ApplicationContext, after: str):
+        if ctx.user.id not in self.admins and ctx.user.id not in data_utils.killmail_admins:
+            await ctx.respond("Fehler! Berechtigungen fehlen.", ephemeral=True)
+            return
+        if not self.state.is_online():
+            await ctx.respond("Fehler! Bot offline", ephemeral=True)
+            return
+        if not after.isnumeric():
+            raise InputException("Message ID has to be a number")
+        await ctx.response.defer(ephemeral=True, invisible=False)
+        message = await ctx.channel.fetch_message(int(after))
+        # noinspection PyTypeChecker
+        messages = await ctx.channel.history(after=message, oldest_first=True).flatten()
+        num = 0
+        for message in messages:
+            if len(message.embeds) > 0:
+                state = await data_utils.save_killmail(message.embeds[0])
+                if state > 0:
+                    num += 1
+                if state == 1:
+                    await message.add_reaction("⚠️")
+                elif state == 2:
+                    await message.add_reaction("✅")
+        await ctx.followup.send(f"Loaded {num} killmails into the database")
+
+    @commands.message_command(name="Add Tackle")
+    async def ctx_cmd_add_tackle(self, ctx: ApplicationContext, message: discord.Message):
+        if len(message.embeds) == 0:
+            await ctx.response.send_message("Nachricht enthält kein Embed", ephemeral=True)
+            return
+        if ctx.user.id not in self.admins and ctx.user.id not in data_utils.killmail_admins:
+            await ctx.response.send_message("Fehlende Berechtigungen", ephemeral=True)
+            return
+        if not self.state.is_online():
+            await ctx.respond("Fehler! Bot offline", ephemeral=True)
+            return
+        await ctx.response.send_modal(AddBountyModal(message))
+
+    @commands.message_command(name="Show Bounties")
+    async def ctx_cmd_show_bounties(self, ctx: ApplicationContext, message: discord.Message):
+        if len(message.embeds) == 0:
+            await ctx.response.send_message("Nachricht enthält kein Embed", ephemeral=True)
+            return
+        kill_id = data_utils.get_kill_id(message.embeds[0])
+        await ctx.response.defer(ephemeral=True, invisible=False)
+        bounties = await data_utils.get_bounties(kill_id)
+        killmail = await data_utils.get_killmail(kill_id)
+        msg = (f"Killmail `{kill_id}`:\n```\n"
+               f"Spieler: {killmail.final_blow}\n" +
+               (f"Schiff: {killmail.ship.name}\n" if killmail.ship is not None else "Schiff: N/A\n") +
+               (f"System: {killmail.system.name}\n" if killmail.system is not None else "System: N/A\n") +
+               f"Wert: {killmail.kill_value:,} ISK\nBounties:")
+        for bounty in bounties:
+            msg += f"\n{bounty['type']:1} {bounty['player']:10}"
+        msg += "\n```"
+        await ctx.followup.send(msg)
+
+
+class AddBountyModal(ErrorHandledModal):
+    def __init__(self, msg: discord.Message, *args, **kwargs):
+        super().__init__(title="Bounty hinzufügen", *args, **kwargs)
+        self.msg = msg
+        self.add_item(InputText(label="Tackler/Logi", placeholder="Oder \"clear\"", required=True))
+
+    async def callback(self, ctx: ApplicationContext):
+        kill_id = data_utils.get_kill_id(self.msg.embeds[0])
+        if self.children[0].value.strip().casefold() == "clear".casefold():
+            await ctx.response.defer(ephemeral=True, invisible=False)
+            await data_utils.clear_bounties(kill_id)
+            await ctx.followup.send("Bounties gelöscht")
+            return
+        player = utils.get_main_account(self.children[0].value.strip())[0]
+        if player is None:
+            await ctx.response.send_message(
+                f"Spieler `{self.children[0].value.strip()}` nicht gefunden!", ephemeral=True)
+            return
+        await ctx.response.defer(ephemeral=True, invisible=False)
+        await data_utils.add_bounty(kill_id, player, "T")
+        bounties = await data_utils.get_bounties(kill_id)
+        msg = f"Spieler `{player}` wurde als Tackle/Logi für Kill `{kill_id}` eingetragen:\n```"
+        for bounty in bounties:
+            msg += f"\n{bounty['type']:1} {bounty['player']:10}"
+        msg += "\n```"
+        await ctx.followup.send(msg)
 
 
 class UniverseCommands(commands.Cog):

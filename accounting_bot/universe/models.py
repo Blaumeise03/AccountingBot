@@ -1,8 +1,8 @@
 import enum
-from typing import List, Optional, TYPE_CHECKING
+from typing import List, Optional
 
 from sqlalchemy import String, ForeignKey, Float, Enum, BigInteger, Integer, Table, Column, Boolean, \
-    ForeignKeyConstraint, DateTime, func, TIMESTAMP, text
+    ForeignKeyConstraint, func, TIMESTAMP, text
 from sqlalchemy.ext.hybrid import hybrid_property
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
@@ -269,3 +269,22 @@ class PiPlanResource(Base):
                                            [Resource.planet_id, Resource.type_id],
                                            name="fk_pires_res"),
                       {})
+
+
+class Killmail(Base):
+    __tablename__ = "killmails"
+    id: Mapped[int] = mapped_column(Integer(), primary_key=True)
+    final_blow: Mapped[str] = mapped_column(String(40))
+    ship_id: Mapped[int] = mapped_column(ForeignKey("item.id", name="fk_killmail_ship"), nullable=True)
+    ship: Mapped[Item] = relationship(lazy="joined")
+    kill_value: Mapped[int] = mapped_column(BigInteger())
+    system_id: Mapped[int] = mapped_column(ForeignKey("solarsystem.id", name="fk_killmail_system"), nullable=True)
+    system: Mapped[System] = relationship()
+
+
+class Bounty(Base):
+    __tablename__ = "bounties"
+    kill_id: Mapped[int] = mapped_column(ForeignKey("killmails.id", name="fk_bounty_killmail"), primary_key=True)
+    killmail: Mapped[Killmail] = relationship(lazy="joined")
+    player: Mapped[str] = mapped_column(String(30), primary_key=True)
+    bounty_type: Mapped[str] = mapped_column(String(1))

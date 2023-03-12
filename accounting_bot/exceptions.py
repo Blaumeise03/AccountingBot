@@ -67,3 +67,11 @@ class BotOfflineException(Exception):
 
 class PlanetaryProductionException(InputException):
     pass
+
+
+class DatabaseException(Exception):
+    pass
+
+
+class KillmailException(Exception):
+    pass

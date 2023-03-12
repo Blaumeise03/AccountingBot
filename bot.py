@@ -18,7 +18,7 @@ from dotenv import load_dotenv
 
 import accounting_bot.commands
 from accounting_bot import accounting, sheet, projects, utils, corpmissionOCR, exceptions
-from accounting_bot.accounting import AccountingView, get_menu_embeds, Transaction
+from accounting_bot.accounting import AccountingView, get_menu_embeds
 from accounting_bot.commands import BaseCommands, HelpCommand, UniverseCommands
 from accounting_bot.config import Config, ConfigTree
 from accounting_bot.database import DatabaseConnector
@@ -106,6 +106,20 @@ config_structure = {
     "pytesseract_cmd_path": (str, "N/A"),
     "logger": {
         "sheet": (str, "INFO")
+    },
+    "killmail_parser": {
+        "channel": (int, -1),
+        "admins": (list, []),
+        "field_id": (str, ""),
+        "regex_id": (str, ".*"),
+        "field_final_blow": (str, ""),
+        "regex_final_blow": (str, ".*"),
+        "field_ship": (str, ""),
+        "regex_ship": (str, ".*"),
+        "field_kill_value": (str, ""),
+        "regex_kill_value": (str, ".*"),
+        "field_system": (str, ""),
+        "regex_system": (str, ".*"),
     }
 }
 config = Config("config.json", ConfigTree(config_structure))
@@ -113,6 +127,13 @@ config.load_config()
 config.save_config()
 logging.info("Config loaded")
 ACCOUNTING_LOG = config["logChannel"]
+KILLMAIL_CHANNEL = config["killmail_parser.channel"]
+if KILLMAIL_CHANNEL == -1:
+    KILLMAIL_CHANNEL = None
+if KILLMAIL_CHANNEL is None:
+    logger.warning("Killmail channel is not specified, automated killmail parsing will be disabled")
+if config["killmail_parser.field_id"] == "":
+    logger.warning("Killmail format is not specified, automated killmail parsing will be disabled")
 
 CONNECTOR = DatabaseConnector(
     username=config["db.user"],
@@ -128,6 +149,8 @@ data_utils.db = UniverseDatabase(
     host=config["db.host"],
     database=config["db.universe_name"]
 )
+data_utils.killmail_config = config["killmail_parser"]
+data_utils.killmail_admins = config["killmail_parser.admins"]
 utils.resource_order = config["project_resources"]
 
 try:
@@ -370,7 +393,7 @@ async def on_ready():
 @bot.event
 async def on_message(message: Message):
     await bot.process_commands(message)
-    if isinstance(message.channel, DMChannel) or message.channel.id == ACCOUNTING_LOG:
+    if isinstance(message.channel, DMChannel):
         if message.author.id == bot.user.id:
             return
         for att in message.attachments:
@@ -391,6 +414,10 @@ async def on_message(message: Message):
                 args=(url, att.content_type, message, channel, message.author.id))
             thread.start()
             await message.reply("Verarbeite Bild, bitte warten. Dies dauert einige Sekunden.")
+    if message.channel.id == KILLMAIL_CHANNEL:
+        if len(message.embeds) > 0:
+            logger.info("Received message %s with embed, parsing killmail", message.id)
+            await data_utils.save_killmail(message.embeds[0])
 
 
 @bot.event

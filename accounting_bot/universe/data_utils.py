@@ -1,15 +1,16 @@
-import asyncio
 import collections
-import functools
 import logging
-from concurrent.futures import ThreadPoolExecutor
-from typing import List, Dict, Tuple, Optional, Callable, TypeVar
+import re
+from typing import List, Tuple, Optional
 
 import networkx as nx
 import numpy as np
 import plotly.graph_objects as go
+from discord import Embed
 
-from accounting_bot import sheet
+from accounting_bot import sheet, utils
+from accounting_bot.config import ConfigTree
+from accounting_bot.exceptions import InputException
 from accounting_bot.universe.models import System
 from accounting_bot.universe.universe_database import UniverseDatabase
 from accounting_bot.utils import wrap_async, resource_order
@@ -17,6 +18,8 @@ from accounting_bot.utils import wrap_async, resource_order
 logger = logging.getLogger("data.utils")
 
 db = None  # type: UniverseDatabase | None
+killmail_config = None  # type: ConfigTree | None
+killmail_admins = []  # type: List[int]
 
 
 def create_pi_boxplot(constellation_name: str,
@@ -104,7 +107,7 @@ def get_all_pi_planets(constellation_name: str,
 @wrap_async
 def get_best_pi_planets(constellation_name: str,
                         resource_name: str,
-                        amount: Optional[int] = None) -> List[Dict[str, int]]:
+                        amount: Optional[int] = None):
     """
     Searches the best planets in a constellation for a given resource
 
@@ -127,7 +130,7 @@ def get_best_pi_planets(constellation_name: str,
 def get_best_pi_by_planet(constellation_name: str,
                           distance: int,
                           resource_name: str,
-                          amount: Optional[int] = None) -> List[Dict[str, int]]:
+                          amount: Optional[int] = None):
     return db.fetch_ressource_by_planet(constellation_name, distance, resource_name, amount)
 
 
@@ -458,3 +461,76 @@ def lowsec_pipe_analysis(graph: nx.Graph, lowsec_entries: List[str]):
         current_nodes = next_nodes
         next_nodes = []
     pass
+
+
+@wrap_async
+def get_item(item_name: str):
+    return db.fetch_item(item_name)
+
+
+def extract_value(embed: Embed, field_name: str, field_regex: str):
+    value = None
+    if field_name.casefold() == "title".casefold():
+        value = embed.title
+    else:
+        for field in embed.fields:
+            if field.name == field_name:
+                value = field.value
+                break
+    if value is None or value == Embed.Empty:
+        return None
+    m = re.fullmatch(field_regex, value)
+    if not m:
+        return None
+    if len(m.groups()) == 0:
+        return m.string
+    return m.group(1)
+
+
+@wrap_async
+def save_killmail(embed: Embed):
+    if killmail_config["field_id"] == "":
+        return 0
+    kill_data = {}
+    for key in ["id", "final_blow", "ship", "kill_value", "system"]:
+        kill_data[key] = extract_value(embed, killmail_config[f"field_{key}"], killmail_config[f"regex_{key}"])
+    if None in kill_data.values():
+        logger.warning("Embed with title '%s' doesn't contains a valid killmail: %s", embed.title, kill_data)
+        return 0
+    db.save_killmail(kill_data)
+    m = re.fullmatch(r"\[[a-zA-Z0-9]+] (.*)", kill_data["final_blow"])
+    if len(m.groups()) == 0:
+        return 1
+    player, char, _ = utils.get_main_account(name=m.group(1))
+    if player is None:
+        return 1
+    db.save_bounty(int(kill_data["id"]), player, "M")
+    return 2
+
+
+def get_kill_id(embed: Embed):
+    kill_id = extract_value(embed, killmail_config["field_id"], killmail_config["regex_id"])
+    if kill_id is None or not kill_id.isnumeric():
+        raise InputException(f"Embed doesn't contain a valid kill id: '{kill_id}'")
+    return int(kill_id)
+
+
+@wrap_async
+def add_bounty(kill_id: int, player: str, bounty_type: str):
+    utils.get_main_account(name=player)
+    db.save_bounty(kill_id, player, bounty_type)
+
+
+@wrap_async
+def get_killmail(kill_id: int):
+    return db.get_killmail(kill_id)
+
+
+@wrap_async
+def get_bounties(kill_id: int):
+    return db.get_bounty_by_killmail(kill_id)
+
+
+@wrap_async
+def clear_bounties(kill_id: int):
+    return db.clear_bounties(kill_id)

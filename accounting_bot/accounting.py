@@ -24,11 +24,10 @@ from accounting_bot.config import Config
 from accounting_bot.database import DatabaseConnector
 from accounting_bot.exceptions import BotOfflineException, AccountingException
 from accounting_bot.universe import pi_planer
-from accounting_bot.utils import AutoDisableView, State, ErrorHandledModal, TransactionLike
+from accounting_bot.utils import AutoDisableView, State, ErrorHandledModal, TransactionLike, parse_number
 
 if TYPE_CHECKING:
     from bot import BotState
-    from accounting_bot.corpmissionOCR import CorporationMission, MemberDonation
 
 INVESTMENT_RATIO = 0.3  # percentage of investment that may be used for transactions
 
@@ -120,35 +119,6 @@ def get_current_time() -> str:
     """
     now = datetime.now()
     return now.strftime("%d.%m.%Y %H:%M")
-
-
-def parse_number(string: str) -> (int, str):
-    """
-    Converts a string into an integer. It ignores all letters, spaces and commas. A dot will be interpreted as a
-    decimal seperator. Everything after the first dot will be discarded.
-
-    :param string: the string to convert
-    :return: the number or None if it had an invalid format
-    """
-    warnings = ""
-    dots = string.count(".")
-    comma = string.count(",")
-    if dots > 1 >= comma:
-        string = string.replace(",", ";")
-        string = string.replace(".", ",")
-        string = string.replace(";", ".")
-        warnings += "Warnung: Es wurden Punkte und/oder Kommas erkannt, die Zahl wird automatisch nach " \
-                    "dem Format \"1.000.000,00 ISK\" geparsed. " \
-                    "Bitte zur Vermeidung von Fehlern das Englische Zahlenformat verwenden!\n"
-    elif ("," in string) or ("." in string):
-        warnings += "Hinweis: Es wurden Punkte und/oder Kommas erkannt, die Zahl wird automatisch nach " \
-                    "dem Format \"1,000,000.00 ISK\" geparsed.\n"
-
-    if bool(re.match(r"[0-9]+(,[0-9]+)*(\.[0-9]+)?[a-zA-Z]*", string)):
-        number = re.sub(r"[,a-zA-Z ]", "", string).split(".", 1)[0]
-        return int(number), warnings
-    else:
-        return None, ""
 
 
 def parse_player(string: str) -> (Union[str, None], bool):

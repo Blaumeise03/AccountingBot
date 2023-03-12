@@ -63,6 +63,35 @@ def wrap_async(func: Callable[..., _T]):
     return run
 
 
+def parse_number(string: str) -> (int, str):
+    """
+    Converts a string into an integer. It ignores all letters, spaces and commas. A dot will be interpreted as a
+    decimal seperator. Everything after the first dot will be discarded.
+
+    :param string: the string to convert
+    :return: the number or None if it had an invalid format
+    """
+    warnings = ""
+    dots = string.count(".")
+    comma = string.count(",")
+    if dots > 1 >= comma:
+        string = string.replace(",", ";")
+        string = string.replace(".", ",")
+        string = string.replace(";", ".")
+        warnings += "Warnung: Es wurden Punkte und/oder Kommas erkannt, die Zahl wird automatisch nach " \
+                    "dem Format \"1.000.000,00 ISK\" geparsed. " \
+                    "Bitte zur Vermeidung von Fehlern das Englische Zahlenformat verwenden!\n"
+    elif ("," in string) or ("." in string):
+        warnings += "Hinweis: Es wurden Punkte und/oder Kommas erkannt, die Zahl wird automatisch nach " \
+                    "dem Format \"1,000,000.00 ISK\" geparsed.\n"
+
+    if bool(re.match(r"[0-9]+(,[0-9]+)*(\.[0-9]+)?[a-zA-Z]*", string)):
+        number = re.sub(r"[,a-zA-Z ]", "", string).split(".", 1)[0]
+        return int(number), warnings
+    else:
+        return None, ""
+
+
 def get_cmd_name(cmd: Union[Command, discord.ApplicationCommand, None]) -> Optional[str]:
     if cmd is None:
         return None
@@ -213,7 +242,7 @@ def str_to_list(text: str, sep=";") -> List[str]:
     return text_list
 
 
-def get_main_account(name: str = None, discord_id: int = None) -> (Union[str, None], Union[str, None], bool):
+def get_main_account(name: str = None, discord_id: int = None) -> Tuple[Union[str, None], Union[str, None], bool]:
     """
     Finds the closest playername match for a given string. And returns the main account of this player, together with
     the parsed input name and the information, whether it was a perfect match.

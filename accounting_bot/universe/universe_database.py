@@ -3,15 +3,14 @@ import logging
 import math
 import sys
 from multiprocessing.pool import ThreadPool
-from typing import Optional, Dict, Tuple, List, TYPE_CHECKING, Union, Any
+from typing import Dict, Tuple, Union, Any, TYPE_CHECKING
 
-from sqlalchemy import create_engine, update, between, func, select, delete, or_, insert
+from sqlalchemy import create_engine, update, between, select, delete
 from sqlalchemy.orm import Session, joinedload
 
-from accounting_bot import sheet
+from accounting_bot import utils
 from accounting_bot.config import Config, ConfigTree
-from accounting_bot.database import DatabaseConnector
-from accounting_bot.exceptions import PlanetaryProductionException
+from accounting_bot.exceptions import PlanetaryProductionException, KillmailException, DatabaseException
 from accounting_bot.universe import models
 from accounting_bot.universe.models import *
 
@@ -68,6 +67,8 @@ class UniverseDatabase:
         PiPlanSettings.__table__.create(bind=self.engine, checkfirst=True)
         PiPlanResource.__table__.create(bind=self.engine, checkfirst=True)
         MarketPrice.__table__.create(bind=self.engine, checkfirst=True)
+        Killmail.__table__.create(bind=self.engine, checkfirst=True)
+        Bounty.__table__.create(bind=self.engine, checkfirst=True)
         logger.info("Setup completed")
 
     def save_market_data(self, items: Dict[str, Dict[str, Any]]) -> None:
@@ -311,6 +312,14 @@ class UniverseDatabase:
                 ).all()
             )
 
+    def fetch_item(self, item_name: str) -> Optional[Item]:
+        with Session(self.engine, expire_on_commit=False) as conn:
+            return (
+                conn.query(Item)
+                .filter(Item.name == item_name)
+                .first()
+            )
+
     def fetch_items(self, item_type: str) -> List[Item]:
         with Session(self.engine, expire_on_commit=False) as conn:
             # noinspection PyTypeChecker
@@ -320,7 +329,9 @@ class UniverseDatabase:
                 .all()
             )
 
-    def get_pi_plan(self, user_id: int, plan_num: Optional[int] = None) -> Union[PiPlanSettings, List[PiPlanSettings], None]:
+    def get_pi_plan(self,
+                    user_id: int,
+                    plan_num: Optional[int] = None) -> Union[PiPlanSettings, List[PiPlanSettings], None]:
         with Session(self.engine) as conn:
             if plan_num is not None:
                 return (conn.query(PiPlanSettings)
@@ -332,9 +343,12 @@ class UniverseDatabase:
             else:
                 # noinspection PyTypeChecker
                 return (conn.query(PiPlanSettings)
-                        .options(joinedload(PiPlanSettings.resources).subqueryload(PiPlanResource.resource).subqueryload(Resource.type),
-                                 joinedload(PiPlanSettings.resources).subqueryload(PiPlanResource.resource).subqueryload(Resource.planet),
-                                 joinedload(PiPlanSettings.constellation))
+                        .options(
+                    joinedload(PiPlanSettings.resources).subqueryload(PiPlanResource.resource).subqueryload(
+                        Resource.type),
+                    joinedload(PiPlanSettings.resources).subqueryload(PiPlanResource.resource).subqueryload(
+                        Resource.planet),
+                    joinedload(PiPlanSettings.constellation))
                         .filter(PiPlanSettings.user_id == user_id)
                         .all())
 
@@ -342,7 +356,8 @@ class UniverseDatabase:
         with Session(self.engine) as conn:
             result = (
                 conn.query(PiPlanSettings)
-                .options(joinedload(PiPlanSettings.resources).subqueryload(PiPlanResource.resource).subqueryload(Resource.type))
+                .options(joinedload(PiPlanSettings.resources).subqueryload(PiPlanResource.resource).subqueryload(
+                    Resource.type))
                 .filter(PiPlanSettings.user_id == pi_plan.user_id, PiPlanSettings.plan_num == pi_plan.plan_num)
                 .first()
             )  # type: PiPlanSettings | None
@@ -409,9 +424,91 @@ class UniverseDatabase:
                 .first()
             )
             if p is None:
-                raise PlanetaryProductionException(f"Didn't found plan {pi_plan.user_id}:{pi_plan.plan_num} in database")
+                raise PlanetaryProductionException(
+                    f"Didn't found plan {pi_plan.user_id}:{pi_plan.plan_num} in database")
             conn.delete(p)
             conn.commit()
+
+    def get_killmail(self, kill_id: int) -> Optional[Killmail]:
+        with Session(self.engine, expire_on_commit=False) as conn:
+            return (
+                conn.query(Killmail)
+                .options(joinedload(Killmail.system))
+                .filter(Killmail.id == kill_id)
+                .first()
+            )
+
+    def save_killmail(self, kill_data: Dict[str, str]):
+        with Session(self.engine) as conn:
+            k_id = int(kill_data["id"])
+            k_player = kill_data["final_blow"]
+            k_ship = conn.query(Item).filter(Item.name == kill_data["ship"]).first()
+            k_value = utils.parse_number(kill_data["kill_value"])[0]
+            k_system = conn.query(System).filter(System.name == kill_data["system"]).first()
+            killmail = conn.query(Killmail).options(joinedload(Killmail.system)).filter(Killmail.id == k_id).first()
+
+            if None in [k_id, k_player, k_value]:
+                raise KillmailException(f"Invalid killmail data: {kill_data}")
+            if killmail is None:
+                killmail = Killmail(
+                    id=k_id,
+                    final_blow=k_player,
+                    ship_id=k_ship.id if k_ship is not None else None,
+                    kill_value=k_value,
+                    system_id=k_system.id if k_system is not None else None
+                )
+                conn.add(killmail)
+            else:
+                killmail.final_blow = k_player
+                killmail.ship_id = k_ship.id
+                killmail.ship = k_ship
+                killmail.kill_value = k_value
+                killmail.system_id = k_system.id
+                killmail.system = k_system
+            conn.commit()
+
+    def save_bounty(self, kill_id: int, player: str, bounty_type: str):
+        with Session(self.engine) as conn:
+            killmail = conn.query(Killmail).filter(Killmail.id == kill_id).first()
+            if killmail is None:
+                raise DatabaseException(f"Killmail {kill_id} not found")
+            bounty = conn.query(Bounty).filter(Bounty.kill_id == kill_id, Bounty.player == player).first()
+            if bounty is None:
+                bounty = Bounty(kill_id=kill_id, player=player, bounty_type=bounty_type)
+                conn.add(bounty)
+            else:
+                bounty.bounty_type = bounty_type
+            conn.commit()
+
+    @staticmethod
+    def _convert_bounties(bounties: List[Bounty]):
+        res = []
+        for bounty in bounties:  # type: Bounty
+            res.append({
+                "kill_id": bounty.kill_id,
+                "player": bounty.player,
+                "type": bounty.bounty_type
+            })
+        return res
+
+    def get_bounty_by_killmail(self, kill_id: int):
+        with Session(self.engine) as conn:
+            res = conn.query(Bounty).filter(Bounty.kill_id == kill_id).all()
+            # noinspection PyTypeChecker
+            return UniverseDatabase._convert_bounties(res)
+
+    def get_bounty_by_player(self, player: str):
+        with Session(self.engine) as conn:
+            res = conn.query(Bounty).filter(Bounty.player == player).all()
+            # noinspection PyTypeChecker
+            return UniverseDatabase._convert_bounties(res)
+
+    def clear_bounties(self, kill_id: int):
+        with self.engine.begin() as conn:
+            stmt = (
+                delete(Bounty).where(Bounty.kill_id == kill_id, Bounty.bounty_type != "M")
+            )
+            conn.execute(stmt)
 
 
 class DatabaseInitializer(UniverseDatabase):
@@ -525,7 +622,8 @@ class DatabaseInitializer(UniverseDatabase):
                     if line_i == 1:
                         continue
                     if line_i % 500 == 0:
-                        logger.info("Processing line %s/%s (%s)", line_i, file_length, "{:.2%}".format(line_i / file_length))
+                        logger.info("Processing line %s/%s (%s)", line_i, file_length,
+                                    "{:.2%}".format(line_i / file_length))
                         conn.commit()
                     line = line.replace("\n", "").split(",")
                     gate_a_id = int(line[0])
@@ -581,7 +679,8 @@ class DatabaseInitializer(UniverseDatabase):
                     if line_i == 1:
                         continue
                     if line_i % 3000 == 0:
-                        logger.info("Processing line %s/%s (%s)", line_i, file_length, "{:.2%}".format(line_i / file_length))
+                        logger.info("Processing line %s/%s (%s)", line_i, file_length,
+                                    "{:.2%}".format(line_i / file_length))
                         conn.commit()
                     line = line.replace("\n", "").split(separator)
                     # Planet ID;Region;Constellation;System;Planet Name;Planet Type;Resource;Richness;Output
@@ -602,16 +701,19 @@ class DatabaseInitializer(UniverseDatabase):
                     if system.name != s_name:
                         logger.error("Planet %s system %s does not match with db %s", p_id, s_name, system.name)
                     if constellation.name != c_name:
-                        logger.warning("System %s constellation %s does not match with db %s", s_name, c_name, constellation.name)
+                        logger.warning("System %s constellation %s does not match with db %s", s_name, c_name,
+                                       constellation.name)
                         constellation = conn.query(Constellation).filter(Constellation.name == c_name).first()
                         system.constellation_id = constellation.id
                         system.region_id = constellation.region.id
                         conn.commit()
                         logger.info("Fixed constellation")
                     if constellation.region.name != r_name:
-                        logger.error("System '%s' region '%s' does not match with db '%s'", s_name, r_name, constellation.region.name)
+                        logger.error("System '%s' region '%s' does not match with db '%s'", s_name, r_name,
+                                     constellation.region.name)
                     if system.region_id != constellation.region_id:
-                        logger.error("System %s has wrong region id %s, expected %s", system.name, system.region_id, constellation.region_id)
+                        logger.error("System %s has wrong region id %s, expected %s", system.name, system.region_id,
+                                     constellation.region_id)
 
 
 if __name__ == '__main__':

@@ -31,6 +31,8 @@ class ConfigTree:
         if type(item) == str:
             keys = item.split(".")
         elif type(item) == list:
+            if len(item) == 0:
+                return self
             keys = item
         else:
             return None
