@@ -1,5 +1,6 @@
 import io
 import logging
+from functools import reduce
 from typing import TYPE_CHECKING, Optional, Union
 
 import discord
@@ -386,6 +387,31 @@ class BaseCommands(commands.Cog):
                 elif state == 2:
                     await message.add_reaction("✅")
         await ctx.followup.send(f"Loaded {num} killmails into the database")
+
+    @commands.slash_command(name="save_killmails")
+    @option(name="first", description="ID of first killmail", required=True)
+    @option(name="last", description="ID of first killmail", required=True)
+    async def cmd_save_killmails(self, ctx: ApplicationContext, first: int, last: int):
+        if ctx.user.id not in self.admins and ctx.user.id not in data_utils.killmail_admins:
+            await ctx.respond("Fehler! Berechtigungen fehlen.", ephemeral=True)
+            return
+        if not self.state.is_online():
+            await ctx.respond("Fehler! Bot offline", ephemeral=True)
+            return
+        await ctx.response.defer(ephemeral=True, invisible=False)
+        warnings = await data_utils.verify_bounties(first, last)
+        bounties = await data_utils.get_all_bounties(first, last)
+        await sheet.update_killmails(bounties, warnings)
+        length = sum(map(len, warnings))
+        if length > 900:
+            file = utils.string_to_file(utils.list_to_string(warnings), "warnings.txt")
+            await ctx.followup.send(
+                f"Bounty Sheet aktualisiert. Es gab {len(warnings)} Warnungen, siehe Anhang.", file=file)
+            return
+        if length == 0:
+            await ctx.followup.send("Bounty Sheet aktualisiert.")
+            return
+        await ctx.followup.send("Bounty Sheet aktualisiert. Warnungen:\n" + utils.list_to_string(warnings))
 
     @commands.message_command(name="Add Tackle")
     async def ctx_cmd_add_tackle(self, ctx: ApplicationContext, message: discord.Message):

@@ -487,19 +487,47 @@ class UniverseDatabase:
             res.append({
                 "kill_id": bounty.kill_id,
                 "player": bounty.player,
-                "type": bounty.bounty_type
+                "type": bounty.bounty_type,
+                "value": bounty.killmail.kill_value,
+                "system": bounty.killmail.system.name if bounty.killmail.system is not None else None,
+                "region": bounty.killmail.system.constellation.region.name if bounty.killmail.system is not None
+                else None
             })
         return res
 
+    # noinspection DuplicatedCode
     def get_bounty_by_killmail(self, kill_id: int):
         with Session(self.engine) as conn:
-            res = conn.query(Bounty).filter(Bounty.kill_id == kill_id).all()
+            res = (conn.query(Bounty)
+                   .options(joinedload(Bounty.killmail)
+                            .subqueryload(Killmail.system)
+                            .subqueryload(System.constellation)
+                            .subqueryload(Constellation.region))
+                   .filter(Bounty.kill_id == kill_id).all())
             # noinspection PyTypeChecker
             return UniverseDatabase._convert_bounties(res)
 
+    # noinspection DuplicatedCode
     def get_bounty_by_player(self, player: str):
         with Session(self.engine) as conn:
-            res = conn.query(Bounty).filter(Bounty.player == player).all()
+            res = (conn.query(Bounty)
+                   .options(joinedload(Bounty.killmail)
+                            .subqueryload(Killmail.system)
+                            .subqueryload(System.constellation)
+                            .subqueryload(Constellation.region))
+                   .filter(Bounty.player == player).all())
+            # noinspection PyTypeChecker
+            return UniverseDatabase._convert_bounties(res)
+
+    # noinspection DuplicatedCode
+    def get_all_bounties(self, start: int, end: int):
+        with Session(self.engine) as conn:
+            res = (conn.query(Bounty)
+                   .options(joinedload(Bounty.killmail)
+                            .subqueryload(Killmail.system)
+                            .subqueryload(System.constellation)
+                            .subqueryload(Constellation.region))
+                   .filter(Bounty.kill_id >= start, Bounty.kill_id <= end).all())
             # noinspection PyTypeChecker
             return UniverseDatabase._convert_bounties(res)
 
@@ -509,6 +537,41 @@ class UniverseDatabase:
                 delete(Bounty).where(Bounty.kill_id == kill_id, Bounty.bounty_type != "M")
             )
             conn.execute(stmt)
+
+    def verify_bounties(self, kill_id_start: int, kill_id_end: int):
+        warnings = []
+        with Session(self.engine) as conn:
+            killmails = conn.query(Killmail).filter(Killmail.id >= kill_id_start, Killmail.id <= kill_id_end).all()
+            bounties = conn.query(Bounty).filter(Bounty.kill_id >= kill_id_start, Bounty.kill_id <= kill_id_end).all()
+            for killmail in killmails:
+                found_main = False
+                found = False
+                for bounty in bounties:
+                    if bounty.kill_id == killmail.id:
+                        if bounty.bounty_type == "M":
+                            found_main = True
+                        found = True
+                    if found_main:
+                        break
+                if not found_main:
+                    player, char, _ = utils.get_main_account(name=killmail.final_blow)
+                    if player is not None:
+                        bounty = Bounty(
+                            kill_id=killmail.id,
+                            player=player
+                        )
+                        conn.add(bounty)
+                        found_main = True
+                        found = True
+                        warnings.append(f"Killmail {killmail.id} has no main bounty, added bounty for {player}")
+                    else:
+                        warnings.append(
+                            f"Killmail {killmail.id} has no main bounty, player {killmail.final_blow} not found")
+                if not found:
+                    warnings.append(
+                        f"Killmail {killmail.id} has no bounty at all, player {killmail.final_blow} not found")
+            conn.commit()
+        return warnings
 
 
 class DatabaseInitializer(UniverseDatabase):

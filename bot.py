@@ -110,6 +110,7 @@ config_structure = {
     "killmail_parser": {
         "channel": (int, -1),
         "admins": (list, []),
+        "home_regions": (list, []),
         "field_id": (str, ""),
         "regex_id": (str, ".*"),
         "field_final_blow": (str, ""),
@@ -322,7 +323,7 @@ async def on_ready():
     await bot.change_presence(status=discord.Status.idle, activity=activity)
 
     logging.info("Starting Google sheets API...")
-    await sheet.setup_sheet(config["google_sheet"], config["project_resources"], config["logger.sheet"])
+    await sheet.setup_sheet(config, config["google_sheet"], config["project_resources"], config["logger.sheet"])
     await sheet.load_wallets(force=True, validate=True)
     logging.info("Google sheets API loaded.")
     if not market_loop.is_running():
@@ -417,7 +418,11 @@ async def on_message(message: Message):
     if message.channel.id == KILLMAIL_CHANNEL:
         if len(message.embeds) > 0:
             logger.info("Received message %s with embed, parsing killmail", message.id)
-            await data_utils.save_killmail(message.embeds[0])
+            state = await data_utils.save_killmail(message.embeds[0])
+            if state == 1:
+                await message.add_reaction("⚠️")
+            elif state == 2:
+                await message.add_reaction("✅")
 
 
 @bot.event

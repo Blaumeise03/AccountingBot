@@ -532,5 +532,15 @@ def get_bounties(kill_id: int):
 
 
 @wrap_async
+def get_all_bounties(start: int, end: int):
+    return db.get_all_bounties(start, end)
+
+
+@wrap_async
 def clear_bounties(kill_id: int):
     return db.clear_bounties(kill_id)
+
+
+@wrap_async
+def verify_bounties(first: int, last: int):
+    return db.verify_bounties(first, last)

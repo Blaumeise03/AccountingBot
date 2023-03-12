@@ -6,7 +6,7 @@ import re
 import time
 from operator import add
 from os.path import exists
-from typing import Union, Tuple, Dict, List, Optional, TYPE_CHECKING
+from typing import Union, Tuple, Dict, List, Optional, TYPE_CHECKING, Any
 
 import gspread_asyncio
 import pytz
@@ -15,6 +15,7 @@ from gspread import GSpreadException, Cell
 from gspread.utils import ValueRenderOption, ValueInputOption
 
 from accounting_bot import projects, utils
+from accounting_bot.config import Config
 from accounting_bot.exceptions import GoogleSheetException, BotOfflineException
 from accounting_bot.project_utils import find_player_row, calculate_changes, verify_batch_data, process_first_column
 from accounting_bot.projects import Project
@@ -39,6 +40,7 @@ SHEET_ACCOUNTING_NAME = "Accounting"
 SHEET_OVERFLOW_NAME = "Projektüberlauf"
 SHEET_MARKET_NAME = "Ressourcenbedarf Projekte"
 SHEET_OVERVIEW_NAME = "Ressourcenbedarf Projekte"
+SHEET_BOUNTIES_NAME = "Bounty Log"
 sheet_name = "N/A"
 
 # Projekt worksheet names
@@ -67,6 +69,13 @@ MARKET_AREA = "A:J"  # The total area
 OVERVIEW_AREA = "A:B"
 OVERVIEW_ITEM_INDEX = 0
 OVERVIEW_QUANTITY_INDEX = 1
+
+BOUNTY_FIRST_ROW = 5
+BOUNTY_COL_RANGE = "A:E"
+BOUNTY_TACKLE = 0.025
+BOUNTY_NORMAL = 0.05
+BOUNTY_HOME = 0.1
+BOUNTY_HOME_REGIONS = []
 
 # All resources that exist, will be used to verify the integrity of the received data
 PROJECT_RESOURCES = []
@@ -100,18 +109,20 @@ def get_creds() -> Credentials:
 agcm = gspread_asyncio.AsyncioGspreadClientManager(get_creds)
 
 
-async def setup_sheet(sheet_id: str, project_resources: [str], log_level) -> None:
+async def setup_sheet(config: Config, sheet_id: str, project_resources: [str], log_level) -> None:
     """
     Set-ups the Google Sheet API.
 
+    :param config: the config
     :param sheet_id: the id of the Google Sheet
     :param project_resources: the array of the names of the available project resources
     :param log_level: the loglevel for the logger
     """
-    global SPREADSHEET_ID, PROJECT_RESOURCES, users, sheet_name
+    global SPREADSHEET_ID, PROJECT_RESOURCES, users, sheet_name, BOUNTY_HOME_REGIONS
     logger.setLevel(log_level)
     SPREADSHEET_ID = sheet_id
     PROJECT_RESOURCES = project_resources
+    BOUNTY_HOME_REGIONS = config["killmail_parser.home_regions"]
     # Connect to API
     logger.info("Loading google sheet...")
     agc = await agcm.authorize()
@@ -167,6 +178,19 @@ def check_name_overwrites(name: str) -> str:
     if overwrite is not None:
         name = overwrite
     return name
+
+
+def map_cells(cells: List[Cell]) -> List[List[Cell]]:
+    res = {}
+    for cell in cells:
+        if cell.row in res:
+            res[cell.row].append(cell)
+        else:
+            res[cell.row] = [cell]
+    for r_i, val in res.items():
+        val.sort(key=lambda c: c.col)
+    res = list(map(lambda t: t[1], sorted(res.items(), key=lambda t: t[0])))
+    return res
 
 
 async def add_transaction(transaction: 'Transaction') -> None:
@@ -693,3 +717,91 @@ async def apply_overflow_split(investments: Dict[str, Dict[str, List[int]]], cha
     log.append("Batch update applied, overflow split completed.")
     logger.info("Batch update applied, overflow split completed")
     return log
+
+
+async def update_killmails(bounties: List[Dict[str, Any]], warnings: List[str] = None):
+    """
+        {"kill_id", "player", "type", "system", "region"}
+    """
+    if warnings is None:
+        warnings = []
+    logger.info("Updating %s bounties", len(bounties))
+    agc = await agcm.authorize()
+    sheet = await agc.open_by_key(SPREADSHEET_ID)
+    wk_bounty = await sheet.worksheet(SHEET_BOUNTIES_NAME)
+    bounty_area = BOUNTY_COL_RANGE.replace(":", f"{BOUNTY_FIRST_ROW}:")
+    data = await wk_bounty.range(bounty_area)
+    data = map_cells(data)
+    batch_changes = []
+    new_bounties = bounties.copy()
+    last_row = -1
+    for row in data:
+        if len(row) < 5:
+            continue
+        kill_id = row[0].value
+        if kill_id == "":
+            kill_id = None
+        elif kill_id.isnumeric():
+            kill_id = int(kill_id)
+        else:
+            logger.warning("Bounty sheet cell %s doesn't contains a number: %s", row[0].address, kill_id)
+            warnings.append(f"Bounty sheet cell {row[0].address} doesn't contains a number: {kill_id}")
+            kill_id = None
+        player = row[1].value
+        if player == "":
+            continue
+        if row[0].row > last_row:
+            last_row = row[0].row
+        if kill_id is None:
+            logger.warning("Bounty sheet cell %s is empty but player cell isn't", row[0].address)
+            warnings.append(f"Bounty sheet cell {row[0].address} is empty but player cell isn't")
+            continue
+        value = utils.parse_number(row[2].value)[0]
+        tackle = row[3].value.casefold() == "TRUE".casefold()
+        home = row[4].value.casefold() == "TRUE".casefold()
+        bounty = None
+        for bounty in bounties:
+            if bounty["kill_id"] == kill_id and bounty["player"] == player:
+                break
+        if bounty is None:
+            continue
+        new_bounties.remove(bounty)
+        if value != bounty["value"]:
+            batch_changes.append({
+                "range": row[2].address,
+                "values": [[str(bounty["value"])]]
+            })
+            logger.info("Bounty data 'value' has changed for %s:%s", kill_id, player)
+            warnings.append(f"Bounty data 'value' has changed for {kill_id}:{player}")
+        if tackle != (bounty["type"] == "T"):
+            batch_changes.append({
+                "range": row[2].address,
+                "values": [[str(bounty["type"] == "T")]]
+            })
+            logger.info("Bounty data 'type' has changed for %s:%s", kill_id, player)
+            warnings.append(f"Bounty data 'value' has changed for {kill_id}:{player}")
+        if home != (bounty["region"] in BOUNTY_HOME_REGIONS):
+            batch_changes.append({
+                "range": row[2].address,
+                "values": [[str(bounty["region"] in BOUNTY_HOME_REGIONS)]]
+            })
+            logger.info("Bounty data 'home' has changed for %s:%s", kill_id, player)
+            warnings.append(f"Bounty data 'value' has changed for {kill_id}:{player}")
+    logger.info("Detected %s new bounties, inserting them after row %s", len(new_bounties), last_row)
+    for bounty in new_bounties:
+        last_row += 1
+        address = BOUNTY_COL_RANGE.replace(":", f"{last_row}:") + str(last_row)
+        batch_changes.append({
+            "range": address,
+            "values": [[
+                bounty["kill_id"],
+                str(bounty["player"]),
+                bounty["value"],
+                bounty["type"] == "T",
+                bounty["region"] in BOUNTY_HOME_REGIONS
+            ]]
+        })
+    logger.info("Performing batch update for killmails")
+    await wk_bounty.batch_update(batch_changes)
+    logger.info("Bounties updated")
+
