@@ -719,7 +719,7 @@ async def apply_overflow_split(investments: Dict[str, Dict[str, List[int]]], cha
     return log
 
 
-async def update_killmails(bounties: List[Dict[str, Any]], warnings: List[str] = None):
+async def update_killmails(bounties: List[Dict[str, Any]], warnings: List[str] = None, auto_fix=False):
     """
         {"kill_id", "player", "type", "system", "region"}
     """
@@ -752,7 +752,7 @@ async def update_killmails(bounties: List[Dict[str, Any]], warnings: List[str] =
             continue
         if row[0].row > last_row:
             last_row = row[0].row
-        if kill_id is None:
+        if kill_id is None and not auto_fix:
             logger.warning("Bounty sheet cell %s is empty but player cell isn't", row[0].address)
             warnings.append(f"Bounty sheet cell {row[0].address} is empty but player cell isn't")
             continue
@@ -760,33 +760,50 @@ async def update_killmails(bounties: List[Dict[str, Any]], warnings: List[str] =
         tackle = row[3].value.casefold() == "TRUE".casefold()
         home = row[4].value.casefold() == "TRUE".casefold()
         bounty = None
-        for bounty in bounties:
-            if bounty["kill_id"] == kill_id and bounty["player"] == player:
+        for b in bounties:
+            if (not auto_fix or kill_id is not None) and b["kill_id"] == kill_id and b["player"] == player:
+                bounty = b
+                break
+            if auto_fix and b["value"] == value and b["player"] == player:
+                logger.warning("Bounty sheet cell %s is empty but player cell isn't. Autofix: %s",
+                               row[0].address,
+                               b["kill_id"])
+                warnings.append(
+                    f"Bounty sheet cell {row[0].address} is empty but player cell isn't. Autofix: {b['kill_id']}")
+                bounty = b
                 break
         if bounty is None:
             continue
-        new_bounties.remove(bounty)
-        if value != bounty["value"]:
+        if bounty in new_bounties:
+            new_bounties.remove(bounty)
+        if kill_id is not None and value != bounty["value"]:
             batch_changes.append({
                 "range": row[2].address,
-                "values": [[str(bounty["value"])]]
+                "values": [[bounty["value"]]]
             })
             logger.info("Bounty data 'value' has changed for %s:%s", kill_id, player)
             warnings.append(f"Bounty data 'value' has changed for {kill_id}:{player}")
-        if tackle != (bounty["type"] == "T"):
+        if kill_id is not None and tackle != (bounty["type"] == "T"):
             batch_changes.append({
-                "range": row[2].address,
-                "values": [[str(bounty["type"] == "T")]]
+                "range": row[3].address,
+                "values": [[bounty["type"] == "T"]]
             })
             logger.info("Bounty data 'type' has changed for %s:%s", kill_id, player)
-            warnings.append(f"Bounty data 'value' has changed for {kill_id}:{player}")
-        if home != (bounty["region"] in BOUNTY_HOME_REGIONS):
+            warnings.append(f"Bounty data 'type' has changed for {kill_id}:{player}")
+        if kill_id is not None and home != (bounty["region"] in BOUNTY_HOME_REGIONS):
             batch_changes.append({
-                "range": row[2].address,
-                "values": [[str(bounty["region"] in BOUNTY_HOME_REGIONS)]]
+                "range": row[4].address,
+                "values": [[bounty["region"] in BOUNTY_HOME_REGIONS]]
             })
             logger.info("Bounty data 'home' has changed for %s:%s", kill_id, player)
-            warnings.append(f"Bounty data 'value' has changed for {kill_id}:{player}")
+            warnings.append(f"Bounty data 'home' has changed for {kill_id}:{player}")
+        if kill_id is None and auto_fix:
+            batch_changes.append({
+                "range": row[0].address,
+                "values": [[bounty["kill_id"]]]
+            })
+            logger.info("Bounty data 'id' has changed for %s:%s", bounty["kill_id"], player)
+            warnings.append(f"Bounty data 'id' has changed for {bounty['kill_id']}:{player}")
     logger.info("Detected %s new bounties, inserting them after row %s", len(new_bounties), last_row)
     for bounty in new_bounties:
         last_row += 1

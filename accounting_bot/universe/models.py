@@ -4,7 +4,7 @@ from typing import List, Optional
 from sqlalchemy import String, ForeignKey, Float, Enum, BigInteger, Integer, Table, Column, Boolean, \
     ForeignKeyConstraint, func, TIMESTAMP, text
 from sqlalchemy.ext.hybrid import hybrid_property
-from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
+from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship, validates
 
 
 class Base(DeclarativeBase):
@@ -207,7 +207,8 @@ class MarketPrice(Base):
     item: Mapped[Item] = relationship(back_populates="prices")
     price_type: Mapped[str] = mapped_column(String(20), primary_key=True)
     price_value: Mapped[float] = mapped_column(Float)
-    last_updated = mapped_column(TIMESTAMP, onupdate=func.now(), server_default=text('CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP'))
+    last_updated = mapped_column(TIMESTAMP, onupdate=func.now(),
+                                 server_default=text('CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP'))
 
 
 class Richness(enum.Enum):
@@ -228,7 +229,8 @@ class Resource(Base):
     # Eve Echoes PI Static Data Export CSV format:
     # Planet ID;Region;Constellation;System;Planet Name;Planet Type;Resource;Richness;Output
     __tablename__ = "resources"
-    planet_id: Mapped[int] = mapped_column(ForeignKey("celestial.id", name="key_res_planet", ondelete="CASCADE"), primary_key=True)
+    planet_id: Mapped[int] = mapped_column(ForeignKey("celestial.id", name="key_res_planet", ondelete="CASCADE"),
+                                           primary_key=True)
     planet: Mapped[Celestial] = relationship(back_populates="resources")
     type_id: Mapped[int] = mapped_column(ForeignKey("item.id", name="key_res_item"), primary_key=True)
     type: Mapped[Item] = relationship()
@@ -247,7 +249,8 @@ class PiPlanSettings(Base):
     arrays: Mapped[int] = mapped_column(Integer(), default=0)
     planets: Mapped[int] = mapped_column(Integer(), default=0)
     resources: Mapped[List["PiPlanResource"]] = relationship(back_populates="piplan", cascade="all, delete-orphan")
-    constellation_id: Mapped[int] = mapped_column(ForeignKey("constellation.id", name="key_piplan_const"), nullable=True)
+    constellation_id: Mapped[int] = mapped_column(ForeignKey("constellation.id", name="key_piplan_const"),
+                                                  nullable=True)
     constellation: Mapped[Constellation] = relationship()
     preferred_prices: Mapped[str] = mapped_column(String(100), nullable=True)
 
@@ -280,6 +283,13 @@ class Killmail(Base):
     kill_value: Mapped[int] = mapped_column(BigInteger())
     system_id: Mapped[int] = mapped_column(ForeignKey("solarsystem.id", name="fk_killmail_system"), nullable=True)
     system: Mapped[System] = relationship()
+    inserted = mapped_column(TIMESTAMP, default=func.now(), server_default=text("CURRENT_TIMESTAMP"))
+
+    @validates("inserted")
+    def validate_inserted(self, key, value):
+        if self.inserted:
+            raise ValueError("Inserted may not be modified")
+        return value
 
 
 class Bounty(Base):

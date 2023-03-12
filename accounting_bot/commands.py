@@ -361,7 +361,9 @@ class BaseCommands(commands.Cog):
         else:
             await ctx.respond("Fehler! Berechtigungen fehlen.", ephemeral=True)
 
-    @commands.slash_command(name="parse_killmails")
+    @commands.slash_command(
+        name="parse_killmails",
+        description="Loads all killmails of the channel into the database")
     @option(name="after", description="ID of message to start the search (exclusive)", required=True)
     async def cmd_parse_killmails(self, ctx: ApplicationContext, after: str):
         if ctx.user.id not in self.admins and ctx.user.id not in data_utils.killmail_admins:
@@ -388,10 +390,13 @@ class BaseCommands(commands.Cog):
                     await message.add_reaction("✅")
         await ctx.followup.send(f"Loaded {num} killmails into the database")
 
-    @commands.slash_command(name="save_killmails")
+    @commands.slash_command(
+        name="save_killmails",
+        description="Saves the killmails between the ids into the google sheet")
     @option(name="first", description="ID of first killmail", required=True)
-    @option(name="last", description="ID of first killmail", required=True)
-    async def cmd_save_killmails(self, ctx: ApplicationContext, first: int, last: int):
+    @option(name="last", description="ID of last killmail", required=True)
+    @option(name="autofix", description="Automatically fixes old sheet data", required=False, default=False)
+    async def cmd_save_killmails(self, ctx: ApplicationContext, first: int, last: int, autofix: bool = False):
         if ctx.user.id not in self.admins and ctx.user.id not in data_utils.killmail_admins:
             await ctx.respond("Fehler! Berechtigungen fehlen.", ephemeral=True)
             return
@@ -401,7 +406,7 @@ class BaseCommands(commands.Cog):
         await ctx.response.defer(ephemeral=True, invisible=False)
         warnings = await data_utils.verify_bounties(first, last)
         bounties = await data_utils.get_all_bounties(first, last)
-        await sheet.update_killmails(bounties, warnings)
+        await sheet.update_killmails(bounties, warnings, autofix)
         length = sum(map(len, warnings))
         if length > 900:
             file = utils.string_to_file(utils.list_to_string(warnings), "warnings.txt")
