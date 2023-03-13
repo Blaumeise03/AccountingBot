@@ -1,3 +1,4 @@
+import datetime
 import io
 import logging
 from functools import reduce
@@ -395,8 +396,15 @@ class BaseCommands(commands.Cog):
         description="Saves the killmails between the ids into the google sheet")
     @option(name="first", description="ID of first killmail", required=True)
     @option(name="last", description="ID of last killmail", required=True)
+    @option(name="month", description="Number of month (1=January...)", min=1, max=12, required=False, default=None)
     @option(name="autofix", description="Automatically fixes old sheet data", required=False, default=False)
-    async def cmd_save_killmails(self, ctx: ApplicationContext, first: int, last: int, autofix: bool = False):
+    async def cmd_save_killmails(
+            self,
+            ctx: ApplicationContext,
+            first: int,
+            last: int,
+            month: int = None,
+            autofix: bool = False):
         if ctx.user.id not in self.admins and ctx.user.id not in data_utils.killmail_admins:
             await ctx.respond("Fehler! Berechtigungen fehlen.", ephemeral=True)
             return
@@ -404,19 +412,23 @@ class BaseCommands(commands.Cog):
             await ctx.respond("Fehler! Bot offline", ephemeral=True)
             return
         await ctx.response.defer(ephemeral=True, invisible=False)
-        warnings = await data_utils.verify_bounties(first, last)
+        time = datetime.datetime.now()
+        if month is not None:
+            time = datetime.datetime(time.year, month, 1)
+        warnings = await data_utils.verify_bounties(first, last, time)
         bounties = await data_utils.get_all_bounties(first, last)
-        await sheet.update_killmails(bounties, warnings, autofix)
+        num_updated, num_new = await sheet.update_killmails(bounties, warnings, autofix)
         length = sum(map(len, warnings))
+        msg = f"Bounty Sheet aktualisiert, es wurden {num_updated} Einträge aktualisiert und {num_new} neue Bounties " \
+              f"eingetragen. Es gab {len(warnings)} Warnungen."
         if length > 900:
             file = utils.string_to_file(utils.list_to_string(warnings), "warnings.txt")
-            await ctx.followup.send(
-                f"Bounty Sheet aktualisiert. Es gab {len(warnings)} Warnungen, siehe Anhang.", file=file)
+            await ctx.followup.send(f"{msg} Siehe Anhang.", file=file)
             return
         if length == 0:
-            await ctx.followup.send("Bounty Sheet aktualisiert.")
+            await ctx.followup.send(msg)
             return
-        await ctx.followup.send("Bounty Sheet aktualisiert. Warnungen:\n" + utils.list_to_string(warnings))
+        await ctx.followup.send(f"{msg}. Warnungen:\n```\n{utils.list_to_string(warnings)}\n```")
 
     @commands.message_command(name="Add Tackle")
     async def ctx_cmd_add_tackle(self, ctx: ApplicationContext, message: discord.Message):

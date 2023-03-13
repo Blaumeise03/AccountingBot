@@ -1,6 +1,7 @@
 import collections
 import logging
 import re
+from datetime import datetime
 from typing import List, Tuple, Optional
 
 import networkx as nx
@@ -542,5 +543,5 @@ def clear_bounties(kill_id: int):
 
 
 @wrap_async
-def verify_bounties(first: int, last: int):
-    return db.verify_bounties(first, last)
+def verify_bounties(first: int, last: int, time: datetime = None):
+    return db.verify_bounties(first, last, time)

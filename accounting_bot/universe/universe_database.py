@@ -2,10 +2,11 @@ import json
 import logging
 import math
 import sys
+from datetime import datetime
 from multiprocessing.pool import ThreadPool
 from typing import Dict, Tuple, Union, Any, TYPE_CHECKING
 
-from sqlalchemy import create_engine, update, between, select, delete
+from sqlalchemy import create_engine, update, between, select, delete, or_
 from sqlalchemy.orm import Session, joinedload
 
 from accounting_bot import utils
@@ -538,7 +539,7 @@ class UniverseDatabase:
             )
             conn.execute(stmt)
 
-    def verify_bounties(self, kill_id_start: int, kill_id_end: int):
+    def verify_bounties(self, kill_id_start: int, kill_id_end: int, time: datetime = None):
         warnings = []
         with Session(self.engine) as conn:
             killmails = conn.query(Killmail).filter(Killmail.id >= kill_id_start, Killmail.id <= kill_id_end).all()
@@ -571,6 +572,18 @@ class UniverseDatabase:
                     warnings.append(
                         f"Killmail {killmail.id} has no bounty at all, player {killmail.final_blow} not found")
             conn.commit()
+            if time is not None:
+                start = datetime(time.year, time.month, 1)
+                end = datetime(time.year, max(1, (time.month + 1) % 13), 1)
+                wrong = (
+                    conn.query(Killmail)
+                    .filter(
+                        or_(Killmail.id <= kill_id_start, Killmail.id >= kill_id_end),
+                        Killmail.inserted.between(start, end)
+                    )
+                ).all()
+                for kill in wrong:
+                    warnings.append(f"Killmail {kill.id} is outside of selection, but was inserted this month")
         return warnings
 
 

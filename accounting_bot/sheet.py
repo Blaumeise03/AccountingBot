@@ -735,6 +735,8 @@ async def update_killmails(bounties: List[Dict[str, Any]], warnings: List[str] =
     batch_changes = []
     new_bounties = bounties.copy()
     last_row = -1
+    num_updated = 0
+    num_new = 0
     for row in data:
         if len(row) < 5:
             continue
@@ -760,6 +762,7 @@ async def update_killmails(bounties: List[Dict[str, Any]], warnings: List[str] =
         tackle = row[3].value.casefold() == "TRUE".casefold()
         home = row[4].value.casefold() == "TRUE".casefold()
         bounty = None
+        updated = False
         for b in bounties:
             if (not auto_fix or kill_id is not None) and b["kill_id"] == kill_id and b["player"] == player:
                 bounty = b
@@ -771,6 +774,7 @@ async def update_killmails(bounties: List[Dict[str, Any]], warnings: List[str] =
                 warnings.append(
                     f"Bounty sheet cell {row[0].address} is empty but player cell isn't. Autofix: {b['kill_id']}")
                 bounty = b
+                updated = True
                 break
         if bounty is None:
             continue
@@ -783,6 +787,7 @@ async def update_killmails(bounties: List[Dict[str, Any]], warnings: List[str] =
             })
             logger.info("Bounty data 'value' has changed for %s:%s", kill_id, player)
             warnings.append(f"Bounty data 'value' has changed for {kill_id}:{player}")
+            updated = True
         if kill_id is not None and tackle != (bounty["type"] == "T"):
             batch_changes.append({
                 "range": row[3].address,
@@ -790,6 +795,7 @@ async def update_killmails(bounties: List[Dict[str, Any]], warnings: List[str] =
             })
             logger.info("Bounty data 'type' has changed for %s:%s", kill_id, player)
             warnings.append(f"Bounty data 'type' has changed for {kill_id}:{player}")
+            updated = True
         if kill_id is not None and home != (bounty["region"] in BOUNTY_HOME_REGIONS):
             batch_changes.append({
                 "range": row[4].address,
@@ -797,6 +803,7 @@ async def update_killmails(bounties: List[Dict[str, Any]], warnings: List[str] =
             })
             logger.info("Bounty data 'home' has changed for %s:%s", kill_id, player)
             warnings.append(f"Bounty data 'home' has changed for {kill_id}:{player}")
+            updated = True
         if kill_id is None and auto_fix:
             batch_changes.append({
                 "range": row[0].address,
@@ -804,6 +811,9 @@ async def update_killmails(bounties: List[Dict[str, Any]], warnings: List[str] =
             })
             logger.info("Bounty data 'id' has changed for %s:%s", bounty["kill_id"], player)
             warnings.append(f"Bounty data 'id' has changed for {bounty['kill_id']}:{player}")
+            updated = True
+        if updated:
+            num_updated += 1
     logger.info("Detected %s new bounties, inserting them after row %s", len(new_bounties), last_row)
     for bounty in new_bounties:
         last_row += 1
@@ -818,7 +828,9 @@ async def update_killmails(bounties: List[Dict[str, Any]], warnings: List[str] =
                 bounty["region"] in BOUNTY_HOME_REGIONS
             ]]
         })
+        num_new += 1
     logger.info("Performing batch update for killmails")
     await wk_bounty.batch_update(batch_changes)
     logger.info("Bounties updated")
+    return num_updated, num_new
 
