@@ -50,6 +50,7 @@ loop = asyncio.get_event_loop()
 _T = TypeVar("_T")
 
 help_infos = {}  # type: Dict[Callable, str]
+cmd_annotations = {}  # type: Dict[Callable, List[CmdAnnotation]]
 BOUNTY_ADMINS = []
 
 
@@ -378,6 +379,29 @@ def save_discord_config():
         json.dump(discord_users, outfile, indent=4)
 
 
+class CmdAnnotation(Enum):
+    admin = "Admin only"
+    owner = "Owner only"
+    main_guild = "Main Server only"
+    user = "Members only"
+
+    @staticmethod
+    def annotate_cmd(func: Callable, annotation: "CmdAnnotation"):
+        if func in cmd_annotations:
+            cmd_annotations[func].append(annotation)
+        else:
+            cmd_annotations[func] = [annotation]
+
+    @staticmethod
+    def get_cmd_details(func: Callable):
+        if func not in cmd_annotations or len(cmd_annotations[func]) == 0:
+            return None
+        msg = ""
+        for a in cmd_annotations[func]:
+            msg += a.value + ", "
+        return rchop(msg, ", ")
+
+
 def help_info(value: str = ""):
     def _callback(func: Callable):
         help_infos[func] = value
@@ -386,53 +410,59 @@ def help_info(value: str = ""):
 
 
 def admin_only(admin_type="global") -> Callable[[_T], _T]:
-    async def predicate(ctx: ApplicationContext) -> bool:
-        is_admin = ctx.user.id in STATE.admins or ctx.user.id == STATE.owner
-        if admin_type == "bounty" and not is_admin:
-            is_admin = ctx.user.id in BOUNTY_ADMINS
-        if not is_admin:
-            raise CheckFailure("Can't execute command") \
-                from NoPermissionsException("Only an administrators may execute this command")
-        return True
-    return commands.check(predicate)
+    def decorator(func):
+        async def predicate(ctx: ApplicationContext) -> bool:
+            is_admin = ctx.user.id in STATE.admins or ctx.user.id == STATE.owner
+            if admin_type == "bounty" and not is_admin:
+                is_admin = ctx.user.id in BOUNTY_ADMINS
+            if not is_admin:
+                raise CheckFailure("Can't execute command") \
+                    from NoPermissionsException("Only an administrators may execute this command")
+            return True
+        CmdAnnotation.annotate_cmd(func, CmdAnnotation.admin)
+        return commands.check(predicate)(func)
+    return decorator
 
 
 def user_only() -> Callable[[_T], _T]:
-    async def predicate(ctx: ApplicationContext) -> bool:
-        is_admin = ctx.user.id in STATE.admins or ctx.user.id == STATE.owner
-        is_user = False
-        if isinstance(ctx.user, Member) and ctx.guild is not None and ctx.guild == STATE.guild:
-            is_user = STATE.user_role is None or ctx.user.get_role(STATE.user_role) is not None
-        else:
-            guild = STATE.bot.get_guild(STATE.guild)
-            if guild is None:
-                guild = await STATE.bot.fetch_guild(STATE.guild)
-            if guild is None:
-                raise ConfigException(f"Guild with id {STATE.guild} not found")
-            user = guild.get_member(ctx.user.id)
-            if user is None:
-                try:
-                    user = await guild.fetch_member(ctx.user.id)
-                except discord.errors.NotFound:
-                    pass
-            if user is not None and user.get_role(STATE.user_role) is not None:
-                is_user = True
-        if not is_admin and not is_user:
-            if isinstance(ctx.channel, DMChannel):
-                location = "DMChannel"
+    def decorator(func):
+        async def predicate(ctx: ApplicationContext) -> bool:
+            is_admin = ctx.user.id in STATE.admins or ctx.user.id == STATE.owner
+            is_user = False
+            if isinstance(ctx.user, Member) and ctx.guild is not None and ctx.guild == STATE.guild:
+                is_user = STATE.user_role is None or ctx.user.get_role(STATE.user_role) is not None
             else:
-                c_name = ctx.channel.name if hasattr(ctx.channel, "name") else str(ctx.channel.type)
-                location = f"channel {ctx.channel.id}:'{c_name}' in guild "
-                if ctx.guild is None:
-                    location += "N/A"
+                guild = STATE.bot.get_guild(STATE.guild)
+                if guild is None:
+                    guild = await STATE.bot.fetch_guild(STATE.guild)
+                if guild is None:
+                    raise ConfigException(f"Guild with id {STATE.guild} not found")
+                user = guild.get_member(ctx.user.id)
+                if user is None:
+                    try:
+                        user = await guild.fetch_member(ctx.user.id)
+                    except discord.errors.NotFound:
+                        pass
+                if user is not None and user.get_role(STATE.user_role) is not None:
+                    is_user = True
+            if not is_admin and not is_user:
+                if isinstance(ctx.channel, DMChannel):
+                    location = "DMChannel"
                 else:
-                    location += f"{ctx.guild.name}:{ctx.guild.id}"
-            logger.warning("Unauthorized access attempt for command %s by user %s:%s in %s",
-                           get_cmd_name(ctx.command), ctx.user.name, ctx.user.id, location)
-            raise CheckFailure("Can't execute command")\
-                from NoPermissionsException("Only users with the member role may use this command")
-        return True
-    return commands.check(predicate)
+                    c_name = ctx.channel.name if hasattr(ctx.channel, "name") else str(ctx.channel.type)
+                    location = f"channel {ctx.channel.id}:'{c_name}' in guild "
+                    if ctx.guild is None:
+                        location += "N/A"
+                    else:
+                        location += f"{ctx.guild.name}:{ctx.guild.id}"
+                logger.warning("Unauthorized access attempt for command %s by user %s:%s in %s",
+                               get_cmd_name(ctx.command), ctx.user.name, ctx.user.id, location)
+                raise CheckFailure("Can't execute command")\
+                    from NoPermissionsException("Only users with the member role may use this command")
+            return True
+        CmdAnnotation.annotate_cmd(func, CmdAnnotation.user)
+        return commands.check(predicate)(func)
+    return decorator
 
 
 def online_only() -> Callable[[_T], _T]:
@@ -445,12 +475,15 @@ def online_only() -> Callable[[_T], _T]:
 
 
 def main_guild_only() -> Callable[[_T], _T]:
-    async def predicate(ctx: ApplicationContext) -> bool:
-        if (ctx.guild is None or ctx.guild.id != STATE.guild) and ctx.user.id != STATE.owner:
-            raise CheckFailure() from NoPermissionsException(
-                "This command can only be executed when the bot is fully online")
-        return True
-    return commands.check(predicate)
+    def decorator(func):
+        async def predicate(ctx: ApplicationContext) -> bool:
+            if (ctx.guild is None or ctx.guild.id != STATE.guild) and ctx.user.id != STATE.owner:
+                raise CheckFailure() from NoPermissionsException(
+                    "This command can only be executed when the bot is fully online")
+            return True
+        CmdAnnotation.annotate_cmd(func, CmdAnnotation.main_guild)
+        return commands.check(predicate)(func)
+    return decorator
 
 
 class Item(object):

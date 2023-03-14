@@ -19,7 +19,7 @@ from accounting_bot.exceptions import InputException
 from accounting_bot.universe import data_utils
 from accounting_bot.universe.pi_planer import PiPlanningSession, PiPlanningView
 from accounting_bot.utils import State, get_cmd_name, ErrorHandledModal, help_infos, help_info, admin_only, \
-    main_guild_only, user_only, online_only
+    main_guild_only, user_only, online_only, CmdAnnotation
 
 if TYPE_CHECKING:
     from bot import BotState
@@ -32,31 +32,7 @@ def main_char_autocomplete(self: AutocompleteContext):
 
 
 STATE = None  # type: BotState | None
-cmd_annotations = {}  # type: Dict[Callable, List[CmdAnnotation]]
 BOUNTY_ADMINS = []
-
-
-class CmdAnnotation(Enum):
-    admin = "Admin only"
-    owner = "Owner only"
-    main_guild = "Main Server only"
-    user = "Members only"
-
-    @staticmethod
-    def annotate_cmd(func: Callable, annotation: "CmdAnnotation"):
-        if func in cmd_annotations:
-            cmd_annotations[func].append(annotation)
-        else:
-            cmd_annotations[func] = [annotation]
-
-    @staticmethod
-    def get_cmd_details(func: Callable):
-        if func not in cmd_annotations or len(cmd_annotations[func]) == 0:
-            return None
-        msg = ""
-        for a in cmd_annotations[func]:
-            msg += a.value + " ,"
-        return msg.strip(",").strip()
 
 
 def setup(state: "BotState"):
@@ -108,15 +84,15 @@ class HelpCommand(commands.Cog):
             cmd_desc = cmd.description if cmd.description is not None and len(cmd.description) > 0 else "N/A"
             cmd_details = CmdAnnotation.get_cmd_details(cmd.callback)
             if cmd_details is not None:
-                cmd_desc = f"**Hinweise**: *{cmd_details}*\n{cmd_desc}"
+                cmd_desc = f"*{cmd_details}*\n{cmd_desc}\n"
             if isinstance(cmd, SlashCommand):
                 if len(cmd.options) > 0:
-                    cmd_desc += " **Parameter**:\n"
+                    cmd_desc += " *Parameter*:\n"
                 for opt in cmd.options:
                     # noinspection PyUnresolvedReferences
                     cmd_desc += f"`{'[' if opt.required else '<'}{opt.name}: {opt.input_type.name}" \
                                 f"{']' if opt.required else '>'}`: {opt.description}\n"
-            emb.add_field(name=cmd_name, value=cmd_desc, inline=False)
+            emb.add_field(name=f"**{cmd_name}**", value=cmd_desc, inline=False)
         return emb
 
     @staticmethod
@@ -128,7 +104,7 @@ class HelpCommand(commands.Cog):
             description += "\n\n" + help_infos[command.callback]
         cmd_details = CmdAnnotation.get_cmd_details(command.callback)
         if cmd_details is not None:
-            description = f"**Hinweise**: *{cmd_details}*\n{description}"
+            description = f"*Einschränkungen*: *{cmd_details}*\n{description}"
         emb = discord.Embed(title=f"Hilfe zu `{get_cmd_name(command)}`", color=discord.Color.red(),
                             description=description)
         if isinstance(command, SlashCommand):
@@ -385,13 +361,10 @@ class BaseCommands(commands.Cog):
     @help_info("Stoppt den Bot, wenn korrekt eingerichtet startet der Bot automatisch neu.")
     @is_owner()
     async def stop(self, ctx: ApplicationContext):
-        if ctx.user.id == STATE.owner:
-            logger.critical("Shutdown Command received, shutting down bot in 10 seconds")
-            await ctx.respond("Bot wird in 10 Sekunden gestoppt...")
-            STATE.state = State.terminated
-            await utils.terminate_bot(connector=self.connector)
-        else:
-            await ctx.respond("Fehler! Berechtigungen fehlen.", ephemeral=True)
+        logger.critical("Shutdown Command received, shutting down bot in 10 seconds")
+        await ctx.respond("Bot wird in 10 Sekunden gestoppt...")
+        STATE.state = State.terminated
+        await utils.terminate_bot(connector=self.connector)
 
     @commands.slash_command(
         name="parse_killmails",
