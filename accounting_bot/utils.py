@@ -12,19 +12,20 @@ from abc import ABC, abstractmethod
 from concurrent.futures import ThreadPoolExecutor
 from enum import Enum
 from os.path import exists
-from typing import Union, Tuple, Optional, TYPE_CHECKING, Type, List, Callable, TypeVar
+from typing import Union, Tuple, Optional, TYPE_CHECKING, Type, List, Callable, TypeVar, Dict
 
 import cv2
 import discord
-from discord import Interaction, ApplicationContext, InteractionResponded, ActivityType
-from discord.ext.commands import Bot, Context, Command
+from discord import Interaction, ApplicationContext, InteractionResponded, ActivityType, Member
+from discord.ext import commands
+from discord.ext.commands import Bot, Context, Command, CheckFailure
 from discord.ui import View, Modal, Item
 from numpy import ndarray
 
 from accounting_bot import exceptions
 from accounting_bot.config import Config
 from accounting_bot.database import DatabaseConnector
-from accounting_bot.exceptions import LoggedException
+from accounting_bot.exceptions import LoggedException, NoPermissionsException, BotOfflineException, ConfigException
 
 if TYPE_CHECKING:
     from bot import BotState
@@ -33,13 +34,6 @@ logger = logging.getLogger("bot.utils")
 CONFIG = None  # type: Config | None
 BOT = None  # type: Bot | None
 STATE = None  # type: BotState | None
-
-
-def set_config(config: Config, bot):
-    global CONFIG, BOT
-    CONFIG = config
-    BOT = bot
-
 
 discord_users = {}  # type: {str: int}
 ingame_twinks = {}
@@ -54,6 +48,18 @@ if exists("discord_ids.json"):
 executor = ThreadPoolExecutor(max_workers=5)
 loop = asyncio.get_event_loop()
 _T = TypeVar("_T")
+
+help_infos = {}  # type: Dict[Callable, str]
+BOUNTY_ADMINS = []
+
+
+def setup(state: "BotState"):
+    global STATE, CONFIG, BOT, resource_order, BOUNTY_ADMINS
+    STATE = state
+    CONFIG = STATE.config
+    BOT = STATE.bot
+    resource_order = state.config["project_resources"]
+    BOUNTY_ADMINS = state.config["killmail_parser.admins"]
 
 
 def wrap_async(func: Callable[..., _T]):
@@ -103,36 +109,46 @@ def get_error_location(ctx: Union[ApplicationContext, Interaction, Context]):
         location = "interaction in channel {} in guild {}, user {}:{}" \
             .format(ctx.channel_id, ctx.guild_id, ctx.user.name, ctx.user.id)
     elif isinstance(ctx, Context):
-        location = "prefixed command in channel {} in guild {}, user {}:{} during execution of command \"{}\"" \
-            .format(ctx.channel.id,
+        location = "prefixed command \"{}\", user {}:{} in channel {}, guild {}, " \
+            .format(get_cmd_name(ctx.command),
+                    ctx.channel.id,
                     ctx.guild.id if ctx.guild is not None else "N/A",
-                    ctx.author.id,
                     ctx.author.name,
-                    get_cmd_name(ctx.command))
+                    ctx.author.id)
     elif isinstance(ctx, ApplicationContext):
-        location = "command in channel {} in guild {}, user {}:{} during execution of command \"{}\"" \
-            .format(ctx.channel.id,
+        location = "command \"{}\" in channel {} in guild {}, user {}:{}" \
+            .format(get_cmd_name(ctx.command),
+                    ctx.channel.id,
                     ctx.guild.id if ctx.guild is not None else "N/A",
                     ctx.user.id,
-                    ctx.user.name,
-                    get_cmd_name(ctx.command))
+                    ctx.user.name)
     else:
         raise TypeError(f"Expected Interaction or ApplicationContext, got {type(ctx)}")
     return location
 
 
-def get_user_error_msg(error: Exception):
+def rchop(s: str, suffix: str):
+    if suffix and s.endswith(suffix):
+        return s[:-len(suffix)]
+    return s
+
+
+def get_cause_chain(error: Exception, sep="\n"):
     error_chain = ""
     err = error
     while err is not None:
-        if err is error:
+        if err is err.__cause__:
             err = err.__cause__
             continue
-        error_chain += err.__class__.__name__ + ": " + str(err) + "\n"
+        error_chain += err.__class__.__name__ + (f": {str(err)}" if len(str(err)) > 0 else "") + sep
         if err.__cause__ is not None:
             error_chain += "caused by "
         err = err.__cause__
-    error_chain.strip("\n")
+    return rchop(error_chain, sep)
+
+
+def get_user_error_msg(error: Exception):
+    error_chain = get_cause_chain(error)
     if isinstance(error, LoggedException):
         return f"An unexpected error occurred: \n```\n{error_chain}\n```\n" \
                f"For more details, take a look at the attached log."
@@ -144,8 +160,9 @@ def get_user_error_msg(error: Exception):
 def log_error(logger: logging.Logger,
               error: Exception,
               location: Optional[Union[str, Type]] = None,
-              ctx: Union[ApplicationContext, Interaction, Context] = None):
-    location = location if type(location) == str else f"class {location.__name__}" if location else "N/A"
+              ctx: Union[ApplicationContext, Interaction, Context] = None,
+              minimal: bool = False):
+    location = location if type(location) == str else f"class {location.__name__}" if location else None
     if error and error.__class__ == discord.errors.NotFound:
         logger.warning("discord.errors.NotFound Error at %s: %s", location, str(error))
         return
@@ -157,9 +174,20 @@ def log_error(logger: logging.Logger,
             full_error = [full_error[0], full_error[-2], full_error[-1]]
 
     if ctx is not None:
-        err_msg = "An error occurred at {} caused by {}".format(location, get_error_location(ctx))
+        if location is not None:
+            err_msg = "An error occurred at {} caused by {}".format(location, get_error_location(ctx))
+        else:
+            err_msg = "An error occurred, caused by {}".format(get_error_location(ctx))
     else:
-        err_msg = "An error occurred at {}".format(location)
+        if location is not None:
+            err_msg = "An error occurred at {}".format(location)
+        else:
+            err_msg = "An error occurred"
+
+    if minimal:
+        logger.info(err_msg + ":")
+        logger.info("Ignored error: %s", get_cause_chain(error, ", "))
+        return
 
     logger.error(err_msg)
     regexp = re.compile(r" *File .*[/\\]site-packages[/\\]((discord)|(sqlalchemy)).*")
@@ -342,6 +370,67 @@ def save_discord_id(name: str, discord_id: int):
 def save_discord_config():
     with open("discord_ids.json", "w") as outfile:
         json.dump(discord_users, outfile, indent=4)
+
+
+def help_info(value: str = ""):
+    def _callback(func: Callable):
+        help_infos[func] = value
+        return func
+    return _callback
+
+
+def admin_only(admin_type="global") -> Callable[[_T], _T]:
+    async def predicate(ctx: ApplicationContext) -> bool:
+        is_admin = ctx.user.id in STATE.admins or ctx.user.id == STATE.owner
+        if admin_type == "bounty" and not is_admin:
+            is_admin = ctx.user.id in BOUNTY_ADMINS
+        if not is_admin:
+            raise CheckFailure("Can't execute command") \
+                from NoPermissionsException("Only an administrators may execute this command")
+        return True
+    return commands.check(predicate)
+
+
+def user_only() -> Callable[[_T], _T]:
+    async def predicate(ctx: ApplicationContext) -> bool:
+        is_admin = ctx.user.id in STATE.admins or ctx.user.id == STATE.owner
+        is_user = False
+        if isinstance(ctx.user, Member) and ctx.guild is not None and ctx.guild == STATE.guild:
+            is_user = STATE.user_role is None or ctx.user.get_role(STATE.user_role) is not None
+        else:
+            guild = STATE.bot.get_guild(STATE.guild)
+            if guild is None:
+                guild = await STATE.bot.fetch_guild(STATE.guild)
+            if guild is None:
+                raise ConfigException(f"Guild with id {STATE.guild} not found")
+            user = guild.get_member(ctx.user.id)
+            if user is None:
+                user = await guild.fetch_member(ctx.user.id)
+            if user is not None and user.get_role(STATE.user_role) is not None:
+                is_user = True
+        if not is_admin and not is_user:
+            raise CheckFailure("Can't execute command")\
+                from NoPermissionsException("Only users with the member role may use this command")
+        return True
+    return commands.check(predicate)
+
+
+def online_only() -> Callable[[_T], _T]:
+    async def predicate(ctx: ApplicationContext) -> bool:
+        if not STATE.is_online():
+            raise CheckFailure("Can't execute command") \
+                from BotOfflineException("Only an administrators may execute this command")
+        return True
+    return commands.check(predicate)
+
+
+def main_guild_only() -> Callable[[_T], _T]:
+    async def predicate(ctx: ApplicationContext) -> bool:
+        if (ctx.guild is None or ctx.guild.id != STATE.guild) and ctx.user.id != STATE.owner:
+            raise CheckFailure() from NoPermissionsException(
+                "This command can only be executed when the bot is fully online")
+        return True
+    return commands.check(predicate)
 
 
 class Item(object):

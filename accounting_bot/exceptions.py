@@ -1,13 +1,15 @@
 from abc import ABC, abstractmethod
 from typing import TYPE_CHECKING
 
+from discord.ext.commands import CommandError
+
 if TYPE_CHECKING:
     from bot import BotState
 
 STATE = None  # type: BotState | None
 
 
-class InputException(Exception):
+class InputException(CommandError):
     pass
 
 
@@ -74,4 +76,8 @@ class DatabaseException(Exception):
 
 
 class KillmailException(Exception):
+    pass
+
+
+class NoPermissionsException(InputException):
     pass

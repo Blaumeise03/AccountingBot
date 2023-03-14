@@ -2,7 +2,6 @@ import asyncio
 import json
 import logging
 import os
-import re
 from abc import ABC, abstractmethod
 from asyncio import Lock
 from datetime import datetime
@@ -20,11 +19,9 @@ from discord.ui import Modal, InputText
 from numpy import ndarray
 
 from accounting_bot import sheet, utils
-from accounting_bot.config import Config
-from accounting_bot.database import DatabaseConnector
 from accounting_bot.exceptions import BotOfflineException, AccountingException
 from accounting_bot.universe import pi_planer
-from accounting_bot.utils import AutoDisableView, State, ErrorHandledModal, TransactionLike, parse_number
+from accounting_bot.utils import AutoDisableView, ErrorHandledModal, TransactionLike, parse_number
 
 if TYPE_CHECKING:
     from bot import BotState
@@ -34,14 +31,9 @@ INVESTMENT_RATIO = 0.3  # percentage of investment that may be used for transact
 logger = logging.getLogger("bot.accounting")
 
 BOT = None  # type: discord.ext.commands.bot.Bot | None
-CONFIG = None  # type: Config | None
 ACCOUNTING_LOG = None  # type: int | None
 ADMIN_LOG = None  # type: int | None
-SERVER = None  # type: int | None
-ADMINS = []  # type: [int]
 SHIPYARD_ADMINS = []
-CONNECTOR = None  # type: DatabaseConnector | None
-USER_ROLE = None  # type: int | None
 STATE = None  # type: BotState | None
 IMG_WORKING_DIR = None  # type: str | None
 NAME_SHIPYARD = "Buyback Program"
@@ -57,34 +49,23 @@ EMBED_INDU_MENU = None  # type: Embed | None
 database_lock = Lock()
 
 
-def set_up(config: Config,
-           new_connector: DatabaseConnector,
-           bot: Bot,
-           state: 'BotState'
-           ) -> None:
+def setup(state: "BotState") -> None:
     """
     Sets all the required variables and reloads the embeds.
 
-    :param config: the configurations
-    :param new_connector: the new DatabaseConnector
-    :param bot: the discord bot instance
     :param state: the global state of the bot
     """
-    global CONNECTOR, CONFIG, BOT, ACCOUNTING_LOG, ADMIN_LOG, SERVER, USER_ROLE, STATE, ADMINS, SHIPYARD_ADMINS
+    global BOT, ACCOUNTING_LOG, ADMIN_LOG, STATE, SHIPYARD_ADMINS
     global EMBED_MENU_INTERNAL, EMBED_MENU_EXTERNAL, EMBED_MENU_VCB, EMBED_MENU_SHORTCUT, EMBED_INDU_MENU
-    CONNECTOR = new_connector
-    CONFIG = config
-    BOT = bot
+    config = state.config
+    BOT = state.bot
     ACCOUNTING_LOG = config["logChannel"]
     admin_log = config["adminLogChannel"]
     if admin_log != -1:
         ADMIN_LOG = admin_log
-    SERVER = config["server"]
-    USER_ROLE = config["user_role"]
-    ADMINS = config["admins"]
     SHIPYARD_ADMINS = config["shipyard_admins"]
     STATE = state
-    logger.info("Loading embed config...")
+    logger.info("Loading embed config")
     with open("resources/embeds.json", "r", encoding="utf8") as embed_file:
         embeds = json.load(embed_file)
         EMBED_MENU_INTERNAL = Embed.from_dict(embeds["MenuEmbedInternal"])
@@ -168,7 +149,7 @@ async def save_transaction(transaction: "Transaction", msg: Message, user_id: in
     logger.info(f"Verified transaction {msg.id} ({time_formatted}). Verified by {user.name} ({user.id}).")
 
     # Set message as verified
-    CONNECTOR.set_verification(msg.id, verified=1)
+    STATE.db_connector.set_verification(msg.id, verified=1)
 
 
 async def inform_players(transaction: "Transaction"):
@@ -181,12 +162,12 @@ async def inform_players(transaction: "Transaction"):
 
     # Find discord account
     if transaction.name_from:
-        id_from, _, perfect = await utils.get_or_find_discord_id(BOT, SERVER, USER_ROLE, transaction.name_from)
+        id_from, _, perfect = await utils.get_or_find_discord_id(BOT, STATE.guild, STATE.user_role, transaction.name_from)
         if not perfect:
             id_from = None
         await inform_player(transaction, id_from, receive=False)
     if transaction.name_to:
-        id_to, _, perfect = await utils.get_or_find_discord_id(BOT, SERVER, USER_ROLE, transaction.name_to)
+        id_to, _, perfect = await utils.get_or_find_discord_id(BOT, STATE.guild, STATE.user_role, transaction.name_to)
         if not perfect:
             id_to = None
         await inform_player(transaction, id_to, receive=True)
@@ -214,7 +195,7 @@ async def save_embeds(msg, user_id):
     else:
         transactions = [transaction]
     async with database_lock:
-        is_unverified = CONNECTOR.is_unverified_transaction(msg.id)
+        is_unverified = STATE.db_connector.is_unverified_transaction(msg.id)
         if not is_unverified:
             time_formatted = transaction.timestamp.astimezone(pytz.timezone("Europe/Berlin")).strftime("%d.%m.%Y %H:%M")
             logger.warning(
@@ -254,7 +235,7 @@ async def verify_transaction(user_id: int, message: Message, interaction: Intera
             admin_log_channel = await BOT.fetch_channel(ADMIN_LOG)
     else:
         admin_log_channel = None
-    is_unverified = CONNECTOR.is_unverified_transaction(message=message.id)
+    is_unverified = STATE.db_connector.is_unverified_transaction(message=message.id)
     if is_unverified is None:
         if interaction:
             await interaction.followup.send(content="Error: Transaction not found", ephemeral=True)
@@ -268,7 +249,7 @@ async def verify_transaction(user_id: int, message: Message, interaction: Intera
         if interaction:
             await interaction.followup.send(content="Error: Couldn't parse embed", ephemeral=True)
         return
-    has_permissions = user_id in ADMINS
+    has_permissions = user_id in STATE.admins
     user = await BOT.get_or_fetch_user(user_id)
     if not has_permissions and isinstance(transaction, Transaction) and transaction.name_from and transaction.name_to:
         # Only transactions between two players can be self-verified
@@ -312,7 +293,7 @@ async def verify_transaction(user_id: int, message: Message, interaction: Intera
     if isinstance(transaction, Transaction) and transaction.detect_type() == 1:
         owner_id, _, _ = await utils.get_or_find_discord_id(player_name=transaction.name_to)
         if owner_id and user_id == owner_id:
-            ocr_verified = CONNECTOR.get_ocr_verification(message.id)
+            ocr_verified = STATE.db_connector.get_ocr_verification(message.id)
             has_permissions = has_permissions or ocr_verified
     if isinstance(transaction, ShipyardTransaction) and not has_permissions:
         has_permissions = user_id in SHIPYARD_ADMINS
@@ -345,18 +326,18 @@ async def verify_transaction(user_id: int, message: Message, interaction: Intera
             await author.send(content=msg)
         logger.warning("Transaction %s was already verified (according to message content), but not marked as "
                        "verified in the database.", transaction.__str__())
-        CONNECTOR.set_verification(message.id, True)
+        STATE.db_connector.set_verification(message.id, True)
         await message.edit(view=None)
         return
     else:
         # Save transaction
         await save_embeds(message, user_id)
-        if admin_log_channel and (user_id not in ADMINS or ocr_verified):
+        if admin_log_channel and (user_id not in STATE.admins or ocr_verified):
             file = None
             if os.path.exists(IMG_WORKING_DIR + f"/transactions/{str(message.id)}.jpg"):
                 file = discord.File(IMG_WORKING_DIR + f"/transactions/{str(message.id)}.jpg")
             msg = "Transaction `{}` was self-verified by `{}:{}`:\nhttps://discord.com/channels/{}/{}/{}\n" \
-                .format(transaction, user.name, user_id, SERVER, ACCOUNTING_LOG, message.id)
+                .format(transaction, user.name, user_id, STATE.guild, ACCOUNTING_LOG, message.id)
             if ocr_verified:
                 msg += "*Transaction was OCR verified*"
             await admin_log_channel.send(msg, file=file)
@@ -398,7 +379,7 @@ class Transaction(TransactionLike):
                     return True
                 return False
             case "verify":
-                return user in ADMINS
+                return user in STATE.admins
         return False
 
     # Transaction types
@@ -578,7 +559,7 @@ class Transaction(TransactionLike):
         if transaction.name_from:
             user_id, _, _ = await utils.get_or_find_discord_id(player_name=transaction.name_from)
             await sheet.load_wallets()
-            if (user_id is None or user != user_id) and user not in ADMINS:
+            if (user_id is None or user != user_id) and user not in STATE.admins:
                 warnings += "**Fehler**: Dieses Konto gehört dir nicht bzw. dein Discordaccount ist nicht " \
                             "**verifiziert** (kontaktiere in diesem Fall einen Admin). Nur der Kontobesitzer darf " \
                             "ISK von seinem Konto an andere senden.\n"
@@ -787,7 +768,7 @@ async def send_transaction(embeds: List[Union[Embed, Transaction, PackedTransact
             embed = transaction.to_embed()
         msg = await BOT.get_channel(ACCOUNTING_LOG).send(embeds=[embed], view=TransactionView())
         try:
-            CONNECTOR.add_transaction(msg.id, interaction.user.id)
+            STATE.db_connector.add_transaction(msg.id, interaction.user.id)
             if transaction is None:
                 transaction = transaction_from_embed(embed)
                 if isinstance(transaction, ShipyardTransaction):
@@ -805,9 +786,9 @@ async def send_transaction(embeds: List[Union[Embed, Transaction, PackedTransact
             elif state == 3:
                 await msg.add_reaction("❌")
             if state is not None:
-                CONNECTOR.set_state(msg.id, state)
+                STATE.db_connector.set_state(msg.id, state)
             if transaction.self_verification():
-                CONNECTOR.set_ocr_verification(msg.id, True)
+                STATE.db_connector.set_ocr_verification(msg.id, True)
         except mariadb.Error as e:
             note += "\nFehler beim Eintragen in die Datenbank, die Transaktion wurde jedoch trotzdem im " \
                     f"Accountinglog gepostet. Informiere bitte einen Admin, danke.\n{e}"
@@ -858,14 +839,14 @@ class AccountingView(AutoDisableView):
     async def btn_list_transactions_callback(self, button, interaction):
         if not STATE.is_online():
             raise BotOfflineException()
-        unverified = CONNECTOR.get_unverified(include_user=True)
+        unverified = STATE.db_connector.get_unverified(include_user=True)
         msg = "Unverifizierte Transaktionen:"
         if len(unverified) == 0:
             msg += "\nKeine"
         i = 0
         for (msgID, userID) in unverified:
             if len(msg) < 1900 or True:
-                msg += f"\nhttps://discord.com/channels/{SERVER}/{ACCOUNTING_LOG}/{msgID} von <@{userID}>"
+                msg += f"\nhttps://discord.com/channels/{STATE.guild}/{ACCOUNTING_LOG}/{msgID} von <@{userID}>"
                 i += 1
             else:
                 msg += f"\nUnd {len(unverified) - i} weitere..."
@@ -894,15 +875,15 @@ class TransactionView(AutoDisableView):
     async def btn_delete_callback(self, button, interaction):
         if not STATE.is_online():
             raise BotOfflineException()
-        (owner, verified) = CONNECTOR.get_owner(interaction.message.id)
+        (owner, verified) = STATE.db_connector.get_owner(interaction.message.id)
         transaction = transaction_from_embed(interaction.message.embeds[0])
         user_name = utils.get_main_account(discord_id=interaction.user.id)
-        has_perm = owner == interaction.user.id or interaction.user.id in ADMINS
+        has_perm = owner == interaction.user.id or interaction.user.id in STATE.admins
         if not has_perm:
             has_perm = transaction.has_permissions(user_name, "delete")
         if not verified and has_perm:
             await interaction.message.delete()
-            CONNECTOR.delete(interaction.message.id)
+            STATE.db_connector.delete(interaction.message.id)
             await interaction.response.send_message("Transaktion Gelöscht!", ephemeral=True)
             logger.info("User %s deleted message %s", interaction.user.id, interaction.message.id)
         elif not owner == interaction.user.id:
@@ -915,8 +896,8 @@ class TransactionView(AutoDisableView):
     async def btn_edit_callback(self, button, interaction):
         if not STATE.is_online():
             raise BotOfflineException()
-        (owner, verified) = CONNECTOR.get_owner(interaction.message.id)
-        if not verified and (owner == interaction.user.id or interaction.user.id in ADMINS):
+        (owner, verified) = STATE.db_connector.get_owner(interaction.message.id)
+        if not verified and (owner == interaction.user.id or interaction.user.id in STATE.admins):
             embed = interaction.message.embeds[0]
             await interaction.response.send_modal(EditModal(interaction.message, title=embed.title))
         elif not owner == interaction.user.id:
@@ -977,9 +958,9 @@ class ConfirmEditView(AutoDisableView):
         warnings = ""
         if self.original.name_to != transaction.name_to or self.original.name_from != transaction.name_from or \
                 self.original.amount != transaction.amount or self.original.purpose != transaction.purpose:
-            ocr_verified = CONNECTOR.get_ocr_verification(interaction.message.id)
+            ocr_verified = STATE.db_connector.get_ocr_verification(interaction.message.id)
             if ocr_verified:
-                CONNECTOR.set_ocr_verification(interaction.message.id, False)
+                STATE.db_connector.set_ocr_verification(interaction.message.id, False)
                 warnings += "Warnung: Du kannst diese Transaktion nicht mehr selbst verifizieren.\n"
         await self.message.edit(embeds=interaction.message.embeds)
         await interaction.response.send_message(f"Transaktion bearbeitet!\n{warnings}", ephemeral=True)
@@ -1000,7 +981,7 @@ class ConfirmOCRView(AutoDisableView):
         await interaction.response.defer(ephemeral=True, invisible=False)
         msg = await send_transaction([self.transaction], interaction, self.note)
         if msg is not None:
-            res_msg = f"Transaktion versendet: https://discord.com/channels/{SERVER}/{ACCOUNTING_LOG}/{msg.id}"
+            res_msg = f"Transaktion versendet: https://discord.com/channels/{STATE.guild}/{ACCOUNTING_LOG}/{msg.id}"
         else:
             res_msg = "Transaktion versendet!"
         if self.transaction.allow_self_verification:
@@ -1121,9 +1102,9 @@ class EditModal(TransferModal):
             return
         if original.name_to != transaction.name_to or original.name_from != transaction.name_from or \
                 original.amount != transaction.amount or original.purpose != transaction.purpose:
-            ocr_verified = CONNECTOR.get_ocr_verification(interaction.message.id)
+            ocr_verified = STATE.db_connector.get_ocr_verification(interaction.message.id)
             if ocr_verified:
-                CONNECTOR.set_ocr_verification(interaction.message.id, False)
+                STATE.db_connector.set_ocr_verification(interaction.message.id, False)
                 warnings += "Warnung: Du kannst diese Transaktion nicht mehr selbst verifizieren.\n"
         await interaction.message.edit(embed=transaction.create_embed())
         await interaction.response.send_message(f"Transaktionen wurde editiert!\n{warnings}", ephemeral=True)

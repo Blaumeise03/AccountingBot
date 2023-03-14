@@ -8,6 +8,7 @@ import discord
 import pytz
 from discord import ApplicationContext, InputTextStyle, Interaction, Option, option
 from discord.ext import commands
+from discord.ext.commands import cooldown
 from discord.ui import InputText
 from gspread import Cell
 
@@ -15,7 +16,7 @@ from accounting_bot import sheet, utils, project_utils
 from accounting_bot.exceptions import GoogleSheetException, BotOfflineException
 from accounting_bot.project_utils import format_list
 from accounting_bot.utils import string_to_file, list_to_string, AutoDisableView, State, \
-    ErrorHandledModal, Item
+    ErrorHandledModal, Item, admin_only, online_only, help_info, user_only
 
 if TYPE_CHECKING:
     from bot import BotState
@@ -30,6 +31,12 @@ BOT = None  # type: commands.Bot | None
 STATE = None  # type: BotState | None
 
 
+def setup(state: "BotState"):
+    global STATE, BOT
+    STATE = state
+    BOT = state.bot
+
+
 class ProjectCommands(commands.Cog):
     def __init__(self, bot, admins, owner, guild, user_role):
         global ADMINS, BOT, OWNER, GUILD, USER_ROLE
@@ -42,18 +49,13 @@ class ProjectCommands(commands.Cog):
         GUILD = guild
         USER_ROLE = user_role
 
-    @commands.slash_command(
-        name="loadprojects",
-        description="Loads and list all projects"
-    )
-    @commands.cooldown(1, 5, commands.BucketType.default)
+    @commands.slash_command(name="loadprojects", description="Loads and list all projects")
+    @cooldown(1, 5, commands.BucketType.default)
+    @admin_only()
+    @online_only()
+    @help_info("Lädt alle Projekte aus dem Sheet neu, dies dauert einige Sekunden.")
     async def load_projects(self, ctx: discord.commands.context.ApplicationContext,
                             silent: Option(bool, "Execute command silently", required=False, default=True)):
-        if not (ctx.user.guild_permissions.administrator or ctx.user.id in ADMINS or ctx.user.id == OWNER):
-            await ctx.respond("Missing permissions", ephemeral=True)
-            return
-        if not STATE.is_online():
-            raise BotOfflineException()
         await ctx.response.defer(ephemeral=True)
         log = await sheet.load_projects()
         res = "Projectlist version: " + sheet.lastChanges.astimezone(pytz.timezone("Europe/Berlin")).strftime(
@@ -65,10 +67,9 @@ class ProjectCommands(commands.Cog):
             string_to_file(list_to_string(log), "log.txt"),
             string_to_file(res, "project_list.txt")], ephemeral=silent)
 
-    @commands.slash_command(
-        name="listprojects",
-        description="Lists all projects"
-    )
+    @commands.slash_command(name="listprojects", description="Lists all projects")
+    @help_info("Listet alle Projekte auf ohne das Sheet neu zuladen.")
+    @user_only()
     async def list_projects(self, ctx: ApplicationContext,
                             silent: Option(bool, "Execute command silently", required=False, default=True)):
         res = "Projectlist version: " + sheet.lastChanges.astimezone(pytz.timezone("Europe/Berlin")).strftime(
@@ -78,23 +79,15 @@ class ProjectCommands(commands.Cog):
                 res += p.to_string() + "\n\n"
         await ctx.respond("Projektliste:", file=string_to_file(res, "project_list.txt"), ephemeral=silent)
 
-    @commands.slash_command(
-        name="insertinvestment",
-        description="Saves an investment into the sheet"
-    )
-    @option(
-        "skip_loading",
-        description="Skip the reloading of the projects",
-        required=False,
-        default=False
-    )
-    @option(
-        "priority_project",
-        description="Prioritize this project, or multiple separated by a semicolon (;)",
-        required=False,
-        default=""
-    )
+    @commands.slash_command(name="insertinvestment", description="Saves an investment into the sheet")
+    @help_info("Verteilt einen Investitionsvertrag automatisch auf die Projekte auf. Mit `priority_project` lassen "
+               "sich Projekte angeben (getrennt durch Semikolons `;`, absteigende Reihenfolge), die Priorisiert "
+               "werden sollen (Case-Sensitive).")
+    @option("skip_loading", description="Skip the reloading of the projects", required=False, default=False)
+    @option("priority_project", required=False, default="",
+            description="Prioritize this project, or multiple separated by a semicolon (;)")
     @commands.cooldown(1, 5, commands.BucketType.default)
+    @admin_only()
     async def insert_investments(self,
                                  ctx: ApplicationContext,
                                  skip_loading: bool,
@@ -104,19 +97,13 @@ class ProjectCommands(commands.Cog):
             priority_projects = priority_project.split(";")
         else:
             priority_projects = [priority_project]
-        if ctx.user.guild_permissions.administrator or ctx.user.id in ADMINS or ctx.user.id == OWNER:
-            await ctx.response.send_modal(ListModal(skip_loading, priority_projects))
-        else:
-            await ctx.response.send_message("Fehlende Berechtigungen!", ephemeral=True)
+        await ctx.response.send_modal(ListModal(skip_loading, priority_projects))
 
-    @commands.slash_command(
-        name="splitoverflow",
-        description="Splits the overflow onto the projects"
-    )
+    @commands.slash_command(name="splitoverflow", description="Splits the overflow onto the projects")
+    @help_info("Verteilt den Überlauf automatisch auf die Projekte auf.")
     @commands.cooldown(1, 5, commands.BucketType.default)
-    async def split_overflow(self,
-                             ctx: ApplicationContext
-                             ):
+    @admin_only()
+    async def split_overflow(self, ctx: ApplicationContext):
         await ctx.defer()
         await sheet.load_projects()
         log = []

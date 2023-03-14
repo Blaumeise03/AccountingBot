@@ -1,14 +1,14 @@
 import datetime
 import io
 import logging
-from functools import reduce
-from typing import TYPE_CHECKING, Optional, Union
+from enum import Enum
+from typing import TYPE_CHECKING, Optional, Callable, Dict, List
 
 import discord
 from discord import Option, User, ApplicationContext, AutocompleteContext, option, Role, SlashCommand, \
-    SlashCommandGroup
+    SlashCommandGroup, guild_only, DMChannel
 from discord.ext import commands
-from discord.ext.commands import Context
+from discord.ext.commands import Context, is_owner
 from discord.ui import InputText
 
 from accounting_bot import accounting, sheet, utils
@@ -18,7 +18,8 @@ from accounting_bot.database import DatabaseConnector
 from accounting_bot.exceptions import InputException
 from accounting_bot.universe import data_utils
 from accounting_bot.universe.pi_planer import PiPlanningSession, PiPlanningView
-from accounting_bot.utils import State, get_cmd_name, ErrorHandledModal
+from accounting_bot.utils import State, get_cmd_name, ErrorHandledModal, help_infos, help_info, admin_only, \
+    main_guild_only, user_only, online_only
 
 if TYPE_CHECKING:
     from bot import BotState
@@ -28,6 +29,40 @@ logger = logging.getLogger("bot.commands")
 
 def main_char_autocomplete(self: AutocompleteContext):
     return filter(lambda n: self.value is None or n.startswith(self.value.strip()), utils.main_chars)
+
+
+STATE = None  # type: BotState | None
+cmd_annotations = {}  # type: Dict[Callable, List[CmdAnnotation]]
+BOUNTY_ADMINS = []
+
+
+class CmdAnnotation(Enum):
+    admin = "Admin only"
+    owner = "Owner only"
+    main_guild = "Main Server only"
+    user = "Members only"
+
+    @staticmethod
+    def annotate_cmd(func: Callable, annotation: "CmdAnnotation"):
+        if func in cmd_annotations:
+            cmd_annotations[func].append(annotation)
+        else:
+            cmd_annotations[func] = [annotation]
+
+    @staticmethod
+    def get_cmd_details(func: Callable):
+        if func not in cmd_annotations or len(cmd_annotations[func]) == 0:
+            return None
+        msg = ""
+        for a in cmd_annotations[func]:
+            msg += a.value + " ,"
+        return msg.strip(",").strip()
+
+
+def setup(state: "BotState"):
+    global STATE, BOUNTY_ADMINS
+    STATE = state
+    BOUNTY_ADMINS = STATE.config["killmail_parser.admins"]
 
 
 class HelpCommand(commands.Cog):
@@ -71,6 +106,9 @@ class HelpCommand(commands.Cog):
         for cmd in cog.walk_commands():
             cmd_name = get_cmd_name(cmd)
             cmd_desc = cmd.description if cmd.description is not None and len(cmd.description) > 0 else "N/A"
+            cmd_details = CmdAnnotation.get_cmd_details(cmd.callback)
+            if cmd_details is not None:
+                cmd_desc = f"**Hinweise**: *{cmd_details}*\n{cmd_desc}"
             if isinstance(cmd, SlashCommand):
                 if len(cmd.options) > 0:
                     cmd_desc += " **Parameter**:\n"
@@ -86,11 +124,16 @@ class HelpCommand(commands.Cog):
         description = "Keine Beschreibung verfügbar"
         if command.description is not None and len(command.description) > 0:
             description = command.description
+        if command.callback in help_infos:
+            description += "\n\n" + help_infos[command.callback]
+        cmd_details = CmdAnnotation.get_cmd_details(command.callback)
+        if cmd_details is not None:
+            description = f"**Hinweise**: *{cmd_details}*\n{description}"
         emb = discord.Embed(title=f"Hilfe zu `{get_cmd_name(command)}`", color=discord.Color.red(),
                             description=description)
         if isinstance(command, SlashCommand):
             if len(command.options) > 0:
-                description += "\nParameter:"
+                description += "\n\n**Parameter**:"
             for opt in command.options:
                 # noinspection PyUnresolvedReferences
                 emb.add_field(name=opt.name,
@@ -132,11 +175,12 @@ class HelpCommand(commands.Cog):
             autocomplete=commands_autocomplete)
     @option(name="silent", description="Execute the command publicly.", type=bool, required=False, default=True,
             autocomplete=commands_autocomplete)
-    @option(name="edit_msg", description="Edit this message and update the embed", type=str, required=False,
+    @option(name="edit_msg", description="Edit this message and update the embed.", type=str, required=False,
             default=None)
-    async def help(self, ctx: ApplicationContext,
-                   selection: str, silent: bool, edit_msg: str
-                   ):
+    @help_info("Zeigt eine Hilfe zu allen verfügbaren Befehlen an. Mit dem `selection` Parameter lässt sich ein Modul "
+               "oder ein Befehl auswählen, um detailliertere Informationen zu erhalten.")
+    async def cmd_help(self, ctx: ApplicationContext,
+                       selection: str, silent: bool, edit_msg: str):
         emb = HelpCommand.get_help_embed(self.state.bot, selection)
         if edit_msg is not None:
             try:
@@ -158,82 +202,62 @@ class HelpCommand(commands.Cog):
 
 
 class BaseCommands(commands.Cog):
-    def __init__(self, config: Config, connector: DatabaseConnector, state: 'BotState'):
-        self.config = config
-        self.guild = config["server"]
-        self.admins = config["admins"]
-        self.owner = config["owner"]
-        self.connector = connector
+    def __init__(self, state: "BotState"):
+        state.reloadFuncs.append(self.set_settings)
+        self.config = None  # type: Config | None
+        self.guild = None  # type: int | None
+        self.admins = []  # type: List[int]
+        self.owner = None  # type: int | None
+        self.connector = None  # type: DatabaseConnector | None
+        self.state = None  # type: BotState | None
+
+    def set_settings(self, state: "BotState"):
+        self.config = state.config
+        self.guild = self.config["server"]
+        self.admins = self.config["admins"]
+        self.owner = self.config["owner"]
+        self.connector = state.db_connector
         self.state = state
 
-    def has_permissions(self, ctx: ApplicationContext):
-        return (ctx.guild and self.guild == ctx.guild.id and ctx.user.guild_permissions.administrator) \
-            or ctx.user.id in self.admins or ctx.user.id == self.owner
-
     @commands.slash_command(description="Creates the main menu for the bot and sets all required settings.")
-    async def setup(self, ctx):
-        logging.info("Setup command called by user " + str(ctx.author.id))
-        if ctx.guild is None:
-            await ctx.respond("Can only be executed inside a guild")
-            return
-        if ctx.guild.id != self.config["server"] and ctx.author.id != self.config["owner"]:
-            await ctx.respond("Wrong server", ephemeral=True)
-            return
-
-        if ctx.author.guild_permissions.administrator or \
-                ctx.author.id in self.config["admins"] or \
-                ctx.author.id == self.config["owner"]:
-            # Running setup
-            logger.info("User verified for setup-command, starting setup...")
-            view = AccountingView()
-            msg = await ctx.send(view=view, embeds=accounting.get_menu_embeds())
-            logger.info("Send menu message with id " + str(msg.id))
-            self.config["menuMessage"] = msg.id
-            self.config["menuChannel"] = ctx.channel.id
-            self.config["server"] = ctx.guild.id
-            self.config.save_config()
-            logger.info("Setup completed.")
-            await ctx.respond("Saved config", ephemeral=True)
-        else:
-            logger.info(f"User {ctx.author.id} is missing permissions to run the setup command")
-            await ctx.respond("Missing permissions", ephemeral=True)
+    @help_info("Postet das Hauptmenü für das Accounting und setzt dabei weitere Einstellungen automatisch. Erfordert "
+               "einen anschließenden Neustart des Bots.")
+    @admin_only()
+    @main_guild_only()
+    @guild_only()
+    async def setup(self, ctx: ApplicationContext):
+        logger.info("User verified for setup-command, starting setup...")
+        view = AccountingView()
+        msg = await ctx.send(view=view, embeds=accounting.get_menu_embeds())
+        logger.info("Send menu message with id " + str(msg.id))
+        STATE.config["menuMessage"] = msg.id
+        STATE.config["menuChannel"] = ctx.channel.id
+        STATE.config["server"] = ctx.guild.id
+        STATE.config.save_config()
+        logger.info("Setup completed.")
+        await ctx.response.send_message("Saved config", ephemeral=True)
 
     @commands.slash_command(
         name="setlogchannel",
         description="Sets the current channel as the accounting log channel.")
+    @help_info("Setzt den aktuellen Channel als accounting log, erfordert ebenfalls einen Neustart des Bots.")
+    @admin_only()
+    @main_guild_only()
+    @guild_only()
     async def set_log_channel(self, ctx):
-        logger.info("SetLogChannel command received.")
-        if ctx.guild is None:
-            logger.info("Command was send via DM!")
-            await ctx.respond("Only available inside a guild")
-            return
-        if ctx.guild.id != self.config["server"]:
-            logger.info("Wrong server!")
-            await ctx.respond("Can only used inside the defined discord server", ephemeral=True)
-            return
-
-        if ctx.author.id == self.config["owner"] or ctx.author.guild_permissions.administrator:
-            logger.info("User Verified. Setting up channel...")
-            self.config["logChannel"] = ctx.channel.id
-            self.config.save_config()
-            logger.info("Channel changed!")
-            await ctx.respond("Log channel set to this channel (" + str(self.config["logChannel"]) + ")")
-        else:
-            logger.info(f"User {ctx.author.id} is missing permissions to run the setlogchannel command")
-            await ctx.respond("Missing permissions", ephemeral=True)
+        logger.info("User Verified. Setting up channel...")
+        STATE.config["logChannel"] = ctx.channel.id
+        STATE.config.save_config()
+        logger.info("Channel changed!")
+        await ctx.respond("Log channel set to this channel (`" + str(STATE.config["logChannel"]) + "`)")
 
     # noinspection SpellCheckingInspection
     @commands.slash_command(description="Creates a new shortcut menu containing all buttons.")
+    @help_info("Erstellt ein kompaktes Menü für die Accountingfunktionen.")
+    @main_guild_only()
+    @guild_only()
     async def createshortcut(self, ctx):
-        if ctx.guild is None:
-            await ctx.respond("Can only be executed inside a guild")
-            return
-        if ctx.guild.id != self.guild and ctx.author.id != self.owner:
-            logging.info("Wrong server!")
-            await ctx.respond("Wrong server", ephemeral=True)
-            return
-
-        if ctx.author.guild_permissions.administrator or ctx.author.id in self.admins or ctx.author.id == self.owner:
+        if ctx.author.guild_permissions.administrator or ctx.author.id in STATE.admins or ctx.author.id == self.owner:
             view = AccountingView()
             msg = await ctx.send(view=view, embed=accounting.EMBED_MENU_SHORTCUT)
             self.connector.add_shortcut(msg.id, ctx.channel.id)
@@ -246,8 +270,11 @@ class BaseCommands(commands.Cog):
         name="balance",
         description="Get your current accounting balance."
     )
+    @help_info("Zeigt den eigenen Kontostand oder den Kontostand des angegebenen Nutzers. ")
+    @user_only()
+    @online_only()
     async def get_balance(self, ctx: ApplicationContext,
-                          force: Option(bool, "Force sheet reload", required=False, default=False),
+                          force: Option(bool, "Enforce data reload", required=False, default=False),
                           user: Option(User, "The user to look up", required=False, default=None)):
         await ctx.defer(ephemeral=True)
         await sheet.load_wallets(force)
@@ -276,10 +303,9 @@ class BaseCommands(commands.Cog):
     @option("ingame_name", description="The main character name of the user", required=True,
             autocomplete=main_char_autocomplete)
     @option("user", description="The user to register", required=True)
+    @help_info("Verknüpft einen Discord Account mit einem Ingame Spieler")
+    @admin_only()
     async def register_user(self, ctx: ApplicationContext, ingame_name: str, user: User):
-        if not self.has_permissions(ctx):
-            await ctx.respond("You don't have the permission to use this command.", ephemeral=True)
-            return
         if user is None:
             await ctx.respond("Either a user is required.", ephemeral=True)
             return
@@ -306,10 +332,10 @@ class BaseCommands(commands.Cog):
         description="Lists all unregistered users of the discord"
     )
     @option("role", description="The role to check", required=True)
+    @help_info("Listet alle unregistrierten Nutzer mit einer ausgewählten Rolle auf.")
+    @admin_only()
+    @guild_only()
     async def find_unregistered_users(self, ctx: ApplicationContext, role: Role):
-        if not self.has_permissions(ctx):
-            await ctx.respond("You don't have the permission to use this command.", ephemeral=True)
-            return
         await ctx.defer(ephemeral=True)
         users = await ctx.guild \
             .fetch_members() \
@@ -341,9 +367,12 @@ class BaseCommands(commands.Cog):
 
     # noinspection SpellCheckingInspection
     @commands.slash_command(description="Posts a menu with all available manufacturing roles.")
-    async def indumenu(self, ctx, msg: Option(str, "Message ID", required=False, default=None)):
+    @option(name="msg", description="Edit this message ID instead of posting a new message", default=None)
+    @help_info("Postet ein Embed mit allen Industrierollen. Wenn eine ID gegeben wird, wird stattdessen diese "
+               "Nachricht aktualisiert. Es muss eine Nachricht vom Bot sein!")
+    async def indumenu(self, ctx, msg: str = None):
         if msg is None:
-            logger.info("Sending role menu...")
+            logger.info("Sending role menu")
             await ctx.send(embeds=[accounting.EMBED_INDU_MENU])
             await ctx.respond("Neues Menü gesendet.", ephemeral=True)
         else:
@@ -353,11 +382,13 @@ class BaseCommands(commands.Cog):
             await ctx.respond("Menü geupdated.", ephemeral=True)
 
     @commands.slash_command(description="Shuts down the discord bot, if set up properly, it will restart.")
+    @help_info("Stoppt den Bot, wenn korrekt eingerichtet startet der Bot automatisch neu.")
+    @is_owner()
     async def stop(self, ctx: ApplicationContext):
-        if ctx.user.id == self.owner:
+        if ctx.user.id == STATE.owner:
             logger.critical("Shutdown Command received, shutting down bot in 10 seconds")
             await ctx.respond("Bot wird in 10 Sekunden gestoppt...")
-            self.state.state = State.terminated
+            STATE.state = State.terminated
             await utils.terminate_bot(connector=self.connector)
         else:
             await ctx.respond("Fehler! Berechtigungen fehlen.", ephemeral=True)
@@ -366,13 +397,13 @@ class BaseCommands(commands.Cog):
         name="parse_killmails",
         description="Loads all killmails of the channel into the database")
     @option(name="after", description="ID of message to start the search (exclusive)", required=True)
+    @help_info("Liest alle Killmails nach der angegebenen Nachricht in die Datenbank des Bots ein (noch nicht in das "
+               "Google Sheet). Zum Übertragen in das Sheet, siehe `save_killmails`. Um die Nachrichten ID zu finden, "
+               "musst du die [Developer Optionen](https://support.discord.com/hc/en-us/articles/206346498-Where-can-I-find-my-User-Server-Message-ID-) "
+               "aktivieren.")
+    @admin_only("bounty")
+    @online_only()
     async def cmd_parse_killmails(self, ctx: ApplicationContext, after: str):
-        if ctx.user.id not in self.admins and ctx.user.id not in data_utils.killmail_admins:
-            await ctx.respond("Fehler! Berechtigungen fehlen.", ephemeral=True)
-            return
-        if not self.state.is_online():
-            await ctx.respond("Fehler! Bot offline", ephemeral=True)
-            return
         if not after.isnumeric():
             raise InputException("Message ID has to be a number")
         await ctx.response.defer(ephemeral=True, invisible=False)
@@ -393,11 +424,18 @@ class BaseCommands(commands.Cog):
 
     @commands.slash_command(
         name="save_killmails",
-        description="Saves the killmails between the ids into the google sheet")
+        description="Saves the killmails between the ids into the google sheet.")
     @option(name="first", description="ID of first killmail", required=True)
     @option(name="last", description="ID of last killmail", required=True)
     @option(name="month", description="Number of month (1=January...)", min=1, max=12, required=False, default=None)
     @option(name="autofix", description="Automatically fixes old sheet data", required=False, default=False)
+    @help_info(value="Überträgt die Killmails in das Google Sheet. Dazu ist die erste Killmail ID und die letzte ID "
+                     "aus dem Monat nötig (da die Killmail IDs chronologisch vergeben werden). Zusätzlich kann der "
+                     "Monat als Zahl angegeben werden um Killmails zu finden, die in diesem Monat gepostet wurden, "
+                     "aber außerhalb des spezifiziertem Bereichs liegen. Mit der `autofix` Option sucht der Bot zu "
+                     "Killmails ohne IDs im Sheet, die entsprechende Killmail ID raus (anhand Spielername und Wert).")
+    @admin_only("bounty")
+    @online_only()
     async def cmd_save_killmails(
             self,
             ctx: ApplicationContext,
@@ -405,12 +443,6 @@ class BaseCommands(commands.Cog):
             last: int,
             month: int = None,
             autofix: bool = False):
-        if ctx.user.id not in self.admins and ctx.user.id not in data_utils.killmail_admins:
-            await ctx.respond("Fehler! Berechtigungen fehlen.", ephemeral=True)
-            return
-        if not self.state.is_online():
-            await ctx.respond("Fehler! Bot offline", ephemeral=True)
-            return
         await ctx.response.defer(ephemeral=True, invisible=False)
         time = datetime.datetime.now()
         if month is not None:
@@ -431,19 +463,22 @@ class BaseCommands(commands.Cog):
         await ctx.followup.send(f"{msg}. Warnungen:\n```\n{utils.list_to_string(warnings)}\n```")
 
     @commands.message_command(name="Add Tackle")
+    @help_info("Kontext-Menü Befehl. Fügt einen Tackler/Logi zu einer Killmail hinzu. Klicke dazu mit einem "
+               "Rechtsklick auf die Nachricht mit dem Embed der Killmail und wähle den Befehl aus der Kategorie "
+               "`Apps` aus.")
+    @admin_only("bounty")
+    @online_only()
     async def ctx_cmd_add_tackle(self, ctx: ApplicationContext, message: discord.Message):
         if len(message.embeds) == 0:
             await ctx.response.send_message("Nachricht enthält kein Embed", ephemeral=True)
             return
-        if ctx.user.id not in self.admins and ctx.user.id not in data_utils.killmail_admins:
-            await ctx.response.send_message("Fehlende Berechtigungen", ephemeral=True)
-            return
-        if not self.state.is_online():
-            await ctx.respond("Fehler! Bot offline", ephemeral=True)
-            return
         await ctx.response.send_modal(AddBountyModal(message))
 
     @commands.message_command(name="Show Bounties")
+    @help_info("Kontext-Menü Befehl. Zeigt Informationen über die Killmail und die Bounties. Klicke dazu mit einem "
+               "Rechtsklick auf die Nachricht mit dem Embed der Killmail und wähle den Befehl aus der Kategorie "
+               "`Apps` aus.")
+    @user_only()
     async def ctx_cmd_show_bounties(self, ctx: ApplicationContext, message: discord.Message):
         if len(message.embeds) == 0:
             await ctx.response.send_message("Nachricht enthält kein Embed", ephemeral=True)
@@ -492,13 +527,13 @@ class AddBountyModal(ErrorHandledModal):
 
 
 class UniverseCommands(commands.Cog):
-    def __init__(self, state: 'BotState'):
+    def __init__(self, state: "BotState"):
         self.state = state
 
     cmd_pi = SlashCommandGroup(name="pi", description="Access planetary production data.")
 
     @cmd_pi.command(name="stats", description="View statistical data for pi in a selected constellation.")
-    @option(name="const", description="Target Constellation", type=str, required=True)
+    @option(name="const", description="Target Constellation.", type=str, required=True)
     @option(name="resources", description="List of pi, seperated by ';'.", type=str, required=False)
     @option(name="compare_regions",
             description="List of regions, seperated by ';' to compare the selected constellation with.",
@@ -507,6 +542,8 @@ class UniverseCommands(commands.Cog):
             default=False, required=False)
     @option(name="silent", description="Default false, if set to true, the command will be executed publicly.",
             default=True, required=False)
+    @help_info("Zeig die PI Statistik für die ausgewählte Konstellation als Boxplot im Vergleich zum Rest des "
+               "Universums oder der angegebenen Regionen.")
     async def cmd_const_stats(self, ctx: ApplicationContext, const: str, resources: str, compare_regions: str,
                               vertical: bool, silent: bool):
         await ctx.response.defer(ephemeral=silent)
@@ -526,11 +563,17 @@ class UniverseCommands(commands.Cog):
     @option(name="const_sys", description="Target Constellation or origin system", type=str, required=True)
     @option(name="resource", description="Name of pi to search", type=str, required=True)
     @option(name="distance", description="Distance from origin system to look up",
-            type=int, min_value=0, max_value=30, required=False, default=None)
-    @option(name="amount", description="Number of planets to return", type=int, required=False)
+            type=int, min_value=0, max_value=30, required=False, default=0)
+    @option(name="amount", description="Number of planets to return", type=int, required=False, default=None)
     @option(name="silent", description="Default false, if set to true, the command will be executed publicly",
             default=True, required=False)
-    async def cmd_find_pi(self, ctx: ApplicationContext, const_sys: str, resource: str, distance: int, amount: int, silent: bool):
+    @help_info("Sucht die besten Planet für eine angegebene Ressource. Es gibt zwei Suchmodi:\n"
+               "Nach *Konstellation*: Wenn für `const_sys` eine Konstellation angegeben wurde, werden Planeten "
+               "innerhalb dieser Konstellation gesucht.\nNach *System + Distanz*: Wenn stattdessen ein System für "
+               "`const_sys` angegeben wurde, werden Planeten innerhalb von `distance` Jumps zu diesem System gesucht.\n"
+               "Mit `amount` kann die Anzahl der Ergebnisse eingeschränkt werden.")
+    async def cmd_find_pi(self, ctx: ApplicationContext, const_sys: str, resource: str, distance: int, amount: int,
+                          silent: bool):
         await ctx.response.defer(ephemeral=True)
         resource = resource.strip()
         const = await data_utils.get_constellation(const_sys)
@@ -562,10 +605,19 @@ class UniverseCommands(commands.Cog):
                             description="Kein Planet gefunden/ungültige Eingabe" if len(result) == 0 else msg)
         await ctx.followup.send(embed=emb, ephemeral=silent)
 
-    @cmd_pi.command(name="planer", description="Open the pi planer to manage your planets")
+    @cmd_pi.command(name="planer", description="Open the pi planer to manage your planets.")
+    @help_info("Öffnet den Pi Planer per Direktnachricht. Mit ihm kann die Pi Produktion geplant sein, für weitere "
+               "Infos öffne den Pi Planer und klicke auf ❓.")
     async def cmd_pi_plan(self, ctx: ApplicationContext):
         plan = PiPlanningSession(ctx.user)
         await plan.load_plans()
+        if isinstance(ctx.channel, DMChannel):
+            msg = await ctx.response.send_message(
+                f"Du hast aktuell {len(plan.plans)} aktive Pi Pläne:",
+                embeds=plan.get_embeds(),
+                view=PiPlanningView(plan))
+            plan.message = msg
+            return
         msg = await ctx.user.send(
             f"Du hast aktuell {len(plan.plans)} aktive Pi Pläne:",
             embeds=plan.get_embeds(),

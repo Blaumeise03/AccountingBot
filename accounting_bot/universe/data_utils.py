@@ -14,7 +14,7 @@ from accounting_bot.config import ConfigTree
 from accounting_bot.exceptions import InputException
 from accounting_bot.universe.models import System
 from accounting_bot.universe.universe_database import UniverseDatabase
-from accounting_bot.utils import wrap_async, resource_order
+from accounting_bot.utils import wrap_async
 
 logger = logging.getLogger("data.utils")
 
@@ -39,7 +39,7 @@ def create_pi_boxplot(constellation_name: str,
         else:
             data[r["res"]] = [r["out"] / res_max[r["res"]]]
     # noinspection PyTypeChecker
-    data = collections.OrderedDict(sorted(data.items(), key=lambda x: resource_order.index(x[0])))
+    data = collections.OrderedDict(sorted(data.items(), key=lambda x: utils.resource_order.index(x[0])))
     data_keys = list(data)
     data_values = list(data.values())
     # noinspection PyPep8Naming

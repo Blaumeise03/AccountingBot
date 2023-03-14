@@ -6,14 +6,14 @@ import sys
 from asyncio import AbstractEventLoop
 from datetime import datetime
 from threading import Thread
-from typing import Any
+from typing import Any, List, Callable
 
 import discord
 import mariadb
 import pytesseract.pytesseract
 from discord import ActivityType, Message, DMChannel, ApplicationContext
 from discord.ext import commands, tasks
-from discord.ext.commands import CommandOnCooldown
+from discord.ext.commands import CommandOnCooldown, CheckFailure
 from dotenv import load_dotenv
 
 import accounting_bot.commands
@@ -51,6 +51,10 @@ discord_handler.setFormatter(formatter)
 logger.addHandler(discord_handler)
 # Root logger
 logger.setLevel(logging.INFO)
+SILENT_EXCEPTIONS = [
+    CommandOnCooldown, InputException, commands.NoPrivateMessage, commands.NotOwner, commands.PrivateMessageOnly,
+    CheckFailure
+]
 
 
 class BotState:
@@ -58,6 +62,23 @@ class BotState:
         self.state = State.online
         self.ocr = False
         self.bot = None  # type: commands.Bot | None
+        self.config = None  # type: Config | None
+        self.guild = -1
+        self.owner = -1
+        self.admins = []  # type: List[int]
+        self.reloadFuncs = []  # type: List[Callable[[BotState], None]]
+        self.user_role = None  # type: int | None
+        self.db_connector = None  # type: DatabaseConnector | None
+
+    def reload(self):
+        self.guild = self.config["server"]
+        self.owner = self.config["owner"]
+        self.admins = self.config["admins"]
+        self.user_role = self.config["user_role"]
+        if self.user_role is None:
+            logger.warning("User role is not defined, all users will be allowed to execute the commands")
+        for func in self.reloadFuncs:
+            func(self)
 
     def is_online(self):
         return self.state.value >= State.online.value
@@ -126,6 +147,7 @@ config_structure = {
 config = Config("config.json", ConfigTree(config_structure))
 config.load_config()
 config.save_config()
+STATE.config = config
 logging.info("Config loaded")
 ACCOUNTING_LOG = config["logChannel"]
 KILLMAIL_CHANNEL = config["killmail_parser.channel"]
@@ -136,7 +158,7 @@ if KILLMAIL_CHANNEL is None:
 if config["killmail_parser.field_id"] == "":
     logger.warning("Killmail format is not specified, automated killmail parsing will be disabled")
 
-CONNECTOR = DatabaseConnector(
+STATE.db_connector = DatabaseConnector(
     username=config["db.user"],
     password=config["db.password"],
     port=config["db.port"],
@@ -152,7 +174,6 @@ data_utils.db = UniverseDatabase(
 )
 data_utils.killmail_config = config["killmail_parser"]
 data_utils.killmail_admins = config["killmail_parser.admins"]
-utils.resource_order = config["project_resources"]
 
 try:
     if config["pytesseract_cmd_path"] != "N/A":
@@ -178,19 +199,23 @@ intents.members = True
 bot = commands.Bot(
     command_prefix=config["prefix"],
     intents=intents,
-    debug_guilds=[config["test_server"], config["server"]],
-    help_command=None
+    # debug_guilds=[config["test_server"], config["server"]],
+    help_command=None,
+    owner_id=config["owner"]
 )
 STATE.bot = bot
 
-accounting.set_up(config, CONNECTOR, bot, STATE)
-utils.set_config(config, bot)
-projects.STATE = STATE
+STATE.reloadFuncs.append(accounting.setup)
+STATE.reloadFuncs.append(utils.setup)
+STATE.reloadFuncs.append(projects.setup)
+STATE.reloadFuncs.append(accounting_bot.commands.setup)
 
 bot.add_cog(HelpCommand(STATE))
-bot.add_cog(BaseCommands(config, CONNECTOR, STATE))
+bot.add_cog(BaseCommands(STATE))
 bot.add_cog(projects.ProjectCommands(bot, config["admins"], config["owner"], config["server"], config["user_role"]))
 bot.add_cog(UniverseCommands(STATE))
+
+STATE.reload()
 
 
 # noinspection PyUnusedLocal
@@ -254,28 +279,28 @@ async def on_application_command_error(ctx: ApplicationContext, err):
     :param err:   the error that occurred
     """
     silent = False
-    # Don't log command rate limit errors, but send a response to the interaction
-    if isinstance(err, CommandOnCooldown) or isinstance(err, InputException):
-        silent = True
+    for cls in SILENT_EXCEPTIONS:
+        if isinstance(err, cls):
+            silent = True
+            break
     location = accounting_bot.commands.get_cmd_name(ctx.command)
     if location is not None:
         location = "command " + location
-    if not silent:
-        log_error(logging.getLogger(), err, location=location, ctx=ctx)
+    log_error(logging.getLogger(), err, location=location, ctx=ctx, minimal=silent)
     await send_exception(err, ctx)
 
 
 @bot.event
 async def on_command_error(ctx: commands.Context, err: commands.CommandError):
     silent = False
-    # Don't log command rate limit errors, but send a response to the interaction
-    if isinstance(err, CommandOnCooldown) or isinstance(err, InputException):
-        silent = True
+    for cls in SILENT_EXCEPTIONS:
+        if isinstance(err, cls):
+            silent = True
+            break
     location = get_cmd_name(ctx.command)
     if location is not None:
         location = "prefixed command " + location
-    if not silent:
-        log_error(logging.getLogger(), err, location=location)
+    log_error(logging.getLogger(), err, location=location, minimal=silent)
     await send_exception(err, ctx)
 
 
@@ -303,7 +328,7 @@ async def on_ready():
                    embeds=get_menu_embeds(), content="")
 
     # Updating shortcut menus
-    shortcuts = CONNECTOR.get_shortcuts()
+    shortcuts = STATE.db_connector.get_shortcuts()
     logging.info(f"Found {len(shortcuts)} shortcut menus")
     for (m, c) in shortcuts:
         chan = bot.get_channel(c)
@@ -315,7 +340,7 @@ async def on_ready():
                            embed=accounting.EMBED_MENU_SHORTCUT, content="")
         except discord.errors.NotFound:
             logging.warning(f"Message {m} in channel {c} not found, deleting it from DB")
-            CONNECTOR.delete_shortcut(m)
+            STATE.db_connector.delete_shortcut(m)
 
     # Basic setup completed, bot is operational
     STATE.state = State.online
@@ -330,18 +355,18 @@ async def on_ready():
         market_loop.start()
     # Updating unverified accountinglog entries
     logging.info("Setting up unverified accounting log entries")
-    unverified = CONNECTOR.get_unverified()
+    unverified = STATE.db_connector.get_unverified()
     logging.info(f"Found {len(unverified)} unverified message(s)")
     for m in unverified:
         try:
             msg = await accounting_log.fetch_message(m)
         except discord.errors.NotFound:
-            CONNECTOR.delete(m)
+            STATE.db_connector.delete(m)
             continue
         if msg.content.startswith("Verifiziert von"):
             logging.warning(f"Transaction already verified but not inside database: %s: %s",
                             msg.id, msg.content)
-            CONNECTOR.set_verification(m, 1)
+            STATE.db_connector.set_verification(m, 1)
             continue
         v = False  # Was transaction verified while the bot was offline?
         user = None  # User ID who verified the message
@@ -432,7 +457,7 @@ async def on_application_command(ctx: ApplicationContext):
                 cmd_name,
                 ctx.user.name,
                 ctx.user.id,
-                ctx.channel.id)
+                ctx.channel.id if not isinstance(ctx.channel, DMChannel) else "DM")
 
 
 @bot.event
@@ -467,7 +492,7 @@ async def run_bot():
     except Exception as e:
         logging.critical("Bot crashed", e)
         STATE.state = State.offline
-        await utils.terminate_bot(CONNECTOR)
+        await utils.terminate_bot(STATE.db_connector)
 
 
 async def main():
@@ -480,7 +505,7 @@ async def kill_bot(signum):
     """
     STATE.state = State.terminated
     logging.critical("Received signal %s, stopping bot", signal.Signals(signum).name)
-    await utils.terminate_bot(CONNECTOR)
+    await utils.terminate_bot(STATE.db_connector)
 
 
 @tasks.loop(seconds=1.0)
@@ -491,7 +516,7 @@ async def kill_loop():
     """
     kill_loop.stop()
     logging.critical("Stopping bot")
-    await utils.terminate_bot(CONNECTOR)
+    await utils.terminate_bot(STATE.db_connector)
 
 
 def kill_bot_sync(signum, frame):
