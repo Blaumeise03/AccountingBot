@@ -307,7 +307,14 @@ async def on_command_error(ctx: commands.Context, err: commands.CommandError):
 @bot.event
 async def on_ready():
     logging.info("Logged in!")
-
+    guilds = await bot.fetch_guilds().flatten()
+    guild_msg = ""
+    for guild in guilds:
+        if guild.id != config["server"] and guild.id != config["test_server"]:
+            logging.warning("Bot is in unknown guild: %s:%s, owner %s:%s",
+                            guild.id, guild.name, guild.owner.name, guild.owner.id)
+        guild_msg += f"'{guild.name}', "
+    logger.info("Bot is in %s guilds: %s", len(guilds), utils.rchop(guild_msg, ", "))
     logging.info("Setting up channels...")
     # Basic setup
     if config["menuChannel"] == -1:

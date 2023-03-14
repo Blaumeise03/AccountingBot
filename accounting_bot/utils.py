@@ -16,7 +16,7 @@ from typing import Union, Tuple, Optional, TYPE_CHECKING, Type, List, Callable, 
 
 import cv2
 import discord
-from discord import Interaction, ApplicationContext, InteractionResponded, ActivityType, Member
+from discord import Interaction, ApplicationContext, InteractionResponded, ActivityType, Member, DMChannel
 from discord.ext import commands
 from discord.ext.commands import Bot, Context, Command, CheckFailure
 from discord.ui import View, Modal, Item
@@ -163,7 +163,7 @@ def log_error(logger: logging.Logger,
               ctx: Union[ApplicationContext, Interaction, Context] = None,
               minimal: bool = False):
     location = location if type(location) == str else f"class {location.__name__}" if location else None
-    if error and error.__class__ == discord.errors.NotFound:
+    if error and error.__class__ == discord.errors.NotFound and ("Unknown interaction" in str(error)):
         logger.warning("discord.errors.NotFound Error at %s: %s", location, str(error))
         return
 
@@ -204,9 +204,9 @@ def log_error(logger: logging.Logger,
 
 async def send_exception(error: Exception, ctx: Union[ApplicationContext, Context, Interaction]):
     location = get_error_location(ctx)
+    ignore = False
     if isinstance(error, discord.NotFound):
-        logger.info("Ignoring NotFound error caused by %s", location)
-        return
+        ignore = True
 
     if isinstance(ctx, Context):
         try:
@@ -217,10 +217,16 @@ async def send_exception(error: Exception, ctx: Union[ApplicationContext, Contex
     err_msg = get_user_error_msg(error)
     try:
         try:
-            # Defer interaction to ensure we can use a followup
-            await ctx.response.defer(ephemeral=True, invisible=False)
+            if isinstance(error, LoggedException):
+                # Append additional log
+                await ctx.followup.send(err_msg, file=string_to_file(error.get_log()), ephemeral=True)
+            else:
+                await ctx.followup.send(err_msg, ephemeral=True)
         except InteractionResponded:
             pass
+        if ignore:
+            logger.info("Ignoring NotFound error caused by %s", location)
+            return
         if isinstance(error, LoggedException):
             # Append additional log
             await ctx.followup.send(err_msg, file=string_to_file(error.get_log()), ephemeral=True)
@@ -405,10 +411,24 @@ def user_only() -> Callable[[_T], _T]:
                 raise ConfigException(f"Guild with id {STATE.guild} not found")
             user = guild.get_member(ctx.user.id)
             if user is None:
-                user = await guild.fetch_member(ctx.user.id)
+                try:
+                    user = await guild.fetch_member(ctx.user.id)
+                except discord.errors.NotFound:
+                    pass
             if user is not None and user.get_role(STATE.user_role) is not None:
                 is_user = True
         if not is_admin and not is_user:
+            if isinstance(ctx.channel, DMChannel):
+                location = "DMChannel"
+            else:
+                c_name = ctx.channel.name if hasattr(ctx.channel, "name") else str(ctx.channel.type)
+                location = f"channel {ctx.channel.id}:'{c_name}' in guild "
+                if ctx.guild is None:
+                    location += "N/A"
+                else:
+                    location += f"{ctx.guild.name}:{ctx.guild.id}"
+            logger.warning("Unauthorized access attempt for command %s by user %s:%s in %s",
+                           get_cmd_name(ctx.command), ctx.user.name, ctx.user.id, location)
             raise CheckFailure("Can't execute command")\
                 from NoPermissionsException("Only users with the member role may use this command")
         return True
