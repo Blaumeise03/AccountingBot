@@ -227,7 +227,7 @@ async def add_transaction(transaction: 'Transaction') -> None:
 async def load_wallets(force=False, validate=False):
     global wallets, investments, wallets_last_reload
     t = time.time()
-    if (t - wallets_last_reload) < 60 * 60 * 5 and not force:
+    if (t - wallets_last_reload) < 60 * 60 and not force:
         return
     async with wallet_lock:
         wallets_last_reload = t
