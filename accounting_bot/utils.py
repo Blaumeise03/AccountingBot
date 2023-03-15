@@ -513,7 +513,14 @@ class Item(object):
             if len(quantity) == 0:
                 continue
             item = item.strip()
-            items.append(Item(item, int(quantity)))
+            found = False
+            for i in items:
+                if i.name == item:
+                    i.amount += int(quantity)
+                    found = True
+                    break
+            if not found:
+                items.append(Item(item, int(quantity)))
         Item.sort_list(items, resource_order)
         return items
 
