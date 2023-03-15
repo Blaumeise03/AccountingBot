@@ -220,19 +220,18 @@ async def send_exception(error: Exception, ctx: Union[ApplicationContext, Contex
         try:
             if isinstance(error, LoggedException):
                 # Append additional log
+                await ctx.response.send_message(err_msg, file=string_to_file(error.get_log()), ephemeral=True)
+            else:
+                await ctx.response.send_message(err_msg, ephemeral=True)
+        except InteractionResponded:
+            if ignore:
+                logger.info("Ignoring NotFound error caused by %s", location)
+                return
+            if isinstance(error, LoggedException):
+                # Append additional log
                 await ctx.followup.send(err_msg, file=string_to_file(error.get_log()), ephemeral=True)
             else:
                 await ctx.followup.send(err_msg, ephemeral=True)
-        except InteractionResponded:
-            pass
-        if ignore:
-            logger.info("Ignoring NotFound error caused by %s", location)
-            return
-        if isinstance(error, LoggedException):
-            # Append additional log
-            await ctx.followup.send(err_msg, file=string_to_file(error.get_log()), ephemeral=True)
-        else:
-            await ctx.followup.send(err_msg, ephemeral=True)
     except discord.NotFound:
         try:
             await ctx.user.send(err_msg)
