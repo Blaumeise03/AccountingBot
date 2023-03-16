@@ -8,8 +8,7 @@ images/
 # (https://developers.eveonline.com/resource), however this data is unprocessed
 # On the UNIWIKI the data is available as prepared .csv files
 # (https://wiki.eveuniversity.org/Static_Data_Export)
-resources/map*.csv
-resources/*.eve.csv
+resources/eve_data
 
 *.ignore.py
 

@@ -202,7 +202,7 @@ if __name__ == '__main__':
             main_generate_map()
             exit(0)
         elif inp == "frp".casefold():
-            load_frp_csv("resources/frpStatistic.eve.csv")
+            load_frp_csv("resources/eve_data/frpStatistic.eve.csv")
             exit(0)
         elif inp == "help".casefold():
             print("pi: Find pi in a constellation")

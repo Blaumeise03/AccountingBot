@@ -24,6 +24,7 @@ from accounting_bot.config import Config, ConfigTree
 from accounting_bot.database import DatabaseConnector
 from accounting_bot.discordLogger import PycordHandler
 from accounting_bot.exceptions import InputException
+from accounting_bot.localisation import LocalisationHandler
 from accounting_bot.universe import data_utils, pi_planer
 from accounting_bot.universe.universe_database import UniverseDatabase
 from accounting_bot.utils import log_error, State, send_exception, get_cmd_name
@@ -216,6 +217,16 @@ bot.add_cog(projects.ProjectCommands(bot, config["admins"], config["owner"], con
 bot.add_cog(UniverseCommands(STATE))
 
 STATE.reload()
+
+
+# noinspection PyUnusedLocal
+def get_locale(ctx: commands.Context):
+    return "de"
+
+
+localisation = LocalisationHandler()
+localisation.load_from_xml("resources/translations.xml")
+localisation.init_bot(bot, get_locale)
 
 
 # noinspection PyUnusedLocal

@@ -16,9 +16,10 @@ from typing import Union, Tuple, Optional, TYPE_CHECKING, Type, List, Callable, 
 
 import cv2
 import discord
-from discord import Interaction, ApplicationContext, InteractionResponded, ActivityType, Member, DMChannel
+from discord import Interaction, ApplicationContext, InteractionResponded, ActivityType, Member, DMChannel, \
+    ApplicationCommand
 from discord.ext import commands
-from discord.ext.commands import Bot, Context, Command, CheckFailure
+from discord.ext.commands import Bot, Context, Command, CheckFailure, NotOwner
 from discord.ui import View, Modal, Item
 from numpy import ndarray
 
@@ -383,6 +384,7 @@ class CmdAnnotation(Enum):
     owner = "Owner only"
     main_guild = "Main Server only"
     user = "Members only"
+    guild = "Guild only"
 
     @staticmethod
     def annotate_cmd(func: Callable, annotation: "CmdAnnotation"):
@@ -401,7 +403,7 @@ class CmdAnnotation(Enum):
         return rchop(msg, ", ")
 
 
-def help_info(value: str = ""):
+def help_info(value: str = "", options: Dict[str, str] = None):
     def _callback(func: Callable):
         help_infos[func] = value
         return func
@@ -483,6 +485,30 @@ def main_guild_only() -> Callable[[_T], _T]:
         CmdAnnotation.annotate_cmd(func, CmdAnnotation.main_guild)
         return commands.check(predicate)(func)
     return decorator
+
+
+def owner_only() -> Callable[[_T], _T]:
+    def decorator(func):
+        async def predicate(ctx: Context) -> bool:
+            if not await ctx.bot.is_owner(ctx.author):
+                raise NotOwner("You do not own this bot.")
+            return True
+
+        CmdAnnotation.annotate_cmd(func, CmdAnnotation.owner)
+        return commands.check(predicate)(func)
+    return decorator
+
+
+def guild_only() -> Callable:
+    def inner(command: Callable):
+        if isinstance(command, ApplicationCommand):
+            command.guild_only = True
+            CmdAnnotation.annotate_cmd(command.callback, CmdAnnotation.guild)
+        else:
+            command.__guild_only__ = True
+            CmdAnnotation.annotate_cmd(command, CmdAnnotation.guild)
+        return command
+    return inner
 
 
 class Item(object):
