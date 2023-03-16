@@ -4,9 +4,8 @@ import logging
 from typing import TYPE_CHECKING, Optional, Callable, List, Union
 
 import discord
-from discord import Option, User, ApplicationContext, AutocompleteContext, option, Role, SlashCommand, \
-    SlashCommandGroup, DMChannel
-from discord.commands import _BaseCommand
+from discord import User, ApplicationContext, AutocompleteContext, option, Role, SlashCommand, \
+    SlashCommandGroup, DMChannel, MessageCommand, ContextMenuCommand, UserCommand
 from discord.ext import commands
 from discord.ext.commands import Context, Command
 from discord.ui import InputText
@@ -45,7 +44,7 @@ def setup(state: "BotState"):
 def get_cmd_help(cmd: Union[Callable, Command], opt: str = None, long=False, fallback=None):
     callback = cmd
     cmd_name = None
-    if isinstance(cmd, (Command, SlashCommand, _BaseCommand)):
+    if isinstance(cmd, (Command, SlashCommand, ContextMenuCommand)):
         cmd_name = get_cmd_name(cmd).replace(" ", "_")
         callback = cmd.callback
     elif cmd not in help_infos:
@@ -55,13 +54,19 @@ def get_cmd_help(cmd: Union[Callable, Command], opt: str = None, long=False, fal
         cmd_name = help_infos[callback]
 
     result = None
-    short = "_long" if long else ""
+    extra = "_long" if long else ""
     if opt is None:
-        result = t_(f"help_{cmd_name}{short}", raise_not_found=False)
+        result = t_(f"help_{cmd_name}{extra}", raise_not_found=False)
+        if result is None:
+            result = t_(f"help_{cmd_name}", raise_not_found=False)
     if result is None and opt is not None:
-        result = t_(f"help_{cmd_name}_{opt}{short}", raise_not_found=False)
-    if result is None and opt is not None:
-        result = t_(f"opt_{opt}{short}", raise_not_found=False)
+        result = t_(f"help_{cmd_name}_{opt}{extra}", raise_not_found=False)
+        if result is None:
+            result = t_(f"help_{cmd_name}_{opt}", raise_not_found=False)
+        if result is None:
+            result = t_(f"opt_{opt}{extra}", raise_not_found=False)
+            if result is None:
+                result = t_(f"opt_{opt}", raise_not_found=False)
     if result is None:
         return fallback
     return result
@@ -102,14 +107,17 @@ class HelpCommand(commands.Cog):
 
     @staticmethod
     def get_cog_embed(cog: commands.Cog):
-        emb = discord.Embed(title=t_("emb_help_cog_title").format(cog_name=cog.__cog_name__), color=discord.Color.red(),
+        emb = discord.Embed(title=t_("help_about").format(cog.__cog_name__), color=discord.Color.red(),
                             description=t_("emb_help_cog_desc"))
         for cmd in cog.walk_commands():
             cmd_name = get_cmd_name(cmd)
             cmd_desc = get_cmd_help(cmd, fallback=cmd.description)
             cmd_details = CmdAnnotation.get_cmd_details(cmd.callback)
+            extra = ""
+            if isinstance(cmd, ContextMenuCommand):
+                extra = t_("ctx_command") + ". "
             if cmd_details is not None:
-                cmd_desc = f"*{cmd_details}*\n{cmd_desc}\n"
+                cmd_desc = f"*{cmd_details}*\n{extra}{cmd_desc}\n"
             if isinstance(cmd, SlashCommand):
                 if len(cmd.options) > 0:
                     cmd_desc += f" *{t_('parameter')}*:\n"
@@ -124,13 +132,17 @@ class HelpCommand(commands.Cog):
     @staticmethod
     def get_command_embed(command: commands.Command):
         description = get_cmd_help(command, long=True, fallback=command.description)
-        if description is None or len(command.description) == 0:
+        if description is None or len(description) == 0:
             description = t_("no_desc_available")
         cmd_details = CmdAnnotation.get_cmd_details(command.callback)
         if cmd_details is not None:
             description = f"*{t_('restrictions')}*: *{cmd_details}*\n{description}"
         emb = discord.Embed(title=t_("help_about").format(get_cmd_name(command)), color=discord.Color.red(),
                             description=description)
+        if isinstance(command, MessageCommand):
+            description += "\n" + t_("ctx_command_info").format(t_("message"))
+        elif isinstance(command, UserCommand):
+            description += "\n" + t_("ctx_command_info").format(t_("user"))
         if isinstance(command, SlashCommand):
             if len(command.options) > 0:
                 description += f"\n\n**{t_('parameter')}**:"

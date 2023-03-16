@@ -6,7 +6,7 @@
     </help>
     <help_about>
         <en>Help about `{}`</en>
-        <en>Hilfe zu `{}`</en>
+        <de>Hilfe zu `{}`</de>
     </help_about>
     <restrictions>
         <en>Restrictions</en>
@@ -33,19 +33,29 @@
         <de>Keine Beschreibung verfügbar</de>
     </no_desc_available>
     <cmd_not_found>
-        <en>
-            Command/Modul `{selection}` not found. Use `/help` to see a list of all commands. Use the `selection` parameter to select a modul or command.
-        </en>
+        <en>Command/Modul `{selection}` not found. Use `/help` to see a list of all commands. Use the `selection` parameter to select a modul or command.</en>
         <de>Befehl/Modul `{selection}` nicht gefunden. Nutze `/help`, um eine Liste aller Befehle zu sehen. Mit dem `selection` Parameter lässt sich ein Modul oder ein Befehl auswählen.</de>
     </cmd_not_found>
+    <ctx_command>
+        <en>Context-menu command</en>
+        <de>Kontext-Menü Befehl</de>
+    </ctx_command>
+    <ctx_command_info>
+        <en>Right-click on a {} and select the command from the `Apps` category to use it.</en>
+        <de>Rechtsklicke zum Verwenden auf eine {} und wähle den Befehl aus der Kategorie `Apps` aus.</de>
+    </ctx_command_info>
+    <message>
+        <en>message</en>
+        <de>Nachricht</de>
+    </message>
+    <user>
+        <en>user</en>
+        <de>Nutzer</de>
+    </user>
     <emb_help_general_desc>
         <en>Enter `/help &lt;command&gt;` or `/help &lt;modul&gt;` for more information</en>
         <de>Gib `/help &lt;Befehl&gt;` oder `/help &lt;Modul&gt;` ein für weitere Informationen</de>
     </emb_help_general_desc>
-    <emb_help_cog_title>
-        <en>Help about {cog_name}</en>
-        <de>Hilfe zu {cog_name}</de>
-    </emb_help_cog_title>
     <emb_help_cog_desc>
         <en>
 Enter `/help &lt;Befehl>` or `/help &lt;Modul>` for more information.
@@ -180,19 +190,15 @@ Verfügbare Befehle:
         <de>Überträgt die Killmails in das Google Sheet. Dazu ist die erste Killmail ID und die letzte ID aus dem Monat nötig (da die Killmail IDs chronologisch vergeben werden). Zusätzlich kann der Monat (als Zahl) angegeben werden, um Killmails zu finden, die in diesem Monat gepostet wurden aber außerhalb des spezifizierten Bereichs liegen. Mit der `autofix` Option sucht der Bot zu Killmails ohne IDs im Sheet, die entsprechende Killmail ID raus (anhand Spielername und Wert).</de>
     </help_save_killmails_long>
     <help_Add_Tackle>
-        <en>Context-menu command, adds a tackler to a Killmail</en>
-        <de>Kontext-Menü Befehl, fügt einen Tackler zu einer Killmail hinzu</de>
+        <en>Adds a tackler to a Killmail</en>
+        <de>Fügt einen Tackler zu einer Killmail hinzu</de>
     </help_Add_Tackle>
     <help_Add_Tackle_long>
-        <en>Context-menu command. Adds a tackler/logi to a killmail. Right-click on a message containing a killmail embed and select the command from the `Apps` category.</en>
-        <de>Kontext-Menü Befehl. Fügt einen Tackler/Logi zu einer Killmail hinzu. Klicke dazu mit einem Rechtsklick auf die Nachricht mit dem Embed der Killmail und wähle den Befehl aus der Kategorie `Apps` aus.</de>
+        <en>Adds a tackler/logi to a killmail. Must be used on a message containing a killmail embed.</en>
+        <de>Fügt einen Tackler/Logi zu einer Killmail hinzu. Muss auf einer Nachricht mit einem Killmail Embed angewendet werden.</de>
     </help_Add_Tackle_long>
     <help_Show_Bounties>
-        <en>Context-menu command, shows details about a killmail</en>
-        <de>Kontext-Menü Befehl, zeigt Details über eine Killmail</de>
+        <en>Shows details about a killmail</en>
+        <de>Zeigt Details über eine Killmail</de>
     </help_Show_Bounties>
-    <help_Show_Bounties_long>
-        <en>Context-menu command. Show details about a killmail. Right-click on a message containing a killmail embed and select the command from the `Apps` category.</en>
-        <de>Kontext-Menü Befehl. Zeigt Details über eine Killmail. Klicke dazu mit einem Rechtsklick auf die Nachricht mit dem Embed der Killmail und wähle den Befehl aus der Kategorie `Apps` aus.</de>
-    </help_Show_Bounties_long>
 </translations>

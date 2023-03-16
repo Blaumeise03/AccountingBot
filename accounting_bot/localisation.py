@@ -45,6 +45,8 @@ class LocalisationHandler(object):
             lang_dict = xmltodict.parse(file, encoding="UTF-8")
         for key, translations in lang_dict["translations"].items():
             for lang, value in translations.items():
+                if type(value) != str:
+                    raise LocalizationException(f"Value for {lang}:{key} is not a string, got {type(value)}:{value}")
                 self._add_translation(key, lang, value)
         logger.info("Localisation data loaded")
 
