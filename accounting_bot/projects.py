@@ -53,7 +53,6 @@ class ProjectCommands(commands.Cog):
     @cooldown(1, 5, commands.BucketType.default)
     @admin_only()
     @online_only()
-    @help_info("Lädt alle Projekte aus dem Sheet neu, dies dauert einige Sekunden.")
     async def load_projects(self, ctx: discord.commands.context.ApplicationContext,
                             silent: Option(bool, "Execute command silently", required=False, default=True)):
         await ctx.response.defer(ephemeral=True)
@@ -68,7 +67,6 @@ class ProjectCommands(commands.Cog):
             string_to_file(res, "project_list.txt")], ephemeral=silent)
 
     @commands.slash_command(name="listprojects", description="Lists all projects")
-    @help_info("Listet alle Projekte auf ohne das Sheet neu zuladen.")
     @user_only()
     async def list_projects(self, ctx: ApplicationContext,
                             silent: Option(bool, "Execute command silently", required=False, default=True)):
@@ -80,9 +78,6 @@ class ProjectCommands(commands.Cog):
         await ctx.respond("Projektliste:", file=string_to_file(res, "project_list.txt"), ephemeral=silent)
 
     @commands.slash_command(name="insertinvestment", description="Saves an investment into the sheet")
-    @help_info("Verteilt einen Investitionsvertrag automatisch auf die Projekte auf. Mit `priority_project` lassen "
-               "sich Projekte angeben (getrennt durch Semikolons `;`, absteigende Reihenfolge), die Priorisiert "
-               "werden sollen (Case-Sensitive).")
     @option("skip_loading", description="Skip the reloading of the projects", required=False, default=False)
     @option("priority_project", required=False, default="",
             description="Prioritize this project, or multiple separated by a semicolon (;)")
@@ -100,7 +95,6 @@ class ProjectCommands(commands.Cog):
         await ctx.response.send_modal(ListModal(skip_loading, priority_projects))
 
     @commands.slash_command(name="splitoverflow", description="Splits the overflow onto the projects")
-    @help_info("Verteilt den Überlauf automatisch auf die Projekte auf.")
     @commands.cooldown(1, 5, commands.BucketType.default)
     @admin_only()
     async def split_overflow(self, ctx: ApplicationContext):

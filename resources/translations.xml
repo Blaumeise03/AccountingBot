@@ -70,6 +70,10 @@ Bei den Befehlsdetails werden optionale Parameter mit `&lt;Name: Type>` und verp
 Verfügbare Befehle:
         </de>
     </emb_help_cog_desc>
+    <opt_silent>
+        <en>Execute the command silently (invisible for others)</en>
+        <de>Führt den Befehl leise aus (unsichtbar für andere)</de>
+    </opt_silent>
     <help_help_long>
         <en>Shows the help for all available commands. Use the `selection` parameter to select a specific modul or command to gain more detailed information about it.</en>
         <de>Zeigt eine Hilfe zu allen verfügbaren Befehlen an. Mit dem `selection` Parameter lässt sich ein Modul oder ein Befehl auswählen, um detailliertere Informationen zu erhalten.</de>
@@ -201,4 +205,112 @@ Verfügbare Befehle:
         <en>Shows details about a killmail</en>
         <de>Zeigt Details über eine Killmail</de>
     </help_Show_Bounties>
+    <help_pi_stats>
+        <en>View statistical data for pi in a selected constellation</en>
+        <de>Zeigt eine Statistik der pi einer Konstellation</de>
+    </help_pi_stats>
+    <help_pi_stats_long>
+        <en>Creates a boxplot about the efficiency of all pi planets of the constellation. The planets get compared to the best planet in New Eden or to the best planet in the selected regions.</en>
+        <de>Erzeugt einen Boxplot über die Effizienz alle pi Planeten der Konstellation. Die Planeten werden mit dem besten Planeten in New Eden, oder in den ausgewählten Regionen, verglichen.</de>
+    </help_pi_stats_long>
+    <help_pi_stats_const>
+        <en>The targeted constellation</en>
+        <de>Die gewünschte Konstellation</de>
+    </help_pi_stats_const>
+    <help_pi_stats_compare_regions>
+        <en>The regions to compare the constellation against</en>
+        <de>Die Regionen, gegen die die Konstellation verglichen werden soll</de>
+    </help_pi_stats_compare_regions>
+    <help_pi_stats_compare_regions_long>
+        <en>The regions to compare the constellation against, the efficiency of the planets will be calculated in percent compared to the best Planet in these Regions. If no regions specified, the best planet in New Eden will be used.</en>
+        <de>Die Regionen, gegen die die Konstellation verglichen werden soll. Die Effizienz der Planeten wird als Prozent im Vergleich zum besten Planeten in diesen Regionen berechnet. Wenn keine Regionen ausgewählt werden, wird der beste Planet in New Eden verwendet.</de>
+    </help_pi_stats_compare_regions_long>
+    <help_pi_stats_vertical>
+        <en>If set to true, the boxplot will be vertical instead</en>
+        <de>Wenn auf true gesetzt, wird ein vertikaler Boxplot erzeugt</de>
+    </help_pi_stats_vertical>
+    <help_pi_find>
+        <en>Returns a list with the best planets for selected pi</en>
+        <de>Liefert eine Liste mit dem besten Planeten für ausgewählte pi</de>
+    </help_pi_find>
+    <help_pi_find_long>
+        <en>
+            Searches the best planets for the given resource. There are two modi:
+*Constellation*-wise: If a constellation is given for `const_sys`, the planets will be searched within this constellation.
+*System + distance*-wise: If a system is given (and an additional `distance`), the planets will be searched within the range of this system.
+        </en>
+        <de>
+            Sucht die besten Planeten für eine angegebene Ressource. Es gibt zwei Suchmodi:
+Nach *Konstellation*: Wenn für `const_sys` eine Konstellation angegeben wurde, werden Planeten innerhalb dieser Konstellation gesucht.
+Nach *System + Distanz*: Wenn stattdessen ein System für `const_sys` angegeben wurde, werden Planeten innerhalb von `distance` Jumps zu diesem System gesucht.
+        </de>
+    </help_pi_find_long>
+    <help_pi_find_const_sys>
+        <en>The constellation or origin system</en>
+        <de>Die Konstellation oder das Ausgangssystem</de>
+    </help_pi_find_const_sys>
+    <help_pi_find_resource>
+        <en>The targeted resource</en>
+        <de>Die gesuchte Ressource</de>
+    </help_pi_find_resource>
+    <help_pi_find_distance>
+        <en>The distance from the origin system</en>
+        <de>Die Distanz zum Ausgangssystem</de>
+    </help_pi_find_distance>
+    <help_pi_find_amount>
+        <en>The Number of planets to return</en>
+        <de>Die Anzahl der zu suchenden Planeten</de>
+    </help_pi_find_amount>
+    <help_pi_planer>
+        <en>Opens the pi planer to manage your planets</en>
+        <de>Öffnet deinen Pi-Planer um deine Planeten zu verwalten</de>
+    </help_pi_planer>
+    <help_pi_planer_long>
+        <en>Opens the pi planer via direct message. It can be used to plan the pi production, for more information open the planer and press ❓.</en>
+        <de>Öffnet den Pi-Planer per Direktnachricht. Mit ihm kann die Pi-Produktion geplant sein, für weitere Informationen öffne den Pi-Planer und klicke auf ❓.</de>
+    </help_pi_planer_long>
+    <help_loadprojects>
+        <en>Loads and list all projects</en>
+        <de>Lädt und listet alle Projekte auf</de>
+    </help_loadprojects>
+    <help_loadprojects_long>
+        <en>Reloads all projects from the sheet, this takes a couple of seconds.</en>
+        <de>Lädt alle Projekte aus dem Sheet neu, dies dauert einige Sekunden.</de>
+    </help_loadprojects_long>
+    <help_listprojects>
+        <en>Lists all projects</en>
+        <de>Listet alle Projekte auf</de>
+    </help_listprojects>
+    <help_listprojects_long>
+        <en>Lists all projects without reloading them from the sheet.</en>
+        <de>Listet alle Projekte auf ohne das Sheet neu zuladen.</de>
+    </help_listprojects_long>
+    <help_insertinvestment>
+        <en>Saves an investment into the sheet</en>
+        <de>Speichert eine Investition ins Sheet</de>
+    </help_insertinvestment>
+    <help_insertinvestment_long>
+        <en>Splits an investment contract automatically onto the projects.</en>
+        <de>Verteilt einen Investitionsvertrag automatisch auf die Projekte auf.</de>
+    </help_insertinvestment_long>
+    <help_insertinvestment_skip_loading>
+        <en>Skip the reloading of the projects from the sheet</en>
+        <de>Überspringt das Neuladen der Projekte aus dem Sheet</de>
+    </help_insertinvestment_skip_loading>
+    <help_insertinvestment_pritority_project>
+        <en>Prioritize these projects, separated by a semicolon (;)</en>
+        <de>Priorisiert diese Projekte, getrennt durch ein Semikolon (;)</de>
+    </help_insertinvestment_pritority_project>
+    <help_insertinvestment_pritority_project_long>
+        <en>Prioritize these projects, separated by a semicolon (;). The names are case-sensitive and the order hast to be descending. If those projects don't need the resources, they will still be split onto the other projects</en>
+        <de>Priorisiert diese Projekte, getrennt durch ein Semikolon (;). Die Groß-/Kleinschreibung ist relevant und die Projekte müssen in absteigender Reihenfolge angegeben werden. Wenn die Projekte nicht den entsprechenden Bedarf haben, werden die Ressourcen ebenfalls auf die anderen Projekte verteilt.</de>
+    </help_insertinvestment_pritority_project_long>
+    <help_splitoverflow>
+        <en>Splits the overflow onto the projects</en>
+        <de>Verteilt den Überlauf auf die Projekte</de>
+    </help_splitoverflow>
+    <help_splitoverflow_long>
+        <en>Splits the overflow automatically onto the projects.</en>
+        <de>Verteilt den Überlauf automatisch auf die Projekte auf.</de>
+    </help_splitoverflow_long>
 </translations>

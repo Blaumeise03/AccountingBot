@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING, Optional, Callable, List, Union
 
 import discord
 from discord import User, ApplicationContext, AutocompleteContext, option, Role, SlashCommand, \
-    SlashCommandGroup, DMChannel, MessageCommand, ContextMenuCommand, UserCommand
+    SlashCommandGroup, DMChannel, MessageCommand, ContextMenuCommand, UserCommand, ChannelType
 from discord.ext import commands
 from discord.ext.commands import Context, Command
 from discord.ui import InputText
@@ -154,7 +154,7 @@ class HelpCommand(commands.Cog):
                               value=f"({t_('optional') if not opt.required else t_('required')}):"
                                     f" `{opt.input_type.name}`\n"
                                     f"Default: `{str(opt.default)}`\n"
-                                    f"{get_cmd_help(cmd, opt.name, fallback=opt.description)}",
+                                    f"{get_cmd_help(command, opt.name, fallback=opt.description)}",
                               inline=False)
         emb.description = description
         return emb
@@ -536,18 +536,16 @@ class UniverseCommands(commands.Cog):
 
     cmd_pi = SlashCommandGroup(name="pi", description="Access planetary production data.")
 
-    @cmd_pi.command(name="stats", description="View statistical data for pi in a selected constellation.")
-    @option(name="const", description="Target Constellation.", type=str, required=True)
-    @option(name="resources", description="List of pi, seperated by ';'.", type=str, required=False)
+    @cmd_pi.command(name="stats", description="View statistical data for pi in a selected constellation")
+    @option(name="const", description="Target Constellation", type=str, required=True)
+    @option(name="resources", description="List of pi, seperated by ';'", type=str, required=False)
     @option(name="compare_regions",
-            description="List of regions, seperated by ';' to compare the selected constellation with.",
+            description="List of regions, seperated by ';' to compare the selected constellation with",
             type=str, required=False)
     @option(name="vertical", description="Create a vertical boxplot (default false)",
             default=False, required=False)
-    @option(name="silent", description="Default false, if set to true, the command will be executed publicly.",
+    @option(name="silent", description="Default false, if set to true, the command will be executed publicly",
             default=True, required=False)
-    @help_info("Zeig die PI Statistik für die ausgewählte Konstellation als Boxplot im Vergleich zum Rest des "
-               "Universums oder der angegebenen Regionen.")
     async def cmd_const_stats(self, ctx: ApplicationContext, const: str, resources: str, compare_regions: str,
                               vertical: bool, silent: bool):
         await ctx.response.defer(ephemeral=silent)
@@ -563,7 +561,7 @@ class UniverseCommands(commands.Cog):
         file = discord.File(arr, "image.jpeg")
         await ctx.followup.send(f"PI Analyse für {const} abgeschlossen:", file=file, ephemeral=silent)
 
-    @cmd_pi.command(name="find", description="Find a list with the best planets for selected pi.")
+    @cmd_pi.command(name="find", description="Returns a list with the best planets for selected pi")
     @option(name="const_sys", description="Target Constellation or origin system", type=str, required=True)
     @option(name="resource", description="Name of pi to search", type=str, required=True)
     @option(name="distance", description="Distance from origin system to look up",
@@ -571,11 +569,6 @@ class UniverseCommands(commands.Cog):
     @option(name="amount", description="Number of planets to return", type=int, required=False, default=None)
     @option(name="silent", description="Default false, if set to true, the command will be executed publicly",
             default=True, required=False)
-    @help_info("Sucht die besten Planet für eine angegebene Ressource. Es gibt zwei Suchmodi:\n"
-               "Nach *Konstellation*: Wenn für `const_sys` eine Konstellation angegeben wurde, werden Planeten "
-               "innerhalb dieser Konstellation gesucht.\nNach *System + Distanz*: Wenn stattdessen ein System für "
-               "`const_sys` angegeben wurde, werden Planeten innerhalb von `distance` Jumps zu diesem System gesucht.\n"
-               "Mit `amount` kann die Anzahl der Ergebnisse eingeschränkt werden.")
     async def cmd_find_pi(self, ctx: ApplicationContext, const_sys: str, resource: str, distance: int, amount: int,
                           silent: bool):
         await ctx.response.defer(ephemeral=True)
@@ -609,13 +602,11 @@ class UniverseCommands(commands.Cog):
                             description="Kein Planet gefunden/ungültige Eingabe" if len(result) == 0 else msg)
         await ctx.followup.send(embed=emb, ephemeral=silent)
 
-    @cmd_pi.command(name="planer", description="Open the pi planer to manage your planets.")
-    @help_info("Öffnet den Pi Planer per Direktnachricht. Mit ihm kann die Pi Produktion geplant sein, für weitere "
-               "Infos öffne den Pi Planer und klicke auf ❓.")
+    @cmd_pi.command(name="planer", description="Opens the pi planer to manage your planets")
     async def cmd_pi_plan(self, ctx: ApplicationContext):
         plan = PiPlanningSession(ctx.user)
         await plan.load_plans()
-        if isinstance(ctx.channel, DMChannel):
+        if ctx.channel.type == ChannelType.private:
             msg = await ctx.response.send_message(
                 f"Du hast aktuell {len(plan.plans)} aktive Pi Pläne:",
                 embeds=plan.get_embeds(),
@@ -628,14 +619,3 @@ class UniverseCommands(commands.Cog):
             view=PiPlanningView(plan))
         plan.message = msg
         await ctx.response.send_message("Überprüfe deine Direktnachrichten", ephemeral=True)
-
-    @commands.command(name="pi", hidden=True)
-    @commands.dm_only()
-    async def cmd_dm_pi_plan(self, ctx: Context):
-        plan = PiPlanningSession(ctx.author)
-        await plan.load_plans()
-        msg = await ctx.send(
-            f"Du hast aktuell {len(plan.plans)} aktive Pi Pläne:",
-            embeds=plan.get_embeds(),
-            view=PiPlanningView(plan))
-        plan.message = msg
