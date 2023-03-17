@@ -5,11 +5,16 @@ from typing import Union, Optional, Tuple, List, Sequence
 import mariadb
 from mariadb import Cursor, Connection
 
+from accounting_bot.utils import shutdown_procedure, ShutdownOrderType
+
 logger = logging.getLogger("database")
+connector = None  # type: DatabaseConnector | None
 
 
 class DatabaseConnector:
     def __init__(self, username: str, password: str, host: str, port: str, database: str) -> None:
+        global connector
+        connector = self
         self.cursor = None  # type: Cursor | None
         self.con = None  # type: Connection | None
         self.username = username
@@ -277,3 +282,11 @@ class DatabaseConnector:
         except mariadb.Error as e:
             logger.error(f"Error while trying to delete a shortcut message: {e}")
             raise e
+
+
+@shutdown_procedure(order=ShutdownOrderType.database)
+def shutdown_db_connector():
+    if connector is None:
+        return
+    logger.warning("Closing SQL connection")
+    connector.con.close()

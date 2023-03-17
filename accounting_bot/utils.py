@@ -13,7 +13,7 @@ from abc import ABC, abstractmethod
 from concurrent.futures import ThreadPoolExecutor
 from enum import Enum
 from os.path import exists
-from typing import Union, Tuple, Optional, TYPE_CHECKING, Type, List, Callable, TypeVar, Dict, Any
+from typing import Union, Tuple, Optional, TYPE_CHECKING, Type, List, Callable, TypeVar, Dict
 
 import cv2
 import discord
@@ -26,7 +26,6 @@ from numpy import ndarray
 
 from accounting_bot import exceptions
 from accounting_bot.config import Config
-from accounting_bot.database import DatabaseConnector
 from accounting_bot.exceptions import LoggedException, NoPermissionsException, BotOfflineException, ConfigException
 
 if TYPE_CHECKING:
@@ -54,6 +53,8 @@ _T = TypeVar("_T")
 help_infos = {}  # type: Dict[Callable, str]
 cmd_annotations = {}  # type: Dict[Callable, List[CmdAnnotation]]
 BOUNTY_ADMINS = []
+
+terminate_funcs = []  # type: List[ShutdownProcedure]
 
 
 def setup(state: "BotState"):
@@ -514,6 +515,7 @@ def user_only() -> Callable[[_T], _T]:
 
 
 def online_only() -> Callable[[_T], _T]:
+    # noinspection PyUnusedLocal
     async def predicate(ctx: ApplicationContext) -> bool:
         if not STATE.is_online():
             raise CheckFailure("Can't execute command") \
@@ -712,25 +714,58 @@ class State(Enum):
     online = 4
 
 
-async def terminate_bot(connector: DatabaseConnector):
+class ShutdownOrderType(Enum):
+    user_input = 0
+    database = 1
+    final = 2
+
+    def __eq__(self, o: object) -> bool:
+        if not isinstance(o, ShutdownOrderType):
+            return False
+        return o.value == self.value
+
+
+def shutdown_procedure(order: ShutdownOrderType):
+    def decorator(func: Callable):#
+        ShutdownProcedure(order, func)
+    return decorator
+
+
+class ShutdownProcedure(object):
+    def __init__(self, order: ShutdownOrderType, callback: Callable):
+        self.order = order
+        self.callable = callback
+        terminate_funcs.append(self)
+
+    @staticmethod
+    async def execute_phase(phase: ShutdownOrderType):
+        for procedure in filter(lambda s: s.order == phase, terminate_funcs):
+            try:
+                if asyncio.iscoroutinefunction(procedure.callable):
+                    await procedure.callable()
+                else:
+                    procedure.callable()
+            except Exception as error:
+                log_error(logger, error, location="shutdown")
+
+
+@shutdown_procedure(order=ShutdownOrderType.user_input)
+def shutdown_executor():
+    logger.warning("Stopping data_utils executor")
+    executor.shutdown(wait=True)
+
+
+async def terminate_bot():
     logger.critical("Terminating bot")
     STATE.state = State.terminated
     activity = discord.Activity(name="Shutting down...", type=ActivityType.custom)
     await BOT.change_presence(status=discord.Status.idle, activity=activity)
-    logger.warning("Disabling discord commands")
-    BOT.remove_cog("BaseCommands")
-    BOT.remove_cog("ProjectCommands")
-    BOT.remove_cog("UniverseCommands")
-    BOT.remove_cog("HelpCommand")
-    logger.warning("Stopping data_utils executor")
-    executor.shutdown(wait=True)
+    await ShutdownProcedure.execute_phase(ShutdownOrderType.user_input)
     # Wait for all pending interactions to complete
     logger.warning("Waiting for interactions to complete")
     await asyncio.sleep(15)
-    logger.warning("Closing SQL connection")
-    connector.con.close()
-    logger.warning("Closing bot")
-    await BOT.close()
+    await ShutdownProcedure.execute_phase(ShutdownOrderType.database)
+    await ShutdownProcedure.execute_phase(ShutdownOrderType.final)
     await asyncio.sleep(10)
     # Closing the connection should end the event loop directly, causing the program to exit
     # Should this not happen within 10 seconds, the program will be terminated anyways

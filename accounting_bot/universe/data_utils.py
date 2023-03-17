@@ -14,13 +14,19 @@ from accounting_bot.config import ConfigTree
 from accounting_bot.exceptions import InputException
 from accounting_bot.universe.models import System
 from accounting_bot.universe.universe_database import UniverseDatabase
-from accounting_bot.utils import wrap_async
+from accounting_bot.utils import wrap_async, shutdown_procedure, ShutdownOrderType
 
 logger = logging.getLogger("data.utils")
 
 db = None  # type: UniverseDatabase | None
 killmail_config = None  # type: ConfigTree | None
 killmail_admins = []  # type: List[int]
+
+
+@shutdown_procedure(order=ShutdownOrderType.database)
+def shutdown_db():
+    logger.warning("Closing UniverseDatabase pool")
+    db.engine.dispose()
 
 
 def create_pi_boxplot(constellation_name: str,

@@ -383,7 +383,7 @@ class BaseCommands(commands.Cog):
         logger.critical("Shutdown Command received, shutting down bot in 10 seconds")
         await ctx.respond("Bot wird in 10 Sekunden gestoppt...")
         STATE.state = State.terminated
-        await utils.terminate_bot(connector=self.connector)
+        await utils.terminate_bot()
 
     @commands.slash_command(name="parse_killmails", description="Loads all killmails of the channel into the database")
     @option(name="after", description="ID of message to start the search (exclusive)", required=True)

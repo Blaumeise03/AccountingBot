@@ -27,7 +27,7 @@ from accounting_bot.exceptions import InputException
 from accounting_bot.localisation import LocalisationHandler
 from accounting_bot.universe import data_utils, pi_planer
 from accounting_bot.universe.universe_database import UniverseDatabase
-from accounting_bot.utils import log_error, State, send_exception, get_cmd_name
+from accounting_bot.utils import log_error, State, send_exception, get_cmd_name, ShutdownOrderType, shutdown_procedure
 
 logger = logging.getLogger()
 log_filename = "logs/" + datetime.now().strftime("%Y-%m-%d_%H-%M-%S") + ".log"
@@ -229,6 +229,21 @@ localisation.load_from_xml("resources/translations.xml")
 localisation.init_bot(bot, get_locale)
 
 
+@shutdown_procedure(order=ShutdownOrderType.user_input)
+def shutdown_commands():
+    logger.warning("Disabling discord commands")
+    bot.remove_cog("BaseCommands")
+    bot.remove_cog("ProjectCommands")
+    bot.remove_cog("UniverseCommands")
+    bot.remove_cog("HelpCommand")
+
+
+@shutdown_procedure(order=ShutdownOrderType.final)
+async def shutdown_bot():
+    logger.warning("Closing bot")
+    await bot.close()
+
+
 # noinspection PyUnusedLocal
 @bot.event
 async def on_error(event_name, *args, **kwargs):
@@ -243,6 +258,7 @@ async def on_error(event_name, *args, **kwargs):
     pass
 
 
+# noinspection PyUnusedLocal
 def handle_asyncio_exception(error_loop: AbstractEventLoop, context: dict[str, Any]):
     logger.error("Unhandled exception in event_loop: %s", context["message"])
     if "exception" in context:
@@ -481,6 +497,7 @@ async def on_application_command(ctx: ApplicationContext):
 @bot.event
 async def on_interaction(interaction: Interaction):
     if interaction.type == InteractionType.component or interaction.type == InteractionType.modal_submit:
+        # noinspection PyUnresolvedReferences
         logger.info("Interaction type %s called by %s:%s in channel %s message %s",
                     interaction.type.name,
                     interaction.user.name, interaction.user.id,
@@ -521,7 +538,7 @@ async def run_bot():
     except Exception as e:
         logging.critical("Bot crashed", e)
         STATE.state = State.offline
-        await utils.terminate_bot(STATE.db_connector)
+        await utils.terminate_bot()
 
 
 async def main():
@@ -534,7 +551,7 @@ async def kill_bot(signum):
     """
     STATE.state = State.terminated
     logging.critical("Received signal %s, stopping bot", signal.Signals(signum).name)
-    await utils.terminate_bot(STATE.db_connector)
+    await utils.terminate_bot()
 
 
 @tasks.loop(seconds=1.0)
@@ -545,9 +562,10 @@ async def kill_loop():
     """
     kill_loop.stop()
     logging.critical("Stopping bot")
-    await utils.terminate_bot(STATE.db_connector)
+    await utils.terminate_bot()
 
 
+# noinspection PyUnusedLocal
 def kill_bot_sync(signum, frame):
     """
     Alternate kill function in case `loop.add_signal_handler` does not work.
