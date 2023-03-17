@@ -262,7 +262,7 @@ class PiPlanResource(Base):
     piplan: Mapped[PiPlanSettings] = relationship(back_populates="resources")
     planet_id: Mapped[int] = mapped_column(Integer(), primary_key=True)
     type_id: Mapped[int] = mapped_column(BigInteger(), primary_key=True)
-    resource: Mapped[Resource] = relationship(lazy="joined")
+    resource: Mapped[Resource] = relationship(lazy="joined", innerjoin=True)
     arrays: Mapped[int] = mapped_column(Integer(), default=0)
     locked: Mapped[bool] = mapped_column(Boolean, default=False)
     __table_args__ = (ForeignKeyConstraint([user_id, plan_num],
@@ -279,7 +279,7 @@ class Killmail(Base):
     id: Mapped[int] = mapped_column(Integer(), primary_key=True)
     final_blow: Mapped[str] = mapped_column(String(40))
     ship_id: Mapped[int] = mapped_column(ForeignKey("item.id", name="fk_killmail_ship"), nullable=True)
-    ship: Mapped[Item] = relationship(lazy="joined")
+    ship: Mapped[Item] = relationship(lazy="joined", innerjoin=True)
     kill_value: Mapped[int] = mapped_column(BigInteger())
     system_id: Mapped[int] = mapped_column(ForeignKey("solarsystem.id", name="fk_killmail_system"), nullable=True)
     system: Mapped[System] = relationship()
@@ -295,6 +295,6 @@ class Killmail(Base):
 class Bounty(Base):
     __tablename__ = "bounties"
     kill_id: Mapped[int] = mapped_column(ForeignKey("killmails.id", name="fk_bounty_killmail"), primary_key=True)
-    killmail: Mapped[Killmail] = relationship(lazy="joined")
+    killmail: Mapped[Killmail] = relationship(lazy="joined", innerjoin=True)
     player: Mapped[str] = mapped_column(String(30), primary_key=True)
     bounty_type: Mapped[str] = mapped_column(String(1))

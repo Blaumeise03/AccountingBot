@@ -1,4 +1,5 @@
 import asyncio
+import calendar
 import datetime
 import difflib
 import functools
@@ -98,6 +99,13 @@ def parse_number(string: str) -> (int, str):
         return int(number), warnings
     else:
         return None, ""
+
+
+def get_month_edges(time: datetime.datetime):
+    _, e = calendar.monthrange(time.year, time.month)
+    start = datetime.datetime(time.year, time.month, 1)
+    end = datetime.datetime(time.year, time.month, e, 23, 59, 59, 999)
+    return start, end
 
 
 def get_cmd_name(cmd: Union[Command, discord.ApplicationCommand, None]) -> Optional[str]:

@@ -1,6 +1,8 @@
 import datetime
+import functools
 import io
 import logging
+import math
 from typing import TYPE_CHECKING, Optional, Callable, List, Union
 
 import discord
@@ -440,12 +442,42 @@ class BaseCommands(commands.Cog):
             return
         await ctx.followup.send(f"{msg}. Warnungen:\n```\n{utils.list_to_string(warnings)}\n```")
 
+    @commands.slash_command(name="showbounties", description="Shows the bounty stats of a player")
+    @option("user", desciption="The user to look up", required=False, default=None)
+    async def cmd_show_bounties(self, ctx: ApplicationContext, user: User = None):
+        if user is None:
+            user = ctx.user
+        player = utils.get_main_account(discord_id=user.id)[0]
+        if player is None:
+            await ctx.response.send_message("Kein Spieler zu diesem Discord Account gefunden", ephemeral=True)
+            return
+        await ctx.response.defer(ephemeral=True, invisible=False)
+        start, end = utils.get_month_edges(datetime.datetime.now())
+        res = await data_utils.get_bounties_by_player(start, end, player)
+        for b in res:
+            if b["type"] == "T":
+                factor = sheet.BOUNTY_TACKLE
+            elif b["region"] in sheet.BOUNTY_HOME_REGIONS:
+                factor = 1
+            else:
+                factor = sheet.BOUNTY_NORMAL
+            b["value"] *= factor
+        msg = f"Bounties aus diesem Monat für `{player}`\n```"
+        b_sum = functools.reduce(lambda x, y: x+y, map(lambda b: b["value"], res))
+        for b in res:
+            msg += f"\n{b['kill_id']:9} {b['value']:14,.0f} ISK"
+            if len(msg) > 1400:
+                msg += "\ntruncated..."
+                break
+        msg += f"\n```\nSumme: {b_sum:14,.0f} ISK\n*Hinweis: Dies ist nur eine ungefähre Vorschau*"
+        await ctx.followup.send(msg)
+
     @commands.message_command(name="Add Tackle")
     @admin_only("bounty")
     @online_only()
     async def ctx_cmd_add_tackle(self, ctx: ApplicationContext, message: discord.Message):
         if len(message.embeds) == 0:
-            await ctx.response.send_message("Nachricht enthält kein Embed", ephemeral=True)
+            await ctx.response.send_message(f"Nachricht enthält kein Embed:\n{message.jump_url}", ephemeral=True)
             return
         await ctx.response.send_modal(AddBountyModal(message))
 
@@ -453,13 +485,13 @@ class BaseCommands(commands.Cog):
     @user_only()
     async def ctx_cmd_show_bounties(self, ctx: ApplicationContext, message: discord.Message):
         if len(message.embeds) == 0:
-            await ctx.response.send_message("Nachricht enthält kein Embed", ephemeral=True)
+            await ctx.response.send_message(f"Nachricht enthält kein Embed:\n{message.jump_url}", ephemeral=True)
             return
         kill_id = data_utils.get_kill_id(message.embeds[0])
         await ctx.response.defer(ephemeral=True, invisible=False)
         bounties = await data_utils.get_bounties(kill_id)
         killmail = await data_utils.get_killmail(kill_id)
-        msg = (f"Killmail `{kill_id}`:\n```\n"
+        msg = (f"{message.jump_url}\nKillmail `{kill_id}`:\n```\n"
                f"Spieler: {killmail.final_blow}\n" +
                (f"Schiff: {killmail.ship.name}\n" if killmail.ship is not None else "Schiff: N/A\n") +
                (f"System: {killmail.system.name}\n" if killmail.system is not None else "System: N/A\n") +
@@ -481,12 +513,12 @@ class AddBountyModal(ErrorHandledModal):
         if self.children[0].value.strip().casefold() == "clear".casefold():
             await ctx.response.defer(ephemeral=True, invisible=False)
             await data_utils.clear_bounties(kill_id)
-            await ctx.followup.send("Bounties gelöscht")
+            await ctx.followup.send(f"Bounties gelöscht\n{self.msg.jump_url}")
             return
         player = utils.get_main_account(self.children[0].value.strip())[0]
         if player is None:
             await ctx.response.send_message(
-                f"Spieler `{self.children[0].value.strip()}` nicht gefunden!", ephemeral=True)
+                f"Spieler `{self.children[0].value.strip()}` nicht gefunden!\n{self.msg.jump_url}", ephemeral=True)
             return
         await ctx.response.defer(ephemeral=True, invisible=False)
         await data_utils.add_bounty(kill_id, player, "T")
@@ -494,7 +526,7 @@ class AddBountyModal(ErrorHandledModal):
         msg = f"Spieler `{player}` wurde als Tackle/Logi für Kill `{kill_id}` eingetragen:\n```"
         for bounty in bounties:
             msg += f"\n{bounty['type']:1} {bounty['player']:10}"
-        msg += "\n```"
+        msg += f"\n```\n{self.msg.jump_url}"
         await ctx.followup.send(msg)
 
 

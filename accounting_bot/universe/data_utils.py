@@ -538,6 +538,11 @@ def get_all_bounties(start: int, end: int):
 
 
 @wrap_async
+def get_bounties_by_player(start: datetime, end: datetime, user: str):
+    return db.get_bounties_by_player(start, end, user)
+
+
+@wrap_async
 def clear_bounties(kill_id: int):
     return db.clear_bounties(kill_id)
 

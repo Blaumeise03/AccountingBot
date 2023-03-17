@@ -7,7 +7,7 @@ from multiprocessing.pool import ThreadPool
 from typing import Dict, Tuple, Union, Any, TYPE_CHECKING
 
 from sqlalchemy import create_engine, update, between, select, delete, or_
-from sqlalchemy.orm import Session, joinedload
+from sqlalchemy.orm import Session, joinedload, subqueryload, contains_eager
 
 from accounting_bot import utils
 from accounting_bot.config import Config, ConfigTree
@@ -19,7 +19,6 @@ if TYPE_CHECKING:
     from pi_planer import PiPlaner
 
 logger = logging.getLogger("data.db")
-
 
 # logger.setLevel(logging.DEBUG)
 # logging.getLogger('sqlalchemy.engine').setLevel(logging.INFO)
@@ -496,14 +495,26 @@ class UniverseDatabase:
             })
         return res
 
+    @staticmethod
+    def _convert_bounties_light(bounties: List[Bounty]):
+        res = []
+        for bounty in bounties:  # type: Bounty
+            res.append({
+                "kill_id": bounty.kill_id,
+                "player": bounty.player,
+                "type": bounty.bounty_type,
+                "value": bounty.killmail.kill_value,
+            })
+        return res
+
     # noinspection DuplicatedCode
     def get_bounty_by_killmail(self, kill_id: int):
         with Session(self.engine) as conn:
             res = (conn.query(Bounty)
                    .options(joinedload(Bounty.killmail)
-                            .subqueryload(Killmail.system)
-                            .subqueryload(System.constellation)
-                            .subqueryload(Constellation.region))
+                            .joinedload(Killmail.system)
+                            .joinedload(System.constellation)
+                            .joinedload(Constellation.region))
                    .filter(Bounty.kill_id == kill_id).all())
             # noinspection PyTypeChecker
             return UniverseDatabase._convert_bounties(res)
@@ -512,10 +523,10 @@ class UniverseDatabase:
     def get_bounty_by_player(self, player: str):
         with Session(self.engine) as conn:
             res = (conn.query(Bounty)
-                   .options(joinedload(Bounty.killmail)
-                            .subqueryload(Killmail.system)
-                            .subqueryload(System.constellation)
-                            .subqueryload(Constellation.region))
+                   .options(joinedload(Bounty.killmail, innerjoin=True)
+                            .joinedload(Killmail.system, innerjoin=True)
+                            .joinedload(System.constellation, innerjoin=True)
+                            .joinedload(Constellation.region, innerjoin=True))
                    .filter(Bounty.player == player).all())
             # noinspection PyTypeChecker
             return UniverseDatabase._convert_bounties(res)
@@ -525,12 +536,33 @@ class UniverseDatabase:
         with Session(self.engine) as conn:
             res = (conn.query(Bounty)
                    .options(joinedload(Bounty.killmail)
-                            .subqueryload(Killmail.system)
-                            .subqueryload(System.constellation)
-                            .subqueryload(Constellation.region))
+                            .joinedload(Killmail.system)
+                            .joinedload(System.constellation)
+                            .joinedload(Constellation.region))
                    .filter(Bounty.kill_id >= start, Bounty.kill_id <= end).all())
             # noinspection PyTypeChecker
             return UniverseDatabase._convert_bounties(res)
+
+    def get_bounties_by_player(self, start_time: datetime, end_time: datetime, user: str):
+        with Session(self.engine, expire_on_commit=False) as conn:
+            logger.debug("Loading bounty")
+            res = (conn.query(Bounty)
+                   .join(Bounty.killmail)
+                   .join(Killmail.system)
+                   .join(System.constellation)
+                   .join(Constellation.region)
+                   .options(contains_eager(Bounty.killmail)
+                            .contains_eager(Killmail.system)
+                            .contains_eager(System.constellation)
+                            .contains_eager(Constellation.region))
+                   .filter(Killmail.inserted >= start_time,
+                           Killmail.inserted <= end_time,
+                           Bounty.player == user
+                           )
+                   ).all()
+            logger.debug("Bounty loaded")
+        # noinspection PyTypeChecker
+        return UniverseDatabase._convert_bounties(res)
 
     def clear_bounties(self, kill_id: int):
         with self.engine.begin() as conn:
@@ -573,8 +605,7 @@ class UniverseDatabase:
                         f"Killmail {killmail.id} has no bounty at all, player {killmail.final_blow} not found")
             conn.commit()
             if time is not None:
-                start = datetime(time.year, time.month, 1)
-                end = datetime(time.year, max(1, (time.month + 1) % 13), 1)
+                start, end = utils.get_month_edges(time)
                 wrong = (
                     conn.query(Killmail)
                     .filter(
