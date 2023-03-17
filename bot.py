@@ -11,7 +11,7 @@ from typing import Any, List, Callable
 import discord
 import mariadb
 import pytesseract.pytesseract
-from discord import ActivityType, Message, DMChannel, ApplicationContext
+from discord import ActivityType, Message, DMChannel, ApplicationContext, Interaction, InteractionType
 from discord.ext import commands, tasks
 from discord.ext.commands import CommandOnCooldown, CheckFailure
 from dotenv import load_dotenv
@@ -476,6 +476,17 @@ async def on_application_command(ctx: ApplicationContext):
                 ctx.user.name,
                 ctx.user.id,
                 ctx.channel.id if not isinstance(ctx.channel, DMChannel) else "DM")
+
+
+@bot.event
+async def on_interaction(interaction: Interaction):
+    if interaction.type == InteractionType.component or interaction.type == InteractionType.modal_submit:
+        logger.info("Interaction type %s called by %s:%s in channel %s message %s",
+                    interaction.type.name,
+                    interaction.user.name, interaction.user.id,
+                    interaction.channel_id if not isinstance(interaction.channel, DMChannel) else "DM",
+                    interaction.message.id if interaction.message is not None else "N/A")
+    await bot.process_application_commands(interaction)
 
 
 @bot.event

@@ -13,7 +13,7 @@ from abc import ABC, abstractmethod
 from concurrent.futures import ThreadPoolExecutor
 from enum import Enum
 from os.path import exists
-from typing import Union, Tuple, Optional, TYPE_CHECKING, Type, List, Callable, TypeVar, Dict
+from typing import Union, Tuple, Optional, TYPE_CHECKING, Type, List, Callable, TypeVar, Dict, Any
 
 import cv2
 import discord
@@ -157,13 +157,41 @@ def get_cause_chain(error: Exception, sep="\n"):
     return rchop(error_chain, sep)
 
 
+def is_caused_by(error: Exception, class_or_tuple):
+    while error is not None:
+        if isinstance(error, class_or_tuple):
+            return True
+        error = error.__cause__
+    return False
+
+
 def get_user_error_msg(error: Exception):
     error_chain = get_cause_chain(error)
     if isinstance(error, LoggedException):
-        return f"An unexpected error occurred: \n```\n{error_chain}\n```\n" \
+        return f"An error occurred: \n```\n{error_chain}\n```\n" \
                f"For more details, take a look at the attached log."
     else:
-        return f"An unexpected error occurred: \n```\n{error_chain}\n```"
+        return f"An error occurred: \n```\n{error_chain}\n```"
+
+
+def get_minimal_traceback(trace: List[str]):
+    last_line = None
+    last_line_error = None
+    regexp = re.compile(r" *File .*[/\\]site-packages[/\\][.\n]*")
+    regexp_file = re.compile(r" *File [.\n]*")
+    for line in trace:
+        if regexp_file.match(line):
+            if regexp.match(line):
+                continue
+            last_line = line
+            last_line_error = None
+        elif last_line is not None and last_line_error is None:
+            last_line_error = line
+    if last_line is None:
+        return []
+    if last_line_error is None:
+        return [last_line]
+    return [last_line, last_line_error]
 
 
 # noinspection PyShadowingNames
@@ -173,11 +201,12 @@ def log_error(logger: logging.Logger,
               ctx: Union[ApplicationContext, Interaction, Context] = None,
               minimal: bool = False):
     location = location if type(location) == str else f"class {location.__name__}" if location else None
-    if error and error.__class__ == discord.errors.NotFound and ("Unknown interaction" in str(error)):
-        logger.warning("discord.errors.NotFound Error at %s: %s", location, str(error))
-        return
-
     full_error = traceback.format_exception(type(error), error, error.__traceback__)
+    silent = False
+    if error and is_caused_by(error, discord.errors.NotFound) and ("Unknown interaction" in str(error)):
+        logger.warning("discord.errors.NotFound Error at %s: %s", location, str(error))
+        full_error = get_minimal_traceback(full_error)
+        silent = True
 
     if error and error.__class__ == exceptions.BotOfflineException:
         if len(full_error) > 2:
@@ -199,7 +228,8 @@ def log_error(logger: logging.Logger,
         logger.info("Ignored error: %s", get_cause_chain(error, ", "))
         return
 
-    logger.error(err_msg)
+    if not silent:
+        logger.error(err_msg)
     regexp = re.compile(r" *File .*[/\\]site-packages[/\\]((discord)|(sqlalchemy)).*")
     skipped = 0
     for line in full_error:
@@ -208,23 +238,28 @@ def log_error(logger: logging.Logger,
             continue
         for line2 in line.split("\n"):
             if len(line2.strip()) > 0:
-                logger.exception(line2, exc_info=False)
-    logger.warning("Skipped %s traceback frames", skipped)
+                if not silent:
+                    logger.exception(line2, exc_info=False)
+                else:
+                    logger.warning(line2)
+    if skipped > 0:
+        logger.warning("Skipped %s traceback frames", skipped)
 
 
 async def send_exception(error: Exception, ctx: Union[ApplicationContext, Context, Interaction]):
     location = get_error_location(ctx)
     ignore = False
-    if isinstance(error, discord.NotFound):
+    if is_caused_by(error, discord.errors.NotFound) and ("Unknown interaction" in str(error)):
         ignore = True
 
+    err_msg = get_user_error_msg(error)
     if isinstance(ctx, Context):
         try:
-            await ctx.author.send(f"An unexpected error occurred: {error.__class__.__name__}\n{str(error)}")
+            await ctx.author.send(err_msg)
         except discord.Forbidden:
             pass
         return
-    err_msg = get_user_error_msg(error)
+
     try:
         try:
             if isinstance(error, LoggedException):
@@ -241,9 +276,13 @@ async def send_exception(error: Exception, ctx: Union[ApplicationContext, Contex
                 await ctx.followup.send(err_msg, file=string_to_file(error.get_log()), ephemeral=True)
             else:
                 await ctx.followup.send(err_msg, ephemeral=True)
-    except discord.NotFound:
+    except discord.errors.NotFound:
+        if ignore:
+            logger.info("Ignoring NotFound error caused by %s", location)
+            return
         try:
             await ctx.user.send(err_msg)
+            return
         except discord.Forbidden:
             pass
         logger.warning("Can't send error message for \"%s\", caused by %s: NotFound",
