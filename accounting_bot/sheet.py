@@ -76,6 +76,7 @@ BOUNTY_TACKLE = 0.025
 BOUNTY_NORMAL = 0.05
 BOUNTY_HOME = 0.1
 BOUNTY_HOME_REGIONS = []
+BOUNTY_MAX = 2000000000
 
 # All resources that exist, will be used to verify the integrity of the received data
 PROJECT_RESOURCES = []

@@ -443,32 +443,37 @@ class BaseCommands(commands.Cog):
         await ctx.followup.send(f"{msg}. Warnungen:\n```\n{utils.list_to_string(warnings)}\n```")
 
     @commands.slash_command(name="showbounties", description="Shows the bounty stats of a player")
-    @option("user", desciption="The user to look up", required=False, default=None)
-    async def cmd_show_bounties(self, ctx: ApplicationContext, user: User = None):
+    @option("user", description="The user to look up", required=False, default=None)
+    @option("silent", description="Default true, execute the command silently", required=False, default=True)
+    async def cmd_show_bounties(self, ctx: ApplicationContext, user: User = None, silent: bool = True):
         if user is None:
             user = ctx.user
         player = utils.get_main_account(discord_id=user.id)[0]
         if player is None:
             await ctx.response.send_message("Kein Spieler zu diesem Discord Account gefunden", ephemeral=True)
             return
-        await ctx.response.defer(ephemeral=True, invisible=False)
+        await ctx.response.defer(ephemeral=silent, invisible=False)
         start, end = utils.get_month_edges(datetime.datetime.now())
         res = await data_utils.get_bounties_by_player(start, end, player)
         for b in res:
             if b["type"] == "T":
                 factor = sheet.BOUNTY_TACKLE
             elif b["region"] in sheet.BOUNTY_HOME_REGIONS:
-                factor = 1
+                factor = sheet.BOUNTY_HOME
             else:
                 factor = sheet.BOUNTY_NORMAL
-            b["value"] *= factor
+            b["value"] = factor * min(b["value"], sheet.BOUNTY_MAX)
+            if b["ship"] is None:
+                b["ship"] = "N/A"
         msg = f"Bounties aus diesem Monat für `{player}`\n```"
         b_sum = functools.reduce(lambda x, y: x+y, map(lambda b: b["value"], res))
+        i = 0
         for b in res:
-            msg += f"\n{b['kill_id']:9} {b['value']:14,.0f} ISK"
+            msg += f"\n{b['type']} {b['kill_id']:<9} {b['ship']:<9} {b['value']:14,.0f} ISK"
             if len(msg) > 1400:
-                msg += "\ntruncated..."
+                msg += f"\ntruncated {len(res) - i - 1} more killmails"
                 break
+            i += 1
         msg += f"\n```\nSumme: {b_sum:14,.0f} ISK\n*Hinweis: Dies ist nur eine ungefähre Vorschau*"
         await ctx.followup.send(msg)
 

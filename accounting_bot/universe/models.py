@@ -279,7 +279,7 @@ class Killmail(Base):
     id: Mapped[int] = mapped_column(Integer(), primary_key=True)
     final_blow: Mapped[str] = mapped_column(String(40))
     ship_id: Mapped[int] = mapped_column(ForeignKey("item.id", name="fk_killmail_ship"), nullable=True)
-    ship: Mapped[Item] = relationship(lazy="joined", innerjoin=True)
+    ship: Mapped[Item] = relationship(lazy="joined")
     kill_value: Mapped[int] = mapped_column(BigInteger())
     system_id: Mapped[int] = mapped_column(ForeignKey("solarsystem.id", name="fk_killmail_system"), nullable=True)
     system: Mapped[System] = relationship()

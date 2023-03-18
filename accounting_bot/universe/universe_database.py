@@ -7,7 +7,7 @@ from multiprocessing.pool import ThreadPool
 from typing import Dict, Tuple, Union, Any, TYPE_CHECKING
 
 from sqlalchemy import create_engine, update, between, select, delete, or_
-from sqlalchemy.orm import Session, joinedload, subqueryload, contains_eager
+from sqlalchemy.orm import Session, joinedload, subqueryload, contains_eager, Query
 
 from accounting_bot import utils
 from accounting_bot.config import Config, ConfigTree
@@ -445,8 +445,8 @@ class UniverseDatabase:
             k_ship = conn.query(Item).filter(Item.name == kill_data["ship"]).first()
             k_value = utils.parse_number(kill_data["kill_value"])[0]
             k_system = conn.query(System).filter(System.name == kill_data["system"]).first()
-            killmail = conn.query(Killmail).options(joinedload(Killmail.system)).filter(Killmail.id == k_id).first()
-
+            killmail = conn.query(Killmail).options(joinedload(Killmail.system)).filter(
+                Killmail.id == k_id).first()
             if None in [k_id, k_player, k_value]:
                 raise KillmailException(f"Invalid killmail data: {kill_data}")
             if killmail is None:
@@ -460,10 +460,10 @@ class UniverseDatabase:
                 conn.add(killmail)
             else:
                 killmail.final_blow = k_player
-                killmail.ship_id = k_ship.id
+                killmail.ship_id = k_ship.id if k_ship is not None else None
                 killmail.ship = k_ship
                 killmail.kill_value = k_value
-                killmail.system_id = k_system.id
+                killmail.system_id = k_system.id if k_system is not None else None
                 killmail.system = k_system
             conn.commit()
 
@@ -489,6 +489,7 @@ class UniverseDatabase:
                 "player": bounty.player,
                 "type": bounty.bounty_type,
                 "value": bounty.killmail.kill_value,
+                "ship": bounty.killmail.ship.name if bounty.killmail.ship is not None else None,
                 "system": bounty.killmail.system.name if bounty.killmail.system is not None else None,
                 "region": bounty.killmail.system.constellation.region.name if bounty.killmail.system is not None
                 else None
@@ -507,38 +508,35 @@ class UniverseDatabase:
             })
         return res
 
-    # noinspection DuplicatedCode
+    @staticmethod
+    def _get_bounty_stmt(session: Session):
+        return (session.query(Bounty)
+                .join(Bounty.killmail)
+                .join(Killmail.system, isouter=True)
+                .join(System.constellation)
+                .join(Constellation.region)
+                .options(contains_eager(Bounty.killmail)
+                         .contains_eager(Killmail.system)
+                         .contains_eager(System.constellation)
+                         .contains_eager(Constellation.region)))
+
     def get_bounty_by_killmail(self, kill_id: int):
         with Session(self.engine) as conn:
-            res = (conn.query(Bounty)
-                   .options(joinedload(Bounty.killmail)
-                            .joinedload(Killmail.system)
-                            .joinedload(System.constellation)
-                            .joinedload(Constellation.region))
+            res = (UniverseDatabase._get_bounty_stmt(conn)
                    .filter(Bounty.kill_id == kill_id).all())
             # noinspection PyTypeChecker
             return UniverseDatabase._convert_bounties(res)
 
-    # noinspection DuplicatedCode
     def get_bounty_by_player(self, player: str):
         with Session(self.engine) as conn:
-            res = (conn.query(Bounty)
-                   .options(joinedload(Bounty.killmail, innerjoin=True)
-                            .joinedload(Killmail.system, innerjoin=True)
-                            .joinedload(System.constellation, innerjoin=True)
-                            .joinedload(Constellation.region, innerjoin=True))
+            res = (UniverseDatabase._get_bounty_stmt(conn)
                    .filter(Bounty.player == player).all())
             # noinspection PyTypeChecker
             return UniverseDatabase._convert_bounties(res)
 
-    # noinspection DuplicatedCode
     def get_all_bounties(self, start: int, end: int):
         with Session(self.engine) as conn:
-            res = (conn.query(Bounty)
-                   .options(joinedload(Bounty.killmail)
-                            .joinedload(Killmail.system)
-                            .joinedload(System.constellation)
-                            .joinedload(Constellation.region))
+            res = (UniverseDatabase._get_bounty_stmt(conn)
                    .filter(Bounty.kill_id >= start, Bounty.kill_id <= end).all())
             # noinspection PyTypeChecker
             return UniverseDatabase._convert_bounties(res)
@@ -546,19 +544,12 @@ class UniverseDatabase:
     def get_bounties_by_player(self, start_time: datetime, end_time: datetime, user: str):
         with Session(self.engine, expire_on_commit=False) as conn:
             logger.debug("Loading bounty")
-            res = (conn.query(Bounty)
-                   .join(Bounty.killmail)
-                   .join(Killmail.system)
-                   .join(System.constellation)
-                   .join(Constellation.region)
-                   .options(contains_eager(Bounty.killmail)
-                            .contains_eager(Killmail.system)
-                            .contains_eager(System.constellation)
-                            .contains_eager(Constellation.region))
+            res = (UniverseDatabase._get_bounty_stmt(conn)
                    .filter(Killmail.inserted >= start_time,
                            Killmail.inserted <= end_time,
                            Bounty.player == user
                            )
+                   .order_by(Killmail.kill_value.desc())
                    ).all()
             logger.debug("Bounty loaded")
         # noinspection PyTypeChecker

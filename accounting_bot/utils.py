@@ -69,7 +69,13 @@ def setup(state: "BotState"):
 def wrap_async(func: Callable[..., _T]):
     @functools.wraps(func)
     async def run(*args, **kwargs) -> _T:
-        return await loop.run_in_executor(executor, functools.partial(func, *args, **kwargs))
+        try:
+            return await loop.run_in_executor(executor, functools.partial(func, *args, **kwargs))
+        except RuntimeError as e:
+            if "cannot schedule new futures after shutdown" in str(e):
+                raise BotOfflineException(f"Can't start new executor task '{func.__name__}'") from e
+            else:
+                raise RuntimeError(f"Starting executor task '{func.__name__}' failed") from e
     return run
 
 
@@ -519,7 +525,7 @@ def online_only() -> Callable[[_T], _T]:
     async def predicate(ctx: ApplicationContext) -> bool:
         if not STATE.is_online():
             raise CheckFailure("Can't execute command") \
-                from BotOfflineException("Only an administrators may execute this command")
+                from BotOfflineException("Can't execute command currently")
         return True
     return commands.check(predicate)
 
