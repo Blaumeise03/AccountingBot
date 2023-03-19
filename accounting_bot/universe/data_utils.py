@@ -380,12 +380,12 @@ def create_map_graph(inc_low_entries=False):
                 return level - 1
         return 10
 
-    logger.info("Loading map")
+    logger.debug("Loading map")
     systems = db.fetch_map()
-    logger.info("Map loaded")
+    logger.debug("Map loaded")
     graph = nx.Graph()
     # max: x=319045588875206976, y=145615391401048000, z=472860102256057024
-    logger.info("Adding nodes")
+    logger.debug("Adding nodes")
     for system in systems:
         graph.add_node(system.name,
                        name=system.name,
@@ -394,11 +394,11 @@ def create_map_graph(inc_low_entries=False):
                        pos=(system.x / 100000000000000000, system.z / 100000000000000000)
                        )
 
-    logger.info("Adding edges")
+    logger.debug("Adding edges")
     lowsec_entries = []  # type: List[System]
     for system in systems:
         for sys in system.stargates:  # type: System
-            graph.add_edge(system.name, sys.name, routes=0)
+            graph.add_edge(system.name, sys.name, routes=0, sec_origin=system.security, sec_dest=sys.security)
             if inc_low_entries and system.security > 0 > sys.security:
                 lowsec_entries.append(system)
     if not inc_low_entries:
@@ -471,7 +471,16 @@ def lowsec_pipe_analysis(graph: nx.Graph, lowsec_entries: List[str]):
 
 
 @wrap_async
-def find_path(start_name: str, end_name: str):
+def find_path(start_name: str, end_name: str, sec_min: float = None, sec_max: float = None):
+    def filter_edges(o, d, edge):
+        if sec_min is not None:
+            if edge["sec_dest"] <= sec_min:
+                return None
+        if sec_max is not None:
+            if edge["sec_dest"] > sec_max:
+                return None
+        return 1
+
     graph = create_map_graph()
     start = None
     end = None
@@ -486,7 +495,12 @@ def find_path(start_name: str, end_name: str):
         raise InputException(f"Start system '{start_name}' not found")
     if end is None:
         raise InputException(f"End system '{end_name}' not found")
-    path = nx.astar_path(graph, start, end)
+    try:
+        path = nx.astar_path(graph, start, end, weight=filter_edges)
+    except nx.NetworkXNoPath as e:
+        raise InputException(
+            f"No available route between {start_name} and {end_name} with security between {sec_min} and {sec_max}"
+        ) from e
     systems = db.fetch_systems(path)
     result = []  # type: List[Tuple[str, str, str, float]]
     for prev, current, dest in zip(path, path[1:], path[2:]):

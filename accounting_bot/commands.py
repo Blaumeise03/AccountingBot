@@ -627,12 +627,22 @@ class UniverseCommands(commands.Cog):
     @commands.slash_command(name="route", description="Finds a route between two systems")
     @option("start", description="The origin system", type=str, required=True)
     @option("end", description="The destination system", type=str, required=True)
+    @option("mode", description="The autopilot mode", type=str, required=False, default="normal",
+            choices=["normal", "avoid 00", "low only"])
     @option("threshold", description="The min distance between two gates for warnings", type=int, required=False, default=50)
     @option(name="silent", description="Default false, if set to true, the command will be executed publicly",
             default=True, required=False)
-    async def cmd_route(self, ctx: ApplicationContext, start: str, end: str, threshold: int, silent: bool = True):
+    async def cmd_route(self, ctx: ApplicationContext, start: str, end: str, mode: str, threshold: int, silent: bool = True):
         await ctx.response.defer(ephemeral=silent, invisible=False)
-        route = await data_utils.find_path(start, end)
+        sec_min = None
+        sec_max = None
+        mode = mode.casefold()
+        if mode == "avoid 00".casefold():
+            sec_min = 0
+        elif mode == "low only".casefold():
+            sec_min = 0
+            sec_max = 0.5
+        route = await data_utils.find_path(start, end, sec_min, sec_max)
         msg = "```"
         msg_crit = "```"
         first = None
@@ -650,4 +660,5 @@ class UniverseCommands(commands.Cog):
             msg += f"\nAchtung, es gibt einige Warps die länger als {threshold} AU sind auf der Route:\n" + msg_crit
         else:
             msg += f"\nEs gibt keine Warps die länger als {threshold} AU sind auf der Route"
-        await ctx.followup.send(f"Route von **{first}** nach **{last}**:\n" + msg)
+        await ctx.followup.send(f"Route von **{first}** nach **{last}**:\n"
+                                f"Min Security: `{sec_min}`\nMax Security: `{sec_max}`\n" + msg)
