@@ -1,5 +1,6 @@
 import collections
 import logging
+import math
 import re
 from datetime import datetime
 from typing import List, Tuple, Optional
@@ -12,7 +13,7 @@ from discord import Embed
 from accounting_bot import sheet, utils
 from accounting_bot.config import ConfigTree
 from accounting_bot.exceptions import InputException
-from accounting_bot.universe.models import System
+from accounting_bot.universe.models import System, Celestial
 from accounting_bot.universe.universe_database import UniverseDatabase
 from accounting_bot.utils import wrap_async, shutdown_procedure, ShutdownOrderType
 
@@ -467,7 +468,48 @@ def lowsec_pipe_analysis(graph: nx.Graph, lowsec_entries: List[str]):
             break
         current_nodes = next_nodes
         next_nodes = []
-    pass
+
+
+@wrap_async
+def find_path(start_name: str, end_name: str):
+    graph = create_map_graph()
+    start = None
+    end = None
+    for node in graph.nodes:
+        if node == start_name:
+            start = node
+        if node == end_name:
+            end = node
+        if start is not None and end is not None:
+            break
+    if start is None:
+        raise InputException(f"Start system '{start_name}' not found")
+    if end is None:
+        raise InputException(f"End system '{end_name}' not found")
+    path = nx.astar_path(graph, start, end)
+    systems = db.fetch_systems(path)
+    result = []  # type: List[Tuple[str, str, str, float]]
+    for prev, current, dest in zip(path, path[1:], path[2:]):
+        system = None
+        for s in systems:
+            if s.name == current:
+                system = s
+                break
+        prev_gate = None
+        dest_gate = None
+        for cel in system.celestials:  # type: Celestial
+            if cel.connected_gate is not None and cel.connected_gate.system.name == prev:
+                prev_gate = cel
+            if cel.connected_gate is not None and cel.connected_gate.system.name == dest:
+                dest_gate = cel
+        distance = math.sqrt(
+            (dest_gate.x - prev_gate.x) ** 2 +
+            (dest_gate.y - prev_gate.y) ** 2 +
+            (dest_gate.z - prev_gate.z) ** 2
+        ) / 149597870700
+        # print(f"{current}: {prev} -> {dest}: {distance:.2f} AU")
+        result.append((current, prev, dest, distance))
+    return result
 
 
 @wrap_async

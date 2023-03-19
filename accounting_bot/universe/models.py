@@ -88,6 +88,12 @@ class System(Base):
         return f"System(id={self.id!r}, name={self.name!r})"
 
 
+StargateConnections = Table(
+    "stargates", Base.metadata,
+    Column("origin", Integer, ForeignKey("celestial.id", name="key_gates_origin", ondelete="CASCADE")),
+    Column("destination", Integer, ForeignKey("celestial.id", name="key_gates_destination", ondelete="CASCADE")))
+
+
 class Celestial(Base):
     class GroupID(object):
         def __init__(self, group_id: Optional[int] = None):
@@ -172,6 +178,10 @@ class Celestial(Base):
     celestial_index: Mapped[int] = mapped_column(Integer, nullable=True)
     orbit_index: Mapped[int] = mapped_column(Integer, nullable=True)
     resources: Mapped[List["Resource"]] = relationship(back_populates="planet")
+    connected_gate: Mapped["Celestial"] = relationship("Celestial",
+                                                       secondary=StargateConnections,
+                                                       primaryjoin=StargateConnections.c.destination == id,
+                                                       secondaryjoin=StargateConnections.c.origin == id)
 
     @hybrid_property
     def type(self) -> Type:
@@ -182,10 +192,10 @@ class Celestial(Base):
         return Celestial.PlanetType.from_type_id(self.type_id)
 
     def __repr__(self) -> str:
-        return "Celestial(id={id!s}, name={name!s}, system={system_name!s}, type={type!s})".format(
+        return "Celestial(id={id!s}, name={name!s}, type={type!s})".format(
             id=self.id,
             name=self.name,
-            system_name=self.system.name if self.system is not None else "None",
+            # system_name=self.system.name if self.system is not None else "None",
             type=self.type.name if self.type is not None else self.type_id
         )
 

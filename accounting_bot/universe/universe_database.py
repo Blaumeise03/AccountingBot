@@ -7,7 +7,7 @@ from multiprocessing.pool import ThreadPool
 from typing import Dict, Tuple, Union, Any, TYPE_CHECKING
 
 from sqlalchemy import create_engine, update, between, select, delete, or_
-from sqlalchemy.orm import Session, joinedload, subqueryload, contains_eager, Query
+from sqlalchemy.orm import Session, joinedload, contains_eager
 
 from accounting_bot import utils
 from accounting_bot.config import Config, ConfigTree
@@ -62,6 +62,7 @@ class UniverseDatabase:
         Item.__table__.create(bind=self.engine, checkfirst=True)
         System.__table__.create(bind=self.engine, checkfirst=True)
         models.SystemConnections.create(bind=self.engine, checkfirst=True)
+        models.StargateConnections.create(bind=self.engine, checkfirst=True)
         Celestial.__table__.create(bind=self.engine, checkfirst=True)
         Resource.__table__.create(bind=self.engine, checkfirst=True)
         PiPlanSettings.__table__.create(bind=self.engine, checkfirst=True)
@@ -131,6 +132,17 @@ class UniverseDatabase:
     def fetch_system(self, system_name: str) -> Optional[System]:
         with Session(self.engine, expire_on_commit=False) as conn:
             return conn.query(System).filter(System.name == system_name).first()
+
+    def fetch_systems(self, system_names: List[str]) -> List[System]:
+        with Session(self.engine, expire_on_commit=False) as conn:
+            # noinspection PyTypeChecker
+            return (
+                conn.query(System)
+                .options(joinedload(System.celestials)
+                         .subqueryload(Celestial.connected_gate)
+                         .subqueryload(Celestial.system))
+                .filter(System.name.in_(system_names)).all()
+            )
 
     def fetch_constellation(self, constellation_name: str) -> Optional[System]:
         with Session(self.engine, expire_on_commit=False) as conn:

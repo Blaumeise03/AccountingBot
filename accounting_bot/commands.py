@@ -2,14 +2,13 @@ import datetime
 import functools
 import io
 import logging
-import math
 from typing import TYPE_CHECKING, Optional, Callable, List, Union
 
 import discord
 from discord import User, ApplicationContext, AutocompleteContext, option, Role, SlashCommand, \
-    SlashCommandGroup, DMChannel, MessageCommand, ContextMenuCommand, UserCommand, ChannelType
+    SlashCommandGroup, MessageCommand, ContextMenuCommand, UserCommand, ChannelType
 from discord.ext import commands
-from discord.ext.commands import Context, Command
+from discord.ext.commands import Command
 from discord.ui import InputText
 
 from accounting_bot import accounting, sheet, utils
@@ -122,7 +121,7 @@ class HelpCommand(commands.Cog):
                 cmd_desc = f"*{cmd_details}*\n{extra}{cmd_desc}\n"
             if isinstance(cmd, SlashCommand):
                 if len(cmd.options) > 0:
-                    cmd_desc += f" *{t_('parameter')}*:\n"
+                    cmd_desc += f"\n*{t_('parameter')}*:\n"
                 for opt in cmd.options:
                     # noinspection PyUnresolvedReferences
                     cmd_desc += f"`{'[' if opt.required else '<'}{opt.name}: {opt.input_type.name}" \
@@ -624,3 +623,31 @@ class UniverseCommands(commands.Cog):
             view=PiPlanningView(plan))
         plan.message = msg
         await ctx.response.send_message("Überprüfe deine Direktnachrichten", ephemeral=True)
+
+    @commands.slash_command(name="route", description="Finds a route between two systems")
+    @option("start", description="The origin system", type=str, required=True)
+    @option("end", description="The destination system", type=str, required=True)
+    @option("threshold", description="The min distance between two gates for warnings", type=int, required=False, default=50)
+    @option(name="silent", description="Default false, if set to true, the command will be executed publicly",
+            default=True, required=False)
+    async def cmd_route(self, ctx: ApplicationContext, start: str, end: str, threshold: int, silent: bool = True):
+        await ctx.response.defer(ephemeral=silent, invisible=False)
+        route = await data_utils.find_path(start, end)
+        msg = "```"
+        msg_crit = "```"
+        first = None
+        last = None
+        for sys, prev, dest, distance in route:
+            if first is None:
+                first = prev
+            last = dest
+            msg += f"\n{'⚠️' if distance > threshold else ' '} {sys:6}: {prev:6} -> {dest:6}: {distance:4.2f} AU "
+            if distance > threshold:
+                msg_crit += f"\n{sys:6}: {distance:4.2f} AU"
+        msg += "\n```"
+        msg_crit += "\n```"
+        if len(msg_crit) > 7:
+            msg += f"\nAchtung, es gibt einige Warps die länger als {threshold} AU sind auf der Route:\n" + msg_crit
+        else:
+            msg += f"\nEs gibt keine Warps die länger als {threshold} AU sind auf der Route"
+        await ctx.followup.send(f"Route von **{first}** nach **{last}**:\n" + msg)
