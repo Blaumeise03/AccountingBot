@@ -428,11 +428,10 @@ class PiPlanningSession:
         if self.message is not None:
             if self._active is not None:
                 await self.message.edit(
-                    content=f"Du hast {len(self.plans)} Pi Pläne\nAktuell is Plan #{self._active} ausgewählt",
+                    content=f"Du hast {len(self.plans)} Pi Pläne\nAktuell is Plan #{self._active + 1} ausgewählt",
                     embed=self.get_active_plan().to_embed(Color.green()))
                 return
             await self.message.edit(content="Du hast keinen Pi Plan, erstelle einen neuen.")
-            return
         else:
             logger.warning("Session %s:%s does not have an attached message", self.user_id, self.user.name)
 

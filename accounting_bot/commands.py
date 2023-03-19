@@ -469,7 +469,7 @@ class BaseCommands(commands.Cog):
         b_sum = functools.reduce(lambda x, y: x+y, map(lambda b: b["value"], res))
         i = 0
         for b in res:
-            msg += f"\n{b['type']} {b['kill_id']:<9} {b['ship']:<9} {b['value']:14,.0f} ISK"
+            msg += f"\n{b['type']} {b['kill_id']:<7} {b['ship']:<12.12} {b['value']:11,.0f} ISK"
             if len(msg) > 1400:
                 msg += f"\ntruncated {len(res) - i - 1} more killmails"
                 break
@@ -612,11 +612,11 @@ class UniverseCommands(commands.Cog):
         plan = PiPlanningSession(ctx.user)
         await plan.load_plans()
         if ctx.channel.type == ChannelType.private:
-            msg = await ctx.response.send_message(
+            interaction = await ctx.response.send_message(
                 f"Du hast aktuell {len(plan.plans)} aktive Pi Pläne:",
                 embeds=plan.get_embeds(),
                 view=PiPlanningView(plan))
-            plan.message = msg
+            plan.message = await interaction.original_response()
             return
         msg = await ctx.user.send(
             f"Du hast aktuell {len(plan.plans)} aktive Pi Pläne:",
