@@ -1,15 +1,18 @@
+import base64
 import difflib
+import itertools
 import logging
+import math
 import re
 from datetime import datetime, timedelta
 from typing import List, Dict, Optional, Callable, Coroutine, Any, Union
 
 import discord
-from discord import User, Embed, Color, ApplicationContext, Interaction, Message, InputTextStyle
+from discord import User, Embed, Color, ApplicationContext, Message, InputTextStyle
 from discord.ui import InputText, Button
 
 from accounting_bot import sheet, utils
-from accounting_bot.exceptions import PlanetaryProductionException
+from accounting_bot.exceptions import PlanetaryProductionException, PiPlanerException
 from accounting_bot.universe import data_utils
 from accounting_bot.universe.models import PiPlanSettings, PiPlanResource
 from accounting_bot.utils import ErrorHandledModal, AutoDisableView, Item
@@ -20,20 +23,23 @@ available_prices = []
 pending_resources = {}  # type: Dict[str, float]
 last_reload = datetime(1907, 1, 1)
 pi_resources = []
+pi_ids = {}  # type: Dict[str, int]
 help_embed = None  # type: Embed | None
 autoarray_help_a = "N/A"
 autoarray_help_b = "N/A"
 
 
 async def reload_pending_resources():
-    global pending_resources, pi_resources, last_reload
+    global pending_resources, pi_resources, last_reload, pi_ids
     difference = datetime.now() - last_reload
     if difference < timedelta(minutes=15):
         return
     logger.info("Reloading pending resources")
     items = await sheet.load_pending_resources()
     pending_resources = items
-    pi_resources = list(map(lambda i: i.name, await data_utils.get_items_by_type("pi")))
+    res = await data_utils.get_items_by_type("pi")
+    pi_resources = list(map(lambda i: i.name, res))
+    pi_ids = dict(map(lambda i: (i.name, i.id), res))
     last_reload = datetime.now()
     logger.info("Pending resources loaded")
 
@@ -228,6 +234,28 @@ class PiPlaner:
     async def save_settings(self):
         await data_utils.save_pi_plan(self)
 
+    async def load_missing_data(self):
+        missing_planets = []
+        p_id = None
+        for array in self.arrays:
+            if p_id is None and array.planet.id is not None:
+                p_id = array.planet.id
+            if array.base_output is None or array.planet.name == "N/A":
+                missing_planets.append(array.planet.id)
+        planets = await data_utils.get_planets(missing_planets)
+        for planet in planets:
+            for array in self.arrays:
+                if array.planet.id == planet.id:
+                    array.planet.name = planet.name
+                    for res in planet.resources:
+                        if res.type.name == array.resource:
+                            array.base_output = res.output
+                            break
+        if self.constellation_id is None and p_id is not None:
+            const = await data_utils.get_constellation(planet_id=p_id)
+            self.constellation_id = const.id
+            self.constellation_name = const.name
+
     def sort_arrays(self):
         self.arrays = sorted(self.arrays, key=lambda a: (not a.locked, utils.resource_order.index(a.resource)))
 
@@ -378,6 +406,100 @@ class PiPlaner:
             value=f"```\n{Array.build_income_table(income_sum=income_sum)}\n```")
         return emb
 
+    def encode_base64(self) -> str:
+        """
+        V1 binary data format (Number bits:value):
+
+        [2:Version][5:num planets][5:num arrays] [19:planet index][5:resource index]... (for all arrays)
+
+        The last byte gets filled up with zeros
+
+        Note:
+            planet index = planet id - 40000000
+            resource index = item id - 42001000000 ( - 1000000 if it's a fuel)
+        :return: the encoded data in base64
+        """
+        def to_bits(num: int, length: int):
+            # noinspection PyStringFormat
+            bits = f"{{0:0{length}b}}".format(num)
+            if len(bits) > length:
+                raise ArithmeticError(f"Number {num} is exceeding bit limit of {length}: {bits}")
+            return bits
+
+        def to_bytes(bits):
+            done = False
+            while not done:
+                byte = 0
+                for _ in range(0, 8):
+                    try:
+                        bit = next(bits)
+                        if type(bit) == str:
+                            if bit == "0":
+                                bit = 0
+                            elif bit == "1":
+                                bit = 1
+                            else:
+                                raise TypeError(f"Expected bit, got '{bit}' instead")
+                    except StopIteration:
+                        bit = 0
+                        done = True
+                    byte = (byte << 1) | bit
+                yield byte
+
+        data = "01"
+        if self.num_planets > 31:
+            raise PiPlanerException(f"Number of planets {self.num_planets} is to high, max is 31")
+        if self.num_arrays > 31:
+            raise PiPlanerException(f"Number of arrays {self.num_arrays} is to high, max is 31")
+        data += to_bits(self.num_planets, 5)
+        data += to_bits(self.num_arrays, 5)
+        for array in self.arrays:
+            p_id = array.planet.id - 40000000
+            if p_id < 0 or p_id > 524287:
+                raise PiPlanerException(f"Planet id {p_id} is out of bounds")
+            data += to_bits(p_id, 19)
+            p_type = pi_ids[array.resource] - 42001000000
+            # Pi have IDs 420010000xx
+            if p_type >= 1000000:
+                # Fuels have IDs with 420020000xx
+                p_type -= 1000000
+            if p_type > 31:
+                raise PiPlanerException(f"Resource id {p_type} is to high")
+            data += to_bits(p_type, 5)
+        data_bytes = bytes(to_bytes(iter(data)))
+        result = base64.b64encode(data_bytes)
+        return result.decode("utf-8")
+
+    @staticmethod
+    def decode_base64(data: str):
+        def groups_of_n(n, iterable):
+            c = itertools.count()
+            for _, gen in itertools.groupby(iterable, lambda x: math.floor(next(c) / n)):
+                yield gen
+
+        data_bytes = base64.b64decode(data)
+        bits = "".join(["{:08b}".format(x) for x in data_bytes])
+        version, bits = int(bits[:2], 2), bits[2:]
+        if version != 1:
+            raise PiPlanerException(f"Data format V{version} is not supported by this version")
+        num_arrays, bits = int(bits[:5], 2), bits[5:]
+        num_planets, bits = int(bits[:5], 2), bits[5:]
+        lookup_table = dict(map(lambda t: (t[1] % 1000000, t[0]), pi_ids.items()))
+        plan = PiPlaner(arrays=num_arrays, planets=num_planets)
+        for raw in groups_of_n(24, bits):
+            raw = "".join(raw)
+            if len(raw) < 24:
+                break
+            p_id = int(raw[:19], 2) + 40000000
+            p_res = int(raw[19:], 2)
+            if p_res not in lookup_table:
+                raise PiPlanerException(f"Resource ID {p_res} not found in lookup table")
+            res_name = lookup_table[p_res]
+            array = Array(res_name, amount=num_arrays)
+            array.auto_init_planet(plan.arrays, p_name="N/A", p_id=p_id)
+            plan.arrays.append(array)
+        return plan
+
 
 class PiPlanningSession:
     def __init__(self, user: User) -> None:
@@ -407,10 +529,12 @@ class PiPlanningSession:
             self.set_active(None)
             return
         if plan == "prev":
-            self._active = min(map(lambda p: p.plan_num, filter(lambda p: p.plan_num <= self._active, self.plans)))
+            self._active = max(map(lambda p: p.plan_num, filter(lambda p: p.plan_num < self._active, self.plans)),
+                               default=self._active)
             return
         if plan == "next":
-            self._active = max(map(lambda p: p.plan_num, filter(lambda p: p.plan_num >= self._active, self.plans)))
+            self._active = min(map(lambda p: p.plan_num, filter(lambda p: p.plan_num > self._active, self.plans)),
+                               default=self._active)
             return
 
     def get_active_plan(self):
@@ -472,6 +596,16 @@ class PiPlanningSession:
         plan = PiPlaner(self.user_id, next_num)
         self.plans.append(plan)
         return plan
+
+    def add_plan(self, plan: PiPlaner):
+        next_num = 0
+        for p in self.plans:
+            if p.plan_num >= next_num:
+                next_num = p.plan_num + 1
+        plan.user_id = self.user_id
+        plan.user_name = self.user
+        plan.plan_num = next_num
+        self.plans.append(plan)
 
     def delete_plan(self, plan) -> None:
         self.plans.remove(plan)
@@ -564,6 +698,36 @@ class PiPlanningView(AutoDisableView):
             await ctx.response.send_message("Es ist kein Plan ausgewählt!", ephemeral=True)
             return
         await ctx.response.send_modal(AutoSelectArrayModal(self.session, plan))
+
+    @discord.ui.button(label="Export", style=discord.ButtonStyle.grey, row=3)
+    async def btn_export(self, button: Button, ctx: ApplicationContext):
+        code = self.session.get_active_plan().encode_base64()
+        emb = Embed(title="Export code",
+                    description="Teile diesen Code um deinen Pi Plan zu teilen. Andere können mit diesem Code deinen "
+                                "Plan importieren. Außerdem kannst du dir den Code als Backup speichern um deinen Plan "
+                                "zu einem späteren Zeitpunkt wiederherstellen zu können.",
+                    color=Color.gold())
+        emb.add_field(name="Code", value=f"```\n{code}\n```")
+        await ctx.response.send_message(embed=emb, ephemeral=True)
+
+    @discord.ui.button(label="Import", style=discord.ButtonStyle.grey, row=3)
+    async def btn_import(self, button: Button, ctx: ApplicationContext):
+        async def _import(code, _ctx: ApplicationContext):
+            await _ctx.response.defer(ephemeral=True, invisible=False)
+            plan = PiPlaner.decode_base64(code)
+            await plan.load_missing_data()
+            self.session.add_plan(plan)
+            self.session.set_active(plan.plan_num)
+            await self.session.refresh_msg()
+            await _ctx.followup.send("Plan hinzugefügt und aktiviert")
+        await ctx.response.send_modal(
+            StringInputModal(
+                title="Import Plan",
+                label="Code",
+                placeholder="Hier Code eingeben",
+                callback=_import
+            )
+        )
 
 
 # noinspection PyUnusedLocal
@@ -746,6 +910,21 @@ class NumberInputModal(ErrorHandledModal):
             await ctx.response.send_message(f"Eingabe `{in1}` ist keine Zahl", ephemeral=True)
             return
         in1 = int(in1)
+        await self.function(in1, ctx)
+
+
+class StringInputModal(ErrorHandledModal):
+    def __init__(self,
+                 label: str,
+                 placeholder: str,
+                 callback: Callable[[str, ApplicationContext], Coroutine],
+                 *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.add_item(InputText(label=label, placeholder=placeholder, required=True))
+        self.function = callback
+
+    async def callback(self, ctx: ApplicationContext):
+        in1 = self.children[0].value
         await self.function(in1, ctx)
 
 

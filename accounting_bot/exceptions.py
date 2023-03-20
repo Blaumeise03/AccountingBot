@@ -71,6 +71,10 @@ class PlanetaryProductionException(InputException):
     pass
 
 
+class PiPlanerException(Exception):
+    pass
+
+
 class DatabaseException(Exception):
     pass
 

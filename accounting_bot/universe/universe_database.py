@@ -144,9 +144,17 @@ class UniverseDatabase:
                 .filter(System.name.in_(system_names)).all()
             )
 
-    def fetch_constellation(self, constellation_name: str) -> Optional[System]:
+    def fetch_constellation(self, constellation_name: str = None, planet_id: int = None) -> Optional[Constellation]:
         with Session(self.engine, expire_on_commit=False) as conn:
-            return conn.query(Constellation).filter(Constellation.name == constellation_name).first()
+            if constellation_name is not None:
+                return conn.query(Constellation).filter(Constellation.name == constellation_name).first()
+            if planet_id is not None:
+                return (
+                    conn.query(Constellation)
+                    .join(Constellation.systems)
+                    .join(System.celestials)
+                    .filter(Celestial.id == planet_id).first()
+                )
 
     def fetch_planet(self, planet_name: str) -> Optional[Celestial]:
         with Session(self.engine, expire_on_commit=False) as conn:
@@ -312,6 +320,16 @@ class UniverseDatabase:
             result = conn.execute(stmt).all()
         # noinspection PyTypeChecker
         return dict(result)
+
+    def fetch_planets(self, planet_ids: List[int]) -> List[Celestial]:
+        with Session(self.engine, expire_on_commit=False) as conn:
+            # noinspection PyTypeChecker
+            return (
+                conn.query(Celestial)
+                .options(joinedload(Celestial.resources)
+                         .subqueryload(Resource.type))
+                .filter(Celestial.id.in_(planet_ids))
+            ).all()
 
     def fetch_map(self) -> List[System]:
         with Session(self.engine, expire_on_commit=False) as conn:

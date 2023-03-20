@@ -148,12 +148,18 @@ def get_max_pi_planets(region_names: Optional[List[str]] = None):
 
 
 @wrap_async
+def get_constellation(const_name: str = None, planet_id: int = None):
+    return db.fetch_constellation(const_name, planet_id)
+
+
+@wrap_async
+def get_planets(planet_ids: List[int]):
+    return db.fetch_planets(planet_ids)
+
+
+@wrap_async
 def get_system(system_name: str):
     return db.fetch_system(system_name)
-
-
-def get_constellation(constellation_name: str):
-    return db.fetch_constellation(constellation_name)
 
 
 @wrap_async
