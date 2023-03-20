@@ -615,7 +615,8 @@ class UniverseCommands(commands.Cog):
                 f"Du hast aktuell {len(plan.plans)} aktive Pi Pläne:",
                 embeds=plan.get_embeds(),
                 view=PiPlanningView(plan))
-            plan.message = await interaction.original_response()
+            response = await interaction.original_response()
+            plan.message = await ctx.user.fetch_message(response.id)
             return
         msg = await ctx.user.send(
             f"Du hast aktuell {len(plan.plans)} aktive Pi Pläne:",
