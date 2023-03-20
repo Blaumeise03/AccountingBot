@@ -56,6 +56,7 @@ SILENT_EXCEPTIONS = [
     CommandOnCooldown, InputException, commands.NoPrivateMessage, commands.NotOwner, commands.PrivateMessageOnly,
     CheckFailure
 ]
+interaction_logger = logging.getLogger("bot.access")
 
 
 class BotState:
@@ -313,7 +314,7 @@ async def on_application_command_error(ctx: ApplicationContext, err):
     location = accounting_bot.commands.get_cmd_name(ctx.command)
     if location is not None:
         location = "command " + location
-    log_error(logging.getLogger(), err, location=location, ctx=ctx, minimal=silent)
+    log_error(logger, err, location=location, ctx=ctx, minimal=silent)
     await send_exception(err, ctx)
 
 
@@ -487,22 +488,24 @@ async def on_message(message: Message):
 @bot.event
 async def on_application_command(ctx: ApplicationContext):
     cmd_name = accounting_bot.commands.get_cmd_name(ctx.command)
-    logger.info("Command '%s' called by %s:%s in channel %s",
-                cmd_name,
-                ctx.user.name,
-                ctx.user.id,
-                ctx.channel.id if not isinstance(ctx.channel, DMChannel) else "DM")
+    interaction_logger.info(
+        "Command '%s' called by %s:%s in channel %s",
+        cmd_name,
+        ctx.user.name,
+        ctx.user.id,
+        ctx.channel.id if not isinstance(ctx.channel, DMChannel) else "DM")
 
 
 @bot.event
 async def on_interaction(interaction: Interaction):
     if interaction.type == InteractionType.component or interaction.type == InteractionType.modal_submit:
         # noinspection PyUnresolvedReferences
-        logger.info("Interaction type %s called by %s:%s in channel %s message %s",
-                    interaction.type.name,
-                    interaction.user.name, interaction.user.id,
-                    interaction.channel_id if not isinstance(interaction.channel, DMChannel) else "DM",
-                    interaction.message.id if interaction.message is not None else "N/A")
+        interaction_logger.info(
+            "Interaction type %s called by %s:%s in channel %s message %s",
+            interaction.type.name,
+            interaction.user.name, interaction.user.id,
+            interaction.channel_id if not isinstance(interaction.channel, DMChannel) else "DM",
+            interaction.message.id if interaction.message is not None else "N/A")
     await bot.process_application_commands(interaction)
 
 
