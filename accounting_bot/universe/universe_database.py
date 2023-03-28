@@ -635,7 +635,12 @@ class UniverseDatabase:
                     )
                 ).all()
                 for kill in wrong:
-                    warnings.append(f"Killmail {kill.id} is outside of selection, but was inserted this month")
+                    warnings.append(f"Killmail {kill.id} is outside of selection, but was inserted this month "
+                                    f"(won't be inserted)")
+                for kill in killmails:
+                    if start > kill.inserted or end < kill.inserted:
+                        warnings.append(f"Killmail {kill.id} is inside of selection, but was not inserted this month "
+                                        f"(will be inserted)")
         return warnings
 
 
