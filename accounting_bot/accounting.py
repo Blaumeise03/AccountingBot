@@ -13,7 +13,7 @@ import discord
 import discord.ext
 import mariadb
 import pytz
-from discord import Embed, Interaction, Color, Message
+from discord import Embed, Interaction, Color, Message, ApplicationContext
 from discord.ext.commands import Bot
 from discord.ui import Modal, InputText
 from numpy import ndarray
@@ -1053,12 +1053,13 @@ class TransferModal(ErrorHandledModal):
             self.add_item(InputText(label="Referenz", placeholder="z.B \"voidcoin.app/contract/20577\"", required=False,
                                     value=reference))
 
-    async def callback(self, interaction: Interaction):
+    async def callback(self, interaction: ApplicationContext):
         if not STATE.is_online():
             raise BotOfflineException()
+        await interaction.response.defer(ephemeral=True, invisible=False)
         transaction, warnings = await Transaction.from_modal(self, interaction.user.name, interaction.user.id)
         if transaction is None:
-            await interaction.response.send_message(warnings, ephemeral=True)
+            await interaction.followup.send(warnings, ephemeral=True)
             return
         if transaction.name_from:
             f = transaction.name_from
@@ -1070,9 +1071,11 @@ class TransferModal(ErrorHandledModal):
             transaction.name_to = sheet.check_name_overwrites(transaction.name_to)
             if t != transaction.name_to:
                 warnings += f"Info: Der Empfänger wurde zu \"{transaction.name_to}\" geändert.\n"
-        await interaction.response.send_message(
+        view = ConfirmView()
+        msg = await interaction.followup.send(
             warnings, embed=transaction.create_embed(),
-            ephemeral=True, view=ConfirmView())
+            ephemeral=True, view=view)
+        view.message = msg
 
 
 class EditModal(TransferModal):
