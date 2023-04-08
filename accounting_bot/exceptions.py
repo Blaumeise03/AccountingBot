@@ -85,3 +85,7 @@ class KillmailException(Exception):
 
 class NoPermissionsException(InputException):
     pass
+
+
+class SingletonException(Exception):
+    pass

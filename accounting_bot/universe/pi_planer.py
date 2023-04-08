@@ -15,7 +15,7 @@ from accounting_bot import sheet, utils
 from accounting_bot.exceptions import PlanetaryProductionException, PiPlanerException
 from accounting_bot.universe import data_utils
 from accounting_bot.universe.models import PiPlanSettings, PiPlanResource
-from accounting_bot.utils import ErrorHandledModal, AutoDisableView, Item
+from accounting_bot.utils import ErrorHandledModal, AutoDisableView, Item, ConfirmView
 
 logger = logging.getLogger("data.pi")
 item_prices = {}  # type: Dict[str,Dict[str, Union[int, float]]]
@@ -875,23 +875,6 @@ class AutoSelectArrayModal(ErrorHandledModal):
         )
         if view.message is None:
             view.message = msg
-
-
-# noinspection PyUnusedLocal
-class ConfirmView(AutoDisableView):
-    def __init__(self, callback: Callable[[ApplicationContext], Coroutine], *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        self.function = callback
-
-    @discord.ui.button(label="Bestätigen", style=discord.ButtonStyle.green)
-    async def btn_confirm(self, button: Button, ctx: ApplicationContext):
-        await self.function(ctx)
-        await self.message.delete()
-
-    @discord.ui.button(label="Abbrechen", style=discord.ButtonStyle.grey)
-    async def btn_abort(self, button: Button, ctx: ApplicationContext):
-        await ctx.response.defer(invisible=True)
-        await self.message.delete()
 
 
 class NumberInputModal(ErrorHandledModal):

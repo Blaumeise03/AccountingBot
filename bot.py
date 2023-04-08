@@ -19,7 +19,7 @@ from dotenv import load_dotenv
 import accounting_bot.commands
 from accounting_bot import accounting, sheet, projects, utils, corpmissionOCR, exceptions
 from accounting_bot.accounting import AccountingView, get_menu_embeds
-from accounting_bot.commands import BaseCommands, HelpCommand, UniverseCommands
+from accounting_bot.commands import BaseCommands, HelpCommand, UniverseCommands, FRPsState
 from accounting_bot.config import Config, ConfigTree
 from accounting_bot.database import DatabaseConnector
 from accounting_bot.discordLogger import PycordHandler
@@ -116,6 +116,9 @@ config_structure = {
     "errorLogChannel": (int, -1),
     "admins": (list, []),
     "shipyard_admins": (list, []),
+    "frpMenuChannel": (int, -1),
+    "frpMenuMessage": (int, -1),
+    "frpRolePing": (int, -1),
     "db": {
         "user": (str, "N/A"),
         "password": (str, "N/A"),
@@ -298,6 +301,14 @@ async def market_loop():
         utils.log_error(logger, e, location="market_loop")
 
 
+@tasks.loop(seconds=20)
+async def frp_reminder_loop():
+    try:
+        await FRPsState.defaultState.tick()
+    except Exception as e:
+        utils.log_error(logger, e, location="frp_reminder_loop")
+
+
 @bot.event
 async def on_application_command_error(ctx: ApplicationContext, err):
     """
@@ -364,7 +375,7 @@ async def on_ready():
 
     # Updating shortcut menus
     shortcuts = STATE.db_connector.get_shortcuts()
-    logging.info(f"Found {len(shortcuts)} shortcut menus")
+    logger.info(f"Found {len(shortcuts)} shortcut menus")
     for (m, c) in shortcuts:
         chan = bot.get_channel(c)
         if chan is None:
@@ -374,24 +385,37 @@ async def on_ready():
             await msg.edit(view=AccountingView(),
                            embed=accounting.EMBED_MENU_SHORTCUT, content="")
         except discord.errors.NotFound:
-            logging.warning(f"Message {m} in channel {c} not found, deleting it from DB")
+            logger.warning(f"Message {m} in channel {c} not found, deleting it from DB")
             STATE.db_connector.delete_shortcut(m)
+
+    # Updating frp menu
+    try:
+        if config["frpMenuChannel"] != -1 and config["frpMenuMessage"] != -1:
+            channel = await bot.fetch_channel(config["frpMenuChannel"])
+            msg = await channel.fetch_message(config["frpMenuMessage"])
+            view = accounting_bot.commands.FRPsView()
+            view.message = msg
+            await view.refresh_msg()
+            logger.info("FRP menu updated")
+    except discord.NotFound:
+        logger.warning("FRP menu message %s in channel %s not found",
+                        config["frpMenuMessage"], config["frpMenuChannel"])
 
     # Basic setup completed, bot is operational
     STATE.state = State.online
     activity = discord.Activity(name="IAK-JW", type=ActivityType.competing)
     await bot.change_presence(status=discord.Status.idle, activity=activity)
 
-    logging.info("Starting Google sheets API...")
+    logger.info("Starting Google sheets API...")
     await sheet.setup_sheet(config, config["google_sheet"], config["project_resources"], config["logger.sheet"])
     await sheet.load_wallets(force=True, validate=True)
-    logging.info("Google sheets API loaded.")
+    logger.info("Google sheets API loaded.")
     if not market_loop.is_running():
         market_loop.start()
     # Updating unverified accountinglog entries
-    logging.info("Setting up unverified accounting log entries")
+    logger.info("Setting up unverified accounting log entries")
     unverified = STATE.db_connector.get_unverified()
-    logging.info(f"Found {len(unverified)} unverified message(s)")
+    logger.info(f"Found {len(unverified)} unverified message(s)")
     for m in unverified:
         try:
             msg = await accounting_log.fetch_message(m)
@@ -588,6 +612,7 @@ except NotImplementedError:
 
 log_loop.start()
 corpmissionOCR.ocr_result_loop.start()
+frp_reminder_loop.start()
 loop.set_exception_handler(handle_asyncio_exception)
 loop.run_until_complete(main())
 logger.info("Bot stopped")

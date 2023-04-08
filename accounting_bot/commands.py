@@ -1,12 +1,15 @@
 import datetime
+import enum
 import functools
 import io
 import logging
+import re
+import time
 from typing import TYPE_CHECKING, Optional, Callable, List, Union
 
 import discord
 from discord import User, ApplicationContext, AutocompleteContext, option, Role, SlashCommand, \
-    SlashCommandGroup, MessageCommand, ContextMenuCommand, UserCommand, ChannelType
+    SlashCommandGroup, MessageCommand, ContextMenuCommand, UserCommand, ChannelType, Embed, Message, Color, Interaction
 from discord.ext import commands
 from discord.ext.commands import Command
 from discord.ui import InputText
@@ -15,12 +18,12 @@ from accounting_bot import accounting, sheet, utils
 from accounting_bot.accounting import AccountingView
 from accounting_bot.config import Config
 from accounting_bot.database import DatabaseConnector
-from accounting_bot.exceptions import InputException
+from accounting_bot.exceptions import InputException, SingletonException
 from accounting_bot.localisation import t_
 from accounting_bot.universe import data_utils
 from accounting_bot.universe.pi_planer import PiPlanningSession, PiPlanningView
 from accounting_bot.utils import State, get_cmd_name, ErrorHandledModal, help_infos, help_info, admin_only, \
-    main_guild_only, user_only, online_only, CmdAnnotation, owner_only, guild_only
+    main_guild_only, user_only, online_only, CmdAnnotation, owner_only, guild_only, AutoDisableView, ConfirmView
 
 if TYPE_CHECKING:
     from bot import BotState
@@ -34,12 +37,34 @@ def main_char_autocomplete(self: AutocompleteContext):
 
 STATE = None  # type: BotState | None
 BOUNTY_ADMINS = []
+FRPs_CHANNEL = None  # type: int | None
+FRPs_MSG_ID = None  # type: int | None
+FRPs_MSG = None  # type: Message | None
+FRP_ROLE_PING = None  # type: int | None
 
 
 def setup(state: "BotState"):
-    global STATE, BOUNTY_ADMINS
+    global STATE, BOUNTY_ADMINS, FRPs_CHANNEL, FRPs_MSG_ID, FRP_ROLE_PING
     STATE = state
     BOUNTY_ADMINS = STATE.config["killmail_parser.admins"]
+    FRPs_CHANNEL = STATE.config["frpMenuChannel"]
+    FRP_ROLE_PING = STATE.config["frpRolePing"]
+    if FRPs_CHANNEL == -1:
+        FRPs_CHANNEL = None
+    if FRPs_CHANNEL is not None:
+        FRPs_MSG_ID = STATE.config["frpMenuMessage"]
+        if FRPs_MSG_ID == -1 or FRPs_MSG_ID is None:
+            FRPs_MSG_ID = None
+            FRPs_CHANNEL = None
+    if FRP_ROLE_PING == -1:
+        FRP_ROLE_PING = None
+    FRPsState()
+
+
+def save_config():
+    STATE.config["frpMenuChannel"] = -1 if FRPs_CHANNEL is None else FRPs_CHANNEL
+    STATE.config["frpMenuMessage"] = -1 if FRPs_MSG_ID is None else FRPs_MSG_ID
+    STATE.config.save_config()
 
 
 def get_cmd_help(cmd: Union[Callable, Command], opt: str = None, long=False, fallback=None):
@@ -376,6 +401,23 @@ class BaseCommands(commands.Cog):
             await msg.edit(embeds=[accounting.EMBED_INDU_MENU])
             await ctx.respond("Menü geupdated.", ephemeral=True)
 
+    @commands.slash_command(name="frp_menu", description="Creates a FRP ping menu")
+    @admin_only()
+    @guild_only()
+    async def cmd_frp_ping(self, ctx: ApplicationContext):
+        global FRPs_MSG_ID, FRPs_CHANNEL
+        await ctx.response.defer(ephemeral=True, invisible=False)
+        logger.info("Sending FRPs menu")
+        view = FRPsView()
+        m = await ctx.send(view=view)
+        if view.message is None:
+            view.message = m
+        await view.refresh_msg()
+        FRPs_MSG_ID = m.id
+        FRPs_CHANNEL = m.channel.id
+        save_config()
+        await ctx.followup.send("Neues Menü gesendet.")
+
     @commands.slash_command(name="stop", description="Shuts down the discord bot, if set up properly, it will restart")
     @owner_only()
     async def stop(self, ctx: ApplicationContext):
@@ -465,7 +507,7 @@ class BaseCommands(commands.Cog):
             if b["ship"] is None:
                 b["ship"] = "N/A"
         msg = f"Bounties aus diesem Monat für `{player}`\n```"
-        b_sum = functools.reduce(lambda x, y: x+y, map(lambda b: b["value"], res))
+        b_sum = functools.reduce(lambda x, y: x + y, map(lambda b: b["value"], res))
         i = 0
         for b in res:
             msg += f"\n{b['type']} {b['kill_id']:<7} {b['ship']:<12.12} {b['value']:11,.0f} ISK"
@@ -630,10 +672,12 @@ class UniverseCommands(commands.Cog):
     @option("end", description="The destination system", type=str, required=True)
     @option("mode", description="The autopilot mode", type=str, required=False, default="normal",
             choices=["normal", "avoid 00", "low only"])
-    @option("threshold", description="The min distance between two gates for warnings", type=int, required=False, default=50)
+    @option("threshold", description="The min distance between two gates for warnings", type=int, required=False,
+            default=50)
     @option(name="silent", description="Default false, if set to true, the command will be executed publicly",
             default=True, required=False)
-    async def cmd_route(self, ctx: ApplicationContext, start: str, end: str, mode: str, threshold: int, silent: bool = True):
+    async def cmd_route(self, ctx: ApplicationContext, start: str, end: str, mode: str, threshold: int,
+                        silent: bool = True):
         await ctx.response.defer(ephemeral=silent, invisible=False)
         sec_min = None
         sec_max = None
@@ -663,3 +707,220 @@ class UniverseCommands(commands.Cog):
             msg += f"\nEs gibt keine Warps die länger als {threshold} AU sind auf der Route"
         await ctx.followup.send(f"Route von **{first}** nach **{last}**:\n"
                                 f"Min Security: `{sec_min}`\nMax Security: `{sec_max}`\n" + msg)
+
+
+class FRPsState(object):
+    defaultState = None  # type: FRPsState | None
+
+    @functools.total_ordering
+    class State(enum.Enum):
+        idle = 0
+        pinged = 1
+        active = 2
+        completed = 3
+
+        def __eq__(self, o: object) -> bool:
+            if not isinstance(o, FRPsState.State):
+                return NotImplemented
+            return o.value == self.value
+
+        def __ge__(self, o: object) -> bool:
+            if not isinstance(o, FRPsState.State):
+                return NotImplemented
+            return self.value >= o.value
+
+        def get_str(self):
+            match self:
+                case FRPsState.State.idle:
+                    return "Nicht aktiv"
+                case FRPsState.State.pinged:
+                    return "FRPs gepingt"
+                case FRPsState.State.active:
+                    return "FRPs aktiv"
+                case FRPsState.State.completed:
+                    return "FRPs beendet"
+            return None
+
+    def __init__(self) -> None:
+        if FRPsState.defaultState is not None:
+            raise SingletonException("Only one instance of FRPsState is allowed")
+        self.state = FRPsState.State.idle
+        self.user = None  # type: int | None
+        self.user_name = None  # type: str | None
+        self.time = None  # type: datetime.datetime | None
+        self.info = None  # type: str | None
+        self.view = None  # type: FRPsView | None
+        self.ping = None  # type: Message | None
+        self.next_reminder = None  # type: datetime.datetime | None
+        FRPsState.defaultState = self
+
+    def reset(self) -> None:
+        self.state = FRPsState.State.idle
+        self.user = None
+        self.user_name = None
+        self.time = None
+        self.info = None
+        self.next_reminder = None
+
+    async def tick(self):
+        current_t = datetime.datetime.now()
+        if self.time is not None and self.state == FRPsState.State.pinged:
+            if self.time < current_t:
+                self.state = FRPsState.State.active
+                logger.info("FRPs automatically activated, user %s:%s, info %s", self.user_name, self.user, self.info)
+                await self.view.refresh_msg()
+        if self.state > FRPsState.State.pinged:
+            if self.next_reminder is None or self.next_reminder < current_t:
+                self.next_reminder = current_t + datetime.timedelta(minutes=20)
+                await self.send_reminder()
+
+    async def send_reminder(self):
+        if self.user is not None:
+            user = STATE.bot.get_user(self.user)
+            if user is None:
+                user = await STATE.bot.fetch_user(self.user)
+            await user.send("Erinnerung: Deaktiviere die Jammer Tower sobald diese nicht mehr benötigt werden.\n"
+                            "Diese Erinnerung wird alle 20min wiederholt. Sobald die FRPs beendet sind und die "
+                            "Jammer wieder aktiv sind, klicke erst auf \"FRPs beendet\" und dann \"Jammer aktiv\" um "
+                            "die Erinnerung zu deaktivieren.")
+
+
+class FRPsView(AutoDisableView):
+    def __init__(self, *args, **kwargs):
+        super().__init__(timeout=None)
+        FRPsState.defaultState.view = self
+
+    async def refresh_msg(self):
+        embed = Embed(
+            title="FRPs Pingen", color=Color(3066993),
+            description="Nutze dieses Menü um FRPs zu pingen.")
+        embed.add_field(
+            name="Erklärung", inline=False,
+            value="Wenn du FRPs pingen willst, drücke auf den entsprechenden Knopf und gebe die weiteren Infos ein. "
+                  "Als Zeit gib bitte eine Uhrzeit (z.B. `20:00`) oder die Anzahl der Minuten (z.B. `15min`) ein.\n\n"
+                  "Sobald die FRPs starten (der Start kann auch manuel durch den Knopf ohne Ping ausgelöst werden), "
+                  "bekommst du alle 20min eine Erinnerung, die **Jammer wieder zu reaktivieren**.\n\n"
+                  "Sobald die FRPs beendet sind und die Jammer wieder aktiviert sind, drücke die entsprechenden "
+                  "Knöpfe.")
+        embed.add_field(
+            name="Status", inline=False,
+            value=FRPsState.defaultState.state.get_str()
+        )
+        state = FRPsState.defaultState.state
+        if state > FRPsState.State.idle:
+            t = int(time.mktime(FRPsState.defaultState.time.timetuple()))
+            embed.add_field(
+                name="Startzeit", inline=False,
+                value=f"<t:{t}:R>\n<t:{t}:f>"
+            )
+            embed.add_field(
+                name="Info", inline=False,
+                value=f"{FRPsState.defaultState.info}\nGepingt von <@{FRPsState.defaultState.user}>"
+            )
+        for btn in self.children:
+            if isinstance(btn, discord.ui.Button):
+                match btn.label:
+                    case "Ping":
+                        btn.disabled = state > FRPsState.State.idle
+                    case "Starten":
+                        btn.disabled = state == FRPsState.State.active
+                    case "FRPs beendet":
+                        btn.disabled = state != FRPsState.State.active
+                    case "Jammer aktiv":
+                        btn.disabled = state != FRPsState.State.completed
+                    case _:
+                        btn.disabled = False
+        await self.message.edit(embed=embed, view=self)
+
+    @discord.ui.button(label="Ping", style=discord.ButtonStyle.green)
+    async def btn_ping(self, button: discord.Button, ctx: Interaction):
+        await ctx.response.send_modal(FRPsModal())
+
+    @discord.ui.button(label="Starten", style=discord.ButtonStyle.green)
+    async def btn_start(self, button: discord.Button, ctx: ApplicationContext):
+        state = FRPsState.defaultState
+        if state.state != FRPsState.State.active:
+            state.state = FRPsState.State.active
+        if state.time is None:
+            state.time = datetime.datetime.now()
+        if state.user is None:
+            state.user = ctx.user.id
+            state.user_name = ctx.user.name
+        await ctx.response.defer(ephemeral=True, invisible=True)
+        await state.view.refresh_msg()
+
+    @discord.ui.button(label="FRPs beendet", style=discord.ButtonStyle.red)
+    async def btn_stop(self, button: discord.Button, ctx: ApplicationContext):
+        state = FRPsState.defaultState
+        if state.state != FRPsState.State.active:
+            await ctx.response.send_message("FRPs sind nicht aktiv", ephemeral=True)
+            return
+        state.state = FRPsState.State.completed
+        await ctx.response.send_message("FRPs als beendet markiert, sobald alle Jammer wieder aktiv sind, drücke den"
+                                        "Knopf \"Jammer aktiv\" um die Erinnerungen zu deaktivieren.", ephemeral=True)
+        await state.view.refresh_msg()
+        if state.ping is not None:
+            await state.ping.delete()
+        state.ping = None
+
+    @discord.ui.button(label="Jammer aktiv", style=discord.ButtonStyle.red)
+    async def btn_jammer(self, button: discord.Button, ctx: ApplicationContext):
+        state = FRPsState.defaultState
+        if state.state != FRPsState.State.completed:
+            await ctx.response.send_message("Die FRPs sind noch nicht beendet", ephemeral=True)
+            return
+        state.reset()
+        await ctx.response.send_message("Erinnerung deaktiviert", ephemeral=True)
+        await state.view.refresh_msg()
+
+
+class FRPsModal(ErrorHandledModal):
+    def __init__(self, *args, **kwargs):
+        super().__init__(title="FRPs Pingen", *args, **kwargs)
+        self.add_item(InputText(label="Anzahl", placeholder="z.B. \"3\" oder \"3-5\"", required=True))
+        self.add_item(InputText(label="Zeit", placeholder="z.B. \"20:00\" oder \"15min\"", value="15min", required=True))
+
+    async def callback(self, ctx: ApplicationContext):
+        amount = self.children[0].value
+        time_raw = self.children[1].value.lower()
+        start_time = datetime.datetime.now()
+        if ":" in time_raw or "uhr" in time_raw:
+            time_raw = re.sub(r"[^0-9:]", "", time_raw)
+            time_raw = time_raw.split(":")
+            if len(time_raw[0]) == 0:
+                raise InputException(f"Time {time_raw} is invalid! Use format \"HH:MM\"")
+            hours = int(time_raw[0])
+            if len(time_raw) > 1:
+                mins = int(time_raw[1])
+            else:
+                mins = 0
+            start_time = start_time.replace(hour=hours, minute=mins)
+        else:
+            time_raw = re.sub(r"[^0-9]", "", time_raw)
+            if len(time_raw) == 0:
+                raise InputException(f"Time {time_raw} is invalid! Use format \"HH:MM\" or \"xy min\"")
+            minutes = int(time_raw)
+            start_time = start_time + datetime.timedelta(minutes=minutes)
+        t = int(time.mktime(start_time.timetuple()))
+
+        async def _confirm_ping(_ctx: ApplicationContext):
+            global FRPs_MSG
+            await _ctx.response.defer(ephemeral=True, invisible=True)
+            if FRPs_MSG is None:
+                FRPs_MSG = await ctx.channel.fetch_message(FRPs_MSG_ID)
+            state = FRPsState.defaultState
+            state.user = ctx.user.id
+            state.user_name = ctx.user.name
+            state.state = FRPsState.State.pinged
+            state.time = start_time
+            state.info = f"{amount} FRPs"
+            logger.info("FRP pinged by %s:%s, time: %s, info: %s",
+                        ctx.user.name, ctx.user.id, state.time, state.info)
+
+            msg = await FRPs_MSG.reply(f"<@&{FRP_ROLE_PING}> {state.info} <t:{t}:R>\n<t:{t}:f>")
+            state.ping = msg
+            await state.view.refresh_msg()
+
+        await ctx.response.send_message(
+            f"Willst du diesen Ping senden?\n\n{amount} FRPs <t:{t}:R>\n<t:{t}:f>",
+            view=ConfirmView(_confirm_ping), ephemeral=True)
