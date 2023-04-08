@@ -192,6 +192,18 @@ def load_frp_csv(path):
     fig.show()
 
 
+def find_connections(system_names: List[str]):
+    systems = db.fetch_systems(system_names)
+    gates = {}
+    for system in systems:
+        gates[system.name] = [s.name for s in system.stargates if s.name in system_names]
+    for system, connections in gates.items():
+        for s in gates.keys():
+            if s != system and s in connections:
+                print(f"Connection: {system:6}    {s:6}")
+    print("Completed!")
+
+
 if __name__ == '__main__':
     while True:
         inp = input("Please select action (help for list of available commands): ").casefold()
@@ -206,5 +218,14 @@ if __name__ == '__main__':
             exit(0)
         elif inp == "help".casefold():
             print("pi: Find pi in a constellation")
+        elif inp == "connections":
+            print("Insert systems:")
+            names = []
+            inp = input()
+            while inp != "":
+                names.append(inp.strip("\n").strip())
+                inp = input()
+            find_connections(names)
+            exit(0)
         else:
             print("Error: Command not found, enter 'help' for a list of all commands")

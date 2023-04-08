@@ -93,7 +93,7 @@ class UniverseDatabase:
                     if not found:
                         p = MarketPrice(price_type=price_type, price_value=price)
                     db_item.prices.append(p)
-            conn.commit()
+                conn.commit()
 
     def get_market_data(self,
                         item_names: Optional[List[str]] = None,
@@ -140,7 +140,8 @@ class UniverseDatabase:
                 conn.query(System)
                 .options(joinedload(System.celestials)
                          .subqueryload(Celestial.connected_gate)
-                         .subqueryload(Celestial.system))
+                         .subqueryload(Celestial.system),
+                         joinedload(System.stargates))
                 .filter(System.name.in_(system_names)).all()
             )
 
@@ -630,7 +631,7 @@ class UniverseDatabase:
                 wrong = (
                     conn.query(Killmail)
                     .filter(
-                        or_(Killmail.id <= kill_id_start, Killmail.id >= kill_id_end),
+                        or_(Killmail.id < kill_id_start, Killmail.id > kill_id_end),
                         Killmail.inserted.between(start, end)
                     )
                 ).all()
