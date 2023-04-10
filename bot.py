@@ -6,12 +6,13 @@ import sys
 from asyncio import AbstractEventLoop
 from datetime import datetime
 from threading import Thread
-from typing import Any, List, Callable
+from typing import Any, List, Callable, Union
 
 import discord
 import mariadb
 import pytesseract.pytesseract
-from discord import ActivityType, Message, DMChannel, ApplicationContext, Interaction, InteractionType
+from discord import ActivityType, Message, DMChannel, ApplicationContext, Interaction, InteractionType, Reaction, \
+    RawReactionActionEvent, Member, User
 from discord.ext import commands, tasks
 from discord.ext.commands import CommandOnCooldown, CheckFailure
 from dotenv import load_dotenv
@@ -534,7 +535,22 @@ async def on_interaction(interaction: Interaction):
 
 
 @bot.event
-async def on_raw_reaction_add(reaction):
+async def on_reaction_add(reaction: Reaction, user: Union[Member, User]):
+    if (
+            reaction.message.channel.id == accounting_bot.commands.FRPs_CHANNEL and
+            reaction.message.author == bot.user and
+            FRPsState.defaultState.view is not None and
+            reaction.message != FRPsState.defaultState.view.message and
+            reaction.emoji == "🗑️" and user != bot.user
+    ):
+        await reaction.message.delete(reason=f"Deleted by {user.id}:{user.name}")
+        if FRPsState.defaultState.ping == reaction.message:
+            FRPsState.defaultState.ping = None
+            await FRPsState.defaultState.inform_users("Der Ping wurde gelöscht")
+
+
+@bot.event
+async def on_raw_reaction_add(reaction: RawReactionActionEvent):
     if reaction.emoji.name == "✅" and reaction.channel_id == config["logChannel"]:
         # Message is not verified
         channel = bot.get_channel(config["logChannel"])
@@ -543,7 +559,7 @@ async def on_raw_reaction_add(reaction):
 
 
 @bot.event
-async def on_raw_reaction_remove(reaction):
+async def on_raw_reaction_remove(reaction: RawReactionActionEvent):
     if (
             reaction.emoji.name == "✅" and
             reaction.channel_id == config["logChannel"] and
@@ -561,6 +577,7 @@ def save_config():
 
 async def run_bot():
     try:
+        logger.warning("Logging in bot")
         await bot.start(token=TOKEN)
     except Exception as e:
         logging.critical("Bot crashed", e)

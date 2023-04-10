@@ -1,3 +1,4 @@
+import asyncio
 import datetime
 import enum
 import functools
@@ -752,6 +753,7 @@ class FRPsState(object):
         self.view = None  # type: FRPsView | None
         self.ping = None  # type: Message | None
         self.next_reminder = None  # type: datetime.datetime | None
+        self.reminder_list = []  # type: List[User]
         FRPsState.defaultState = self
 
     def reset(self) -> None:
@@ -761,6 +763,7 @@ class FRPsState(object):
         self.time = None
         self.info = None
         self.next_reminder = None
+        self.reminder_list.clear()
 
     async def tick(self):
         current_t = datetime.datetime.now()
@@ -772,17 +775,26 @@ class FRPsState(object):
         if self.state > FRPsState.State.pinged:
             if self.next_reminder is None or self.next_reminder < current_t:
                 self.next_reminder = current_t + datetime.timedelta(minutes=20)
-                await self.send_reminder()
+                await self.send_reminders()
 
-    async def send_reminder(self):
+    async def send_reminders(self):
+        await self.inform_users(
+            "Erinnerung: Deaktiviere die Jammer Tower sobald diese nicht mehr benötigt werden.\n"
+            "Diese Erinnerung wird alle 20min wiederholt. Sobald die FRPs beendet sind und die "
+            "Jammer wieder aktiv sind, klicke erst auf \"FRPs beendet\" und dann \"Jammer aktiv\" um "
+            "die Erinnerung zu deaktivieren."
+        )
+
+    async def inform_users(self, msg: str):
+        routines = []
         if self.user is not None:
             user = STATE.bot.get_user(self.user)
             if user is None:
                 user = await STATE.bot.fetch_user(self.user)
-            await user.send("Erinnerung: Deaktiviere die Jammer Tower sobald diese nicht mehr benötigt werden.\n"
-                            "Diese Erinnerung wird alle 20min wiederholt. Sobald die FRPs beendet sind und die "
-                            "Jammer wieder aktiv sind, klicke erst auf \"FRPs beendet\" und dann \"Jammer aktiv\" um "
-                            "die Erinnerung zu deaktivieren.")
+            routines.append(user.send(msg))
+        for user in self.reminder_list:
+            routines.append(user.send(msg))
+        await asyncio.gather(*routines)
 
 
 class FRPsView(AutoDisableView):
@@ -803,6 +815,10 @@ class FRPsView(AutoDisableView):
                   "Sobald die FRPs beendet sind und die Jammer wieder aktiviert sind, drücke die entsprechenden "
                   "Knöpfe.")
         embed.add_field(
+            name="Weiteres", inline=False,
+            value="⏰: Fügt dich zur Erinnerungsliste hinzu\n`Absagen`: Beendet die FRPs ohne den Ping zu löschen"
+        )
+        embed.add_field(
             name="Status", inline=False,
             value=FRPsState.defaultState.state.get_str()
         )
@@ -819,24 +835,28 @@ class FRPsView(AutoDisableView):
             )
         for btn in self.children:
             if isinstance(btn, discord.ui.Button):
-                match btn.label:
-                    case "Ping":
+                match btn:
+                    case self.btn_ping:
                         btn.disabled = state > FRPsState.State.idle
-                    case "Starten":
+                    case self.btn_start:
                         btn.disabled = state == FRPsState.State.active
-                    case "FRPs beendet":
+                    case self.btn_stop:
                         btn.disabled = state != FRPsState.State.active
-                    case "Jammer aktiv":
+                    case self.btn_jammer:
                         btn.disabled = state != FRPsState.State.completed
+                    case self.btn_reminder:
+                        btn.disabled = state < FRPsState.State.pinged
+                    case self.btn_postpone:
+                        btn.disabled = state < FRPsState.State.pinged
                     case _:
                         btn.disabled = False
         await self.message.edit(embed=embed, view=self)
 
-    @discord.ui.button(label="Ping", style=discord.ButtonStyle.green)
+    @discord.ui.button(label="Ping", style=discord.ButtonStyle.green, row=0)
     async def btn_ping(self, button: discord.Button, ctx: Interaction):
         await ctx.response.send_modal(FRPsModal())
 
-    @discord.ui.button(label="Starten", style=discord.ButtonStyle.green)
+    @discord.ui.button(label="Starten", style=discord.ButtonStyle.green, row=0)
     async def btn_start(self, button: discord.Button, ctx: ApplicationContext):
         state = FRPsState.defaultState
         if state.state != FRPsState.State.active:
@@ -849,7 +869,22 @@ class FRPsView(AutoDisableView):
         await ctx.response.defer(ephemeral=True, invisible=True)
         await state.view.refresh_msg()
 
-    @discord.ui.button(label="FRPs beendet", style=discord.ButtonStyle.red)
+    @discord.ui.button(emoji="⏰", style=discord.ButtonStyle.blurple, row=0)
+    async def btn_reminder(self, button: discord.Button, ctx: ApplicationContext):
+        state = FRPsState.defaultState
+        if state.state < FRPsState.State.pinged:
+            await ctx.response.send_message("Aktuell laufen keine FRPs, pinge oder starte zunächst die FRPs.",
+                                            ephemeral=True)
+            return
+        if ctx.user.id == state.user or ctx.user in state.reminder_list:
+            await ctx.response.send_message("Du erhältst bereits Erinnerungen",
+                                            ephemeral=True)
+            return
+        state.reminder_list.append(ctx.user)
+        await ctx.response.send_message("Du erhältst jetzt alle 20 Minuten Erinnerungen, sobald die FRPs starten.",
+                                        ephemeral=True)
+
+    @discord.ui.button(label="FRPs beendet", style=discord.ButtonStyle.red, row=1)
     async def btn_stop(self, button: discord.Button, ctx: ApplicationContext):
         state = FRPsState.defaultState
         if state.state != FRPsState.State.active:
@@ -863,27 +898,45 @@ class FRPsView(AutoDisableView):
             await state.ping.delete()
         state.ping = None
 
-    @discord.ui.button(label="Jammer aktiv", style=discord.ButtonStyle.red)
+    @discord.ui.button(label="Jammer aktiv", style=discord.ButtonStyle.red, row=1)
     async def btn_jammer(self, button: discord.Button, ctx: ApplicationContext):
         state = FRPsState.defaultState
         if state.state != FRPsState.State.completed:
             await ctx.response.send_message("Die FRPs sind noch nicht beendet", ephemeral=True)
             return
+        await ctx.response.defer(ephemeral=True, invisible=False)
+        await state.inform_users("Die Erinnerungen wurden deaktiviert.")
+        logger.info("Jammer reactivation confirmed by %s:%s", ctx.user.name, ctx.user.id)
         state.reset()
-        await ctx.response.send_message("Erinnerung deaktiviert", ephemeral=True)
-        await state.view.refresh_msg()
+        await asyncio.gather(ctx.followup.send("Erinnerung deaktiviert"),
+                             state.view.refresh_msg())
+
+    @discord.ui.button(label="Absagen", style=discord.ButtonStyle.gray, row=0)
+    async def btn_postpone(self, button: discord.Button, ctx: ApplicationContext):
+        state = FRPsState.defaultState
+        if state.state < FRPsState.State.pinged:
+            await ctx.response.send_message("FRPs sind nicht gepingt.", ephemeral=True)
+            return
+        await ctx.response.defer(ephemeral=True, invisible=False)
+        await state.inform_users("Die Erinnerungen wurden deaktiviert, da die FRPs abgesagt/verschoben wurden.")
+        state.reset()
+        await asyncio.gather(ctx.followup.send("FRPs verschoben"),
+                             state.view.refresh_msg())
 
 
 class FRPsModal(ErrorHandledModal):
     def __init__(self, *args, **kwargs):
         super().__init__(title="FRPs Pingen", *args, **kwargs)
-        self.add_item(InputText(label="Anzahl", placeholder="z.B. \"3\" oder \"3-5\"", required=True))
-        self.add_item(InputText(label="Zeit", placeholder="z.B. \"20:00\" oder \"15min\"", value="15min", required=True))
+        self.add_item(InputText(label="Anzahl", placeholder="z.B. \"3 FRPs\" oder \"3-5 FRPs\"", required=True))
+        self.add_item(
+            InputText(label="Zeit", placeholder="z.B. \"20:00\" oder \"15min\"", value="15min", required=True))
 
     async def callback(self, ctx: ApplicationContext):
         amount = self.children[0].value
         time_raw = self.children[1].value.lower()
         start_time = datetime.datetime.now()
+        if re.fullmatch(r"[0-9- ]+", amount):
+            amount = f"{amount} FRPs"
         if ":" in time_raw or "uhr" in time_raw:
             time_raw = re.sub(r"[^0-9:]", "", time_raw)
             time_raw = time_raw.split(":")
@@ -913,14 +966,15 @@ class FRPsModal(ErrorHandledModal):
             state.user_name = ctx.user.name
             state.state = FRPsState.State.pinged
             state.time = start_time
-            state.info = f"{amount} FRPs"
+            state.info = amount
             logger.info("FRP pinged by %s:%s, time: %s, info: %s",
                         ctx.user.name, ctx.user.id, state.time, state.info)
 
             msg = await FRPs_MSG.reply(f"<@&{FRP_ROLE_PING}> {state.info} <t:{t}:R>\n<t:{t}:f>")
             state.ping = msg
             await state.view.refresh_msg()
+            await msg.add_reaction("🗑️")
 
         await ctx.response.send_message(
-            f"Willst du diesen Ping senden?\n\n{amount} FRPs <t:{t}:R>\n<t:{t}:f>",
+            f"Willst du diesen Ping senden?\n\n{amount} <t:{t}:R>\n<t:{t}:f>",
             view=ConfirmView(_confirm_ping), ephemeral=True)
