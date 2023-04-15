@@ -170,7 +170,7 @@ class Array:
             for array in arrays:
                 income_sum += array.base_output * array.amount * get_price(array.resource, price_types)
         msg = (f"Zeitraum           Einnahmen\n"
-               f"Pro Tag   {income_sum:14,.0f} ISK\n"
+               f"Pro Tag   {income_sum * 24:14,.0f} ISK\n"
                f"Pro Woche {income_sum * 24 * 7:14,.0f} ISK\n"
                f"Pro Monat {income_sum * 24 * 7 * 30:14,.0f} ISK")
         return msg
