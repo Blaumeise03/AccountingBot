@@ -533,6 +533,37 @@ def find_path(start_name: str, end_name: str, sec_min: float = None, sec_max: fl
 
 
 @wrap_async
+def find_lowsec_entries(start_name: str, max_distance: int = 35):
+    graph = create_map_graph()
+    start = None
+    for node, data in graph.nodes(data=True):
+        if node == start_name:
+            start = node
+        data["suc"] = None
+    if start is None:
+        raise InputException(f"System {start_name} not found!")
+    graph.nodes[start]["suc"] = "-START-"
+    current_nodes = [start]
+    next_nodes = []
+    lowsec_nodes = []
+    distance = 0
+    while len(current_nodes) > 0 and distance <= max_distance:
+        distance += 1
+        for node in current_nodes:
+            for n in graph.neighbors(node):
+                if n != node and graph.nodes[n]["suc"] is None:
+                    graph.nodes[n]["suc"] = node
+                    graph.nodes[n]["distance"] = distance
+                    if graph.nodes[n]["security"] <= 0:
+                        next_nodes.append(n)
+                    else:
+                        lowsec_nodes.append(n)
+        current_nodes = next_nodes
+        next_nodes = []
+    return dict(map(lambda n: (n, graph.nodes[n]["distance"]), lowsec_nodes))
+
+
+@wrap_async
 def get_item(item_name: str):
     return db.fetch_item(item_name)
 

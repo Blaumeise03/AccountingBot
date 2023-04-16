@@ -227,5 +227,9 @@ if __name__ == '__main__':
                 inp = input()
             find_connections(names)
             exit(0)
+        # elif inp == "lowsec":
+        #     res = data_utils.find_lowsec_entries("IAK-JW")
+        #     for n, d in res.items():
+        #         print(f"{n:12}: {d:2}")
         else:
             print("Error: Command not found, enter 'help' for a list of all commands")

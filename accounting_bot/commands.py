@@ -709,6 +709,29 @@ class UniverseCommands(commands.Cog):
         await ctx.followup.send(f"Route von **{first}** nach **{last}**:\n"
                                 f"Min Security: `{sec_min}`\nMax Security: `{sec_max}`\n" + msg)
 
+    @commands.slash_command(name="lowsec_entries", description="Finds a list of all lowsec entries with distance")
+    @option("start", description="The origin system", type=str, required=True)
+    @option("max_d", description="The max distance to lowsec", type=int, required=False, default=35)
+    @option(name="silent", description="Default false, if set to true, the command will be executed publicly",
+            type=bool, default=True, required=False)
+    async def cmd_lowsec(self, ctx: ApplicationContext, start: str, max_d: int, silent: bool = True):
+        await ctx.response.defer(ephemeral=silent, invisible=False)
+        result = await data_utils.find_lowsec_entries(start, int(max_d))
+        msg = "```"
+        if len(result) > 0:
+            max_len = max(map(len, result))
+        else:
+            max_len = 1
+            msg += "\nKeine Lowsec Systeme gefunden"
+        for node, d in result.items():
+            msg += f"\n{node:{max_len}}: {d:2}"
+        msg += "\n```"
+        embed = Embed(title=f"Lowsec Entries nach `{start}`", color=Color.green(),
+                      description=f"Alle Lowsec Eingänge in den Nullsec die weniger als `{max_d}` jumps "
+                                  f"von `{start}` entfernt sind.")
+        embed.add_field(name="Routen", value=msg)
+        await ctx.followup.send(embed=embed)
+
 
 class FRPsState(object):
     defaultState = None  # type: FRPsState | None
