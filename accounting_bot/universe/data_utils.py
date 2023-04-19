@@ -33,7 +33,8 @@ def shutdown_db():
 def create_pi_boxplot(constellation_name: str,
                       resource_names: List[str],
                       region_names: Optional[List[str]] = None,
-                      vertical=False) -> Tuple[go.Figure, int]:
+                      vertical=False,
+                      full_axis=False) -> Tuple[go.Figure, int]:
     if region_names is not None and len(region_names) == 0:
         region_names = None
     logger.info("Creating boxplot for constellation %s, resources: %s", constellation_name, resource_names)
@@ -94,6 +95,10 @@ def create_pi_boxplot(constellation_name: str,
         ),
         showlegend=False
     )
+    if full_axis and not vertical:
+        fig.update_yaxes(range=[0, 1])
+    if full_axis and vertical:
+        fig.update_xaxes(range=[0, 1])
     return fig, N
 
 
@@ -101,8 +106,9 @@ def create_pi_boxplot(constellation_name: str,
 def create_pi_boxplot_async(constellation_name: str,
                             resource_names: List[str],
                             region_names: List[str],
-                            vertical=False):
-    return create_pi_boxplot(constellation_name, resource_names, region_names, vertical)
+                            vertical=False,
+                            full_axis=False):
+    return create_pi_boxplot(constellation_name, resource_names, region_names, vertical, full_axis)
 
 
 @wrap_async

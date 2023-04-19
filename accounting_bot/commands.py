@@ -591,15 +591,17 @@ class UniverseCommands(commands.Cog):
             type=str, required=False)
     @option(name="vertical", description="Create a vertical boxplot (default false)",
             default=False, required=False)
+    @option(name="full_axis", description="Makes the y-axis go from 0-100% instead of cropping it to the min/max.",
+            default=False, required=False)
     @option(name="silent", description="Default false, if set to true, the command will be executed publicly",
             default=True, required=False)
     async def cmd_const_stats(self, ctx: ApplicationContext, const: str, resources: str, compare_regions: str,
-                              vertical: bool, silent: bool):
+                              vertical: bool, full_axis: bool, silent: bool):
         await ctx.response.defer(ephemeral=silent)
         resource_names = utils.str_to_list(resources, ";")
         region_names = utils.str_to_list(compare_regions, ";")
 
-        figure, n = await data_utils.create_pi_boxplot_async(const, resource_names, region_names, vertical)
+        figure, n = await data_utils.create_pi_boxplot_async(const, resource_names, region_names, vertical, full_axis)
         img_binary = await data_utils.create_image(figure,
                                                    height=max(n * 45, 500) + 80 if vertical else 500,
                                                    width=700 if vertical else max(n * 45, 500))
@@ -693,21 +695,33 @@ class UniverseCommands(commands.Cog):
         msg_crit = "```"
         first = None
         last = None
+        if len(route) > 0:
+            max_len = max(map(lambda r: len(r[0]), route))
+        else:
+            max_len = 6
         for sys, prev, dest, distance in route:
             if first is None:
                 first = prev
             last = dest
-            msg += f"\n{'⚠️' if distance > threshold else ' '} {sys:6}: {prev:6} -> {dest:6}: {distance:4.2f} AU "
+            msg += f"\n{'⚠️' if distance > threshold else ' '} {sys:{max_len}}: {prev:{max_len}} -> {dest:{max_len}}: {distance:4.2f} AU "
             if distance > threshold:
-                msg_crit += f"\n{sys:6}: {distance:4.2f} AU"
+                msg_crit += f"\n{sys:{max_len}}: {distance:4.2f} AU"
         msg += "\n```"
         msg_crit += "\n```"
         if len(msg_crit) > 7:
-            msg += f"\nAchtung, es gibt einige Warps die länger als {threshold} AU sind auf der Route:\n" + msg_crit
+            msg_crit = f"\nAchtung, es gibt einige Warps die länger als `{threshold} AU` sind auf der Route:\n" + msg_crit
         else:
-            msg += f"\nEs gibt keine Warps die länger als {threshold} AU sind auf der Route"
+            msg_crit = f"\nEs gibt keine Warps die länger als `{threshold} AU` sind auf der Route"
+        msg += msg_crit
+        if len(msg) > 1800:
+            files = [utils.string_to_file(msg.replace("```", ""), filename="route.txt")]
+            msg = f"\n**Die Route ist zu lang** für eine Nachricht, daher wurde sie in einer Textdatei gespeichert."
+            if len(msg_crit) < 1800:
+                msg += msg_crit
+        else:
+            files = []
         await ctx.followup.send(f"Route von **{first}** nach **{last}**:\n"
-                                f"Min Security: `{sec_min}`\nMax Security: `{sec_max}`\n" + msg)
+                                f"Min Security: `{sec_min}`\nMax Security: `{sec_max}`\n" + msg, files=files)
 
     @commands.slash_command(name="lowsec_entries", description="Finds a list of all lowsec entries with distance")
     @option("start", description="The origin system", type=str, required=True)
