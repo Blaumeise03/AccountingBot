@@ -1,5 +1,4 @@
 import logging
-import re
 from enum import Enum
 from typing import Dict, List, Tuple
 from typing import TYPE_CHECKING
@@ -12,14 +11,15 @@ from discord.ext.commands import cooldown
 from discord.ui import InputText
 from gspread import Cell
 
-from accounting_bot import sheet, utils, project_utils
+from accounting_bot import sheet, utils
+from accounting_bot.extensions import project_utils
 from accounting_bot.exceptions import GoogleSheetException, BotOfflineException
-from accounting_bot.project_utils import format_list
-from accounting_bot.utils import string_to_file, list_to_string, AutoDisableView, State, \
-    ErrorHandledModal, Item, admin_only, online_only, help_info, user_only
+from accounting_bot.extensions.project_utils import format_list
+from accounting_bot.utils import string_to_file, list_to_string, AutoDisableView, ErrorHandledModal, Item, admin_only, online_only, \
+    user_only
 
 if TYPE_CHECKING:
-    from bot import BotState
+    from bot import BotState, AccountingBot
 
 logger = logging.getLogger("bot.projects")
 logger.setLevel(logging.DEBUG)
@@ -31,10 +31,16 @@ BOT = None  # type: commands.Bot | None
 STATE = None  # type: BotState | None
 
 
-def setup(state: "BotState"):
+def setup(bot: "AccountingBot"):
     global STATE, BOT
-    STATE = state
-    BOT = state.bot
+    STATE = bot.state
+    BOT = bot
+    config = STATE.config
+    bot.add_cog(ProjectCommands(bot, config["admins"], config["owner"], config["server"], config["user_role"]))
+
+
+def teardown(bot: "AccountingBot"):
+    bot.remove_cog("ProjectCommands")
 
 
 class ProjectCommands(commands.Cog):

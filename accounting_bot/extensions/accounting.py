@@ -1,5 +1,4 @@
 import asyncio
-import json
 import logging
 import os
 from abc import ABC, abstractmethod
@@ -13,24 +12,25 @@ import discord
 import discord.ext
 import mariadb
 import pytz
-from discord import Embed, Interaction, Color, Message, ApplicationContext
-from discord.ext.commands import Bot
+from discord import Embed, Interaction, Color, Message, ApplicationContext, option, User, RawReactionActionEvent
+from discord.ext import commands
+from discord.ext.commands import Bot, Cog
 from discord.ui import Modal, InputText
 from numpy import ndarray
 
-from accounting_bot import sheet, utils
+from accounting_bot import sheet, utils, ext_utils
 from accounting_bot.exceptions import BotOfflineException, AccountingException
-from accounting_bot.universe import pi_planer
-from accounting_bot.utils import AutoDisableView, ErrorHandledModal, TransactionLike, parse_number
+from accounting_bot.utils import AutoDisableView, ErrorHandledModal, TransactionLike, parse_number, admin_only, \
+    main_guild_only, guild_only, user_only, online_only
 
 if TYPE_CHECKING:
-    from bot import BotState
+    from bot import BotState, AccountingBot
 
 INVESTMENT_RATIO = 0.3  # percentage of investment that may be used for transactions
 
-logger = logging.getLogger("bot.accounting")
+logger = logging.getLogger("bot.ext.accounting")
 
-BOT = None  # type: discord.ext.commands.bot.Bot | None
+BOT = None  # type: AccountingBot | None
 ACCOUNTING_LOG = None  # type: int | None
 ADMIN_LOG = None  # type: int | None
 SHIPYARD_ADMINS = []
@@ -38,45 +38,113 @@ STATE = None  # type: BotState | None
 IMG_WORKING_DIR = None  # type: str | None
 NAME_SHIPYARD = "Buyback Program"
 
-# All embeds
-EMBED_MENU_INTERNAL = None  # type: Embed | None
-EMBED_MENU_EXTERNAL = None  # type: Embed | None
-EMBED_MENU_VCB = None  # type: Embed | None
-EMBED_MENU_SHORTCUT = None  # type: Embed | None
-EMBED_INDU_MENU = None  # type: Embed | None
-
 # Database lock
 database_lock = Lock()
 
 
-def setup(state: "BotState") -> None:
-    """
-    Sets all the required variables and reloads the embeds.
-
-    :param state: the global state of the bot
-    """
+def setup(bot: "AccountingBot") -> None:
     global BOT, ACCOUNTING_LOG, ADMIN_LOG, STATE, SHIPYARD_ADMINS
-    global EMBED_MENU_INTERNAL, EMBED_MENU_EXTERNAL, EMBED_MENU_VCB, EMBED_MENU_SHORTCUT, EMBED_INDU_MENU
-    config = state.config
-    BOT = state.bot
+    config = bot.state.config
+    BOT = bot
     ACCOUNTING_LOG = config["logChannel"]
     admin_log = config["adminLogChannel"]
     if admin_log != -1:
         ADMIN_LOG = admin_log
     SHIPYARD_ADMINS = config["shipyard_admins"]
-    STATE = state
-    logger.info("Loading embed config")
-    with open("resources/embeds.json", "r", encoding="utf8") as embed_file:
-        embeds = json.load(embed_file)
-        EMBED_MENU_INTERNAL = Embed.from_dict(embeds["MenuEmbedInternal"])
-        EMBED_MENU_EXTERNAL = Embed.from_dict(embeds["MenuEmbedExternal"])
-        EMBED_MENU_VCB = Embed.from_dict(embeds["MenuEmbedVCB"])
-        EMBED_MENU_SHORTCUT = Embed.from_dict(embeds["MenuShortcut"])
-        EMBED_INDU_MENU = Embed.from_dict(embeds["InduRoleMenu"])
-        pi_planer.help_embed = Embed.from_dict(embeds["PiPlanerHelp"])
-        pi_planer.autoarray_help_a = embeds["PiPlanAutoSelectHelpA"]
-        pi_planer.autoarray_help_b = embeds["PiPlanAutoSelectHelpB"]
-        logger.info("Embeds loaded.")
+    STATE = bot.state
+    bot.add_cog(AccountingCommands())
+
+
+@ext_utils.event
+async def on_ready() -> None:
+    config = BOT.state.config
+
+    # Refreshing main menu
+    channel = await BOT.fetch_channel(config["menuChannel"])
+    msg = await channel.fetch_message(config["menuMessage"])
+    await msg.edit(view=AccountingView(),
+                   embeds=get_menu_embeds(), content="")
+
+    # Updating shortcut menus
+    shortcuts = STATE.db_connector.get_shortcuts()
+    logger.info(f"Found {len(shortcuts)} shortcut menus")
+    for (m, c) in shortcuts:
+        chan = BOT.get_channel(c)
+        if chan is None:
+            chan = BOT.fetch_channel(c)
+        try:
+            msg = await chan.fetch_message(m)
+            await msg.edit(view=AccountingView(),
+                           embed=BOT.embeds["MenuShortcut"], content="")
+        except discord.errors.NotFound:
+            logger.warning(f"Message {m} in channel {c} not found, deleting it from DB")
+            STATE.db_connector.delete_shortcut(m)
+
+    # Updating unverified accountinglog entries
+    logger.info("Refreshing unverified accounting log entries")
+    accounting_log = await BOT.fetch_channel(config["logChannel"])
+    unverified = STATE.db_connector.get_unverified()
+    logger.info(f"Found {len(unverified)} unverified message(s)")
+    for m in unverified:
+        try:
+            msg = await accounting_log.fetch_message(m)
+        except discord.errors.NotFound:
+            STATE.db_connector.delete(m)
+            continue
+        if msg.content.startswith("Verifiziert von"):
+            logging.warning(f"Transaction already verified but not inside database: %s: %s",
+                            msg.id, msg.content)
+            STATE.db_connector.set_verification(m, 1)
+            continue
+        v = False  # Was transaction verified while the bot was offline?
+        user = None  # User ID who verified the message
+        # Checking all the reactions below the message
+        for r in msg.reactions:
+            emoji = r.emoji
+            if isinstance(emoji, str):
+                name = emoji
+            else:
+                name = emoji.name
+            if name != "✅":
+                continue
+            users = await r.users().flatten()
+            for u in users:
+                if u.id in config["admins"]:
+                    # User is admin, the transaction is therefore verified
+                    v = True
+                    user = u.id
+                    break
+            break
+        if v:
+            # Message was verified
+            try:
+                # Saving transaction to google sheet
+                await save_embeds(msg, user)
+            except mariadb.Error:
+                pass
+            # Removing the View
+            await msg.edit(view=None)
+        else:
+            # Updating the message View, so it can be used by the users
+            await msg.edit(view=TransactionView())
+            if len(msg.embeds) > 0:
+                transaction = transaction_from_embed(msg.embeds[0])
+                state = await transaction.get_state()
+                if state == 2:
+                    await msg.add_reaction("⚠️")
+                elif state == 3:
+                    await msg.add_reaction("❌")
+            else:
+                logging.warning("Message %s is listed as transaction but does not have an embed", msg.id)
+
+
+@ext_utils.event
+async def on_raw_reaction_add(reaction: RawReactionActionEvent):
+    if reaction.emoji.name == "✅" and reaction.channel_id == STATE.config["logChannel"]:
+        # Message is not verified
+        channel = STATE.bot.get_channel(STATE.config["logChannel"])
+        msg = await channel.fetch_message(reaction.message_id)
+        await verify_transaction(reaction.user_id, msg)
 
 
 def get_menu_embeds() -> [Embed]:
@@ -86,9 +154,9 @@ def get_menu_embeds() -> [Embed]:
     :return: an array containing all three menu embeds.
     """
     return [
-        EMBED_MENU_INTERNAL,
-        EMBED_MENU_EXTERNAL,
-        EMBED_MENU_VCB
+        BOT.embeds["MenuEmbedInternal"],
+        BOT.embeds["MenuEmbedExternal"],
+        BOT.embeds["MenuEmbedVCB"],
     ]
 
 
@@ -353,6 +421,77 @@ def transaction_from_embed(embed: Embed):
     if embed.title == "Shipyard Bestellung":
         return ShipyardTransaction.from_embed(embed)
     return Transaction.from_embed(embed)
+
+
+class AccountingCommands(Cog):
+    @commands.slash_command(description="Creates the main menu for the bot and sets all required settings")
+    @admin_only()
+    @main_guild_only()
+    @guild_only()
+    async def setup(self, ctx: ApplicationContext):
+        logger.info("User verified for setup-command, starting setup...")
+        view = AccountingView()
+        msg = await ctx.send(view=view, embeds=get_menu_embeds())
+        logger.info("Send menu message with id " + str(msg.id))
+        STATE.config["menuMessage"] = msg.id
+        STATE.config["menuChannel"] = ctx.channel.id
+        STATE.config["server"] = ctx.guild.id
+        STATE.config.save_config()
+        logger.info("Setup completed.")
+        await ctx.response.send_message("Saved config", ephemeral=True)
+
+    @commands.slash_command(
+        name="setlogchannel",
+        description="Sets the current channel as the accounting log channel")
+    @admin_only()
+    @main_guild_only()
+    @guild_only()
+    async def set_log_channel(self, ctx):
+        logger.info("User Verified. Setting up channel...")
+        STATE.config["logChannel"] = ctx.channel.id
+        STATE.config.save_config()
+        logger.info("Channel changed!")
+        await ctx.respond("Log channel set to this channel (`" + str(STATE.config["logChannel"]) + "`)")
+
+    # noinspection SpellCheckingInspection
+    @commands.slash_command(description="Creates a new shortcut menu containing all buttons")
+    @main_guild_only()
+    @guild_only()
+    async def createshortcut(self, ctx):
+        if ctx.author.guild_permissions.administrator or ctx.author.id in STATE.admins or ctx.author.id == self.owner:
+            view = AccountingView()
+            msg = await ctx.send(view=view, embed=STATE.bot.embeds["MenuShortcut"])
+            self.connector.add_shortcut(msg.id, ctx.channel.id)
+            await ctx.respond("Shortcut menu posted", ephemeral=True)
+        else:
+            logging.info(f"User {ctx.author.id} is missing permissions to run the createshortcut command")
+            await ctx.respond("Missing permissions", ephemeral=True)
+
+    @commands.slash_command(name="balance", description="Get the balance of a user")
+    @option("force", description="Enforce data reload from sheet", required=False, default=False)
+    @option("user", description="The user to lookup", required=False, default=None)
+    @user_only()
+    @online_only()
+    async def get_balance(self, ctx: ApplicationContext, force: bool = False, user: User = None):
+        await ctx.defer(ephemeral=True)
+        await sheet.load_wallets(force)
+        if not user:
+            user_id = ctx.user.id
+        else:
+            user_id = user.id
+
+        name, _, _ = utils.get_main_account(discord_id=user_id)
+        if name is None:
+            await ctx.followup.send("This discord account is not connected to any ingame account!", ephemeral=True)
+            return
+        name = sheet.check_name_overwrites(name)
+        balance = await sheet.get_balance(name)
+        investments = await sheet.get_investments(name, default=0)
+        if balance is None:
+            await ctx.followup.send("Konto nicht gefunden!", ephemeral=True)
+            return
+        await ctx.followup.send("Der Kontostand von {} beträgt `{:,} ISK`.\nDie Projekteinlagen betragen `{:,} ISK`"
+                                .format(name, balance, investments), ephemeral=True)
 
 
 class Transaction(TransactionLike):

@@ -782,7 +782,8 @@ async def terminate_bot():
     logger.critical("Terminating bot")
     STATE.state = State.terminated
     activity = discord.Activity(name="Shutting down...", type=ActivityType.custom)
-    await BOT.change_presence(status=discord.Status.idle, activity=activity)
+    if BOT is not None:
+        await BOT.change_presence(status=discord.Status.idle, activity=activity)
     await ShutdownProcedure.execute_phase(ShutdownOrderType.user_input)
     # Wait for all pending interactions to complete
     logger.warning("Waiting for interactions to complete")

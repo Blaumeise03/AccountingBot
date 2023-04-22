@@ -2,7 +2,6 @@ import asyncio
 import datetime
 import enum
 import functools
-import io
 import logging
 import re
 import time
@@ -10,21 +9,19 @@ from typing import TYPE_CHECKING, Optional, Callable, List, Union
 
 import discord
 from discord import User, ApplicationContext, AutocompleteContext, option, Role, SlashCommand, \
-    SlashCommandGroup, MessageCommand, ContextMenuCommand, UserCommand, ChannelType, Embed, Message, Color, Interaction
+    MessageCommand, ContextMenuCommand, UserCommand, Embed, Message, Color, Interaction
 from discord.ext import commands
 from discord.ext.commands import Command
 from discord.ui import InputText
 
-from accounting_bot import accounting, sheet, utils
-from accounting_bot.accounting import AccountingView
+from accounting_bot import sheet, utils
 from accounting_bot.config import Config
 from accounting_bot.database import DatabaseConnector
 from accounting_bot.exceptions import InputException, SingletonException
 from accounting_bot.localisation import t_
 from accounting_bot.universe import data_utils
-from accounting_bot.universe.pi_planer import PiPlanningSession, PiPlanningView
 from accounting_bot.utils import State, get_cmd_name, ErrorHandledModal, help_infos, help_info, admin_only, \
-    main_guild_only, user_only, online_only, CmdAnnotation, owner_only, guild_only, AutoDisableView, ConfirmView
+    user_only, online_only, CmdAnnotation, owner_only, guild_only, AutoDisableView, ConfirmView
 
 if TYPE_CHECKING:
     from bot import BotState
@@ -257,75 +254,6 @@ class BaseCommands(commands.Cog):
         self.connector = state.db_connector
         self.state = state
 
-    @commands.slash_command(description="Creates the main menu for the bot and sets all required settings")
-    @admin_only()
-    @main_guild_only()
-    @guild_only()
-    async def setup(self, ctx: ApplicationContext):
-        logger.info("User verified for setup-command, starting setup...")
-        view = AccountingView()
-        msg = await ctx.send(view=view, embeds=accounting.get_menu_embeds())
-        logger.info("Send menu message with id " + str(msg.id))
-        STATE.config["menuMessage"] = msg.id
-        STATE.config["menuChannel"] = ctx.channel.id
-        STATE.config["server"] = ctx.guild.id
-        STATE.config.save_config()
-        logger.info("Setup completed.")
-        await ctx.response.send_message("Saved config", ephemeral=True)
-
-    @commands.slash_command(
-        name="setlogchannel",
-        description="Sets the current channel as the accounting log channel")
-    @admin_only()
-    @main_guild_only()
-    @guild_only()
-    async def set_log_channel(self, ctx):
-        logger.info("User Verified. Setting up channel...")
-        STATE.config["logChannel"] = ctx.channel.id
-        STATE.config.save_config()
-        logger.info("Channel changed!")
-        await ctx.respond("Log channel set to this channel (`" + str(STATE.config["logChannel"]) + "`)")
-
-    # noinspection SpellCheckingInspection
-    @commands.slash_command(description="Creates a new shortcut menu containing all buttons")
-    @main_guild_only()
-    @guild_only()
-    async def createshortcut(self, ctx):
-        if ctx.author.guild_permissions.administrator or ctx.author.id in STATE.admins or ctx.author.id == self.owner:
-            view = AccountingView()
-            msg = await ctx.send(view=view, embed=accounting.EMBED_MENU_SHORTCUT)
-            self.connector.add_shortcut(msg.id, ctx.channel.id)
-            await ctx.respond("Shortcut menu posted", ephemeral=True)
-        else:
-            logging.info(f"User {ctx.author.id} is missing permissions to run the createshortcut command")
-            await ctx.respond("Missing permissions", ephemeral=True)
-
-    @commands.slash_command(name="balance", description="Get the balance of a user")
-    @option("force", description="Enforce data reload from sheet", required=False, default=False)
-    @option("user", description="The user to lookup", required=False, default=None)
-    @user_only()
-    @online_only()
-    async def get_balance(self, ctx: ApplicationContext, force: bool = False, user: User = None):
-        await ctx.defer(ephemeral=True)
-        await sheet.load_wallets(force)
-        if not user:
-            user_id = ctx.user.id
-        else:
-            user_id = user.id
-
-        name, _, _ = utils.get_main_account(discord_id=user_id)
-        if name is None:
-            await ctx.followup.send("This discord account is not connected to any ingame account!", ephemeral=True)
-            return
-        name = sheet.check_name_overwrites(name)
-        balance = await sheet.get_balance(name)
-        investments = await sheet.get_investments(name, default=0)
-        if balance is None:
-            await ctx.followup.send("Konto nicht gefunden!", ephemeral=True)
-            return
-        await ctx.followup.send("Der Kontostand von {} beträgt `{:,} ISK`.\nDie Projekteinlagen betragen `{:,} ISK`"
-                                .format(name, balance, investments), ephemeral=True)
-
     @commands.slash_command(name="registeruser", description="Registers a user to a discord ID")
     @option("ingame_name", description="The main character name of the user", required=True,
             autocomplete=main_char_autocomplete)
@@ -390,17 +318,27 @@ class BaseCommands(commands.Cog):
 
     # noinspection SpellCheckingInspection
     @commands.slash_command(description="Posts a menu with all available manufacturing roles")
+    @option(name="embed", description="The name of the embed to send", type=str, required=True)
     @option(name="msg", description="Edit this message ID instead of posting a new message", default=None)
-    async def indumenu(self, ctx, msg: str = None):
+    @admin_only()
+    async def embed(self, ctx: ApplicationContext, embed: str, msg: str = None):
+        if embed not in STATE.bot.embeds:
+            await ctx.respond(f"Embed `{embed}` not found!", ephemeral=True)
+            return
         if msg is None:
-            logger.info("Sending role menu")
-            await ctx.send(embeds=[accounting.EMBED_INDU_MENU])
+            logger.info("Sending embed %s to channel %s:%s", embed, ctx.channel.name, ctx.channel.id)
+            await ctx.send(embed=STATE.bot.embeds[embed])
             await ctx.respond("Neues Menü gesendet.", ephemeral=True)
-        else:
-            logger.info("Updating role menu " + str(msg))
+            return
+        try:
             msg = await ctx.channel.fetch_message(int(msg))
-            await msg.edit(embeds=[accounting.EMBED_INDU_MENU])
-            await ctx.respond("Menü geupdated.", ephemeral=True)
+        except discord.NotFound:
+            await ctx.respond("Message not found in this channel", ephemeral=True)
+            return
+        logger.info("Updating embed %s on message %s in channel %s:%s", embed, msg, ctx.channel.name,
+                    ctx.channel.id)
+        await msg.edit(embeds=STATE.bot.embeds[embed])
+        await ctx.respond("Embed updated", ephemeral=True)
 
     @commands.slash_command(name="frp_menu", description="Creates a FRP ping menu")
     @admin_only()
@@ -577,174 +515,7 @@ class AddBountyModal(ErrorHandledModal):
         await ctx.followup.send(msg)
 
 
-class UniverseCommands(commands.Cog):
-    def __init__(self, state: "BotState"):
-        self.state = state
 
-    cmd_pi = SlashCommandGroup(name="pi", description="Access planetary production data.")
-
-    @cmd_pi.command(name="stats", description="View statistical data for pi in a selected constellation")
-    @option(name="const", description="Target Constellation", type=str, required=True)
-    @option(name="resources", description="List of pi, seperated by ';'", type=str, required=False)
-    @option(name="compare_regions",
-            description="List of regions, seperated by ';' to compare the selected constellation with",
-            type=str, required=False)
-    @option(name="vertical", description="Create a vertical boxplot (default false)",
-            default=False, required=False)
-    @option(name="full_axis", description="Makes the y-axis go from 0-100% instead of cropping it to the min/max.",
-            default=False, required=False)
-    @option(name="silent", description="Default false, if set to true, the command will be executed publicly",
-            default=True, required=False)
-    async def cmd_const_stats(self, ctx: ApplicationContext, const: str, resources: str, compare_regions: str,
-                              vertical: bool, full_axis: bool, silent: bool):
-        await ctx.response.defer(ephemeral=silent)
-        resource_names = utils.str_to_list(resources, ";")
-        region_names = utils.str_to_list(compare_regions, ";")
-
-        figure, n = await data_utils.create_pi_boxplot_async(const, resource_names, region_names, vertical, full_axis)
-        img_binary = await data_utils.create_image(figure,
-                                                   height=max(n * 45, 500) + 80 if vertical else 500,
-                                                   width=700 if vertical else max(n * 45, 500))
-        arr = io.BytesIO(img_binary)
-        arr.seek(0)
-        file = discord.File(arr, "image.jpeg")
-        await ctx.followup.send(f"PI Analyse für {const} abgeschlossen:", file=file, ephemeral=silent)
-
-    @cmd_pi.command(name="find", description="Returns a list with the best planets for selected pi")
-    @option(name="const_sys", description="Target Constellation or origin system", type=str, required=True)
-    @option(name="resource", description="Name of pi to search", type=str, required=True)
-    @option(name="distance", description="Distance from origin system to look up",
-            type=int, min_value=0, max_value=30, required=False, default=0)
-    @option(name="amount", description="Number of planets to return", type=int, required=False, default=None)
-    @option(name="silent", description="Default false, if set to true, the command will be executed publicly",
-            default=True, required=False)
-    async def cmd_find_pi(self, ctx: ApplicationContext, const_sys: str, resource: str, distance: int, amount: int,
-                          silent: bool):
-        await ctx.response.defer(ephemeral=True)
-        resource = resource.strip()
-        const = await data_utils.get_constellation(const_sys)
-        has_sys = False
-        if const is not None:
-            result = await data_utils.get_best_pi_planets(const.name, resource, amount)
-            title = f"{resource} in {const_sys}"
-        else:
-            sys = await data_utils.get_system(const_sys)
-            if sys is None:
-                await ctx.followup.send(f"\"{const_sys}\" is not a system/constellation.", ephemeral=silent)
-                return
-            if distance is None:
-                await ctx.followup.send(f"An distance of jumps from the selected system is required.", ephemeral=silent)
-                return
-            result = await data_utils.get_best_pi_by_planet(sys.name, distance, resource, amount)
-            title = f"{resource} near {const_sys}"
-            has_sys = True
-        result = sorted(result, key=lambda r: r["out"], reverse=True)
-        msg = "Output in units per factory per hour\n```"
-        msg += f"{'Planet':<12}: {'Output':<6}" + (f"  Jumps\n" if has_sys else "\n")
-        for res in result:
-            msg += f"\n{res['p_name']:<12}: {res['out']:6.2f}" + (f"  {res['distance']}j" if has_sys else "")
-            if len(msg) > 3900:
-                msg += "\n**(Truncated)**"
-                break
-        msg += "\n```"
-        emb = discord.Embed(title=title, color=discord.Color.green(),
-                            description="Kein Planet gefunden/ungültige Eingabe" if len(result) == 0 else msg)
-        await ctx.followup.send(embed=emb, ephemeral=silent)
-
-    @cmd_pi.command(name="planer", description="Opens the pi planer to manage your planets")
-    async def cmd_pi_plan(self, ctx: ApplicationContext):
-        plan = PiPlanningSession(ctx.user)
-        await plan.load_plans()
-        if ctx.channel.type == ChannelType.private:
-            interaction = await ctx.response.send_message(
-                f"Du hast aktuell {len(plan.plans)} aktive Pi Pläne:",
-                embeds=plan.get_embeds(),
-                view=PiPlanningView(plan))
-            response = await interaction.original_response()
-            plan.message = await ctx.user.fetch_message(response.id)
-            return
-        msg = await ctx.user.send(
-            f"Du hast aktuell {len(plan.plans)} aktive Pi Pläne:",
-            embeds=plan.get_embeds(),
-            view=PiPlanningView(plan))
-        plan.message = msg
-        await ctx.response.send_message("Überprüfe deine Direktnachrichten", ephemeral=True)
-
-    @commands.slash_command(name="route", description="Finds a route between two systems")
-    @option("start", description="The origin system", type=str, required=True)
-    @option("end", description="The destination system", type=str, required=True)
-    @option("mode", description="The autopilot mode", type=str, required=False, default="normal",
-            choices=["normal", "avoid 00", "low only"])
-    @option("threshold", description="The min distance between two gates for warnings", type=int, required=False,
-            default=50)
-    @option(name="silent", description="Default false, if set to true, the command will be executed publicly",
-            default=True, required=False)
-    async def cmd_route(self, ctx: ApplicationContext, start: str, end: str, mode: str, threshold: int,
-                        silent: bool = True):
-        await ctx.response.defer(ephemeral=silent, invisible=False)
-        sec_min = None
-        sec_max = None
-        mode = mode.casefold()
-        if mode == "avoid 00".casefold():
-            sec_min = 0
-        elif mode == "low only".casefold():
-            sec_min = 0
-            sec_max = 0.5
-        route = await data_utils.find_path(start, end, sec_min, sec_max)
-        msg = "```"
-        msg_crit = "```"
-        first = None
-        last = None
-        if len(route) > 0:
-            max_len = max(map(lambda r: len(r[0]), route))
-        else:
-            max_len = 6
-        for sys, prev, dest, distance in route:
-            if first is None:
-                first = prev
-            last = dest
-            msg += f"\n{'⚠️' if distance > threshold else ' '} {sys:{max_len}}: {prev:{max_len}} -> {dest:{max_len}}: {distance:4.2f} AU "
-            if distance > threshold:
-                msg_crit += f"\n{sys:{max_len}}: {distance:4.2f} AU"
-        msg += "\n```"
-        msg_crit += "\n```"
-        if len(msg_crit) > 7:
-            msg_crit = f"\nAchtung, es gibt einige Warps die länger als `{threshold} AU` sind auf der Route:\n" + msg_crit
-        else:
-            msg_crit = f"\nEs gibt keine Warps die länger als `{threshold} AU` sind auf der Route"
-        msg += msg_crit
-        if len(msg) > 1800:
-            files = [utils.string_to_file(msg.replace("```", ""), filename="route.txt")]
-            msg = f"\n**Die Route ist zu lang** für eine Nachricht, daher wurde sie in einer Textdatei gespeichert."
-            if len(msg_crit) < 1800:
-                msg += msg_crit
-        else:
-            files = []
-        await ctx.followup.send(f"Route von **{first}** nach **{last}**:\n"
-                                f"Min Security: `{sec_min}`\nMax Security: `{sec_max}`\n" + msg, files=files)
-
-    @commands.slash_command(name="lowsec_entries", description="Finds a list of all lowsec entries with distance")
-    @option("start", description="The origin system", type=str, required=True)
-    @option("max_d", description="The max distance to lowsec", type=int, required=False, default=35)
-    @option(name="silent", description="Default false, if set to true, the command will be executed publicly",
-            type=bool, default=True, required=False)
-    async def cmd_lowsec(self, ctx: ApplicationContext, start: str, max_d: int, silent: bool = True):
-        await ctx.response.defer(ephemeral=silent, invisible=False)
-        result = await data_utils.find_lowsec_entries(start, int(max_d))
-        msg = "```"
-        if len(result) > 0:
-            max_len = max(map(len, result))
-        else:
-            max_len = 1
-            msg += "\nKeine Lowsec Systeme gefunden"
-        for node, d in result.items():
-            msg += f"\n{node:{max_len}}: {d:2}"
-        msg += "\n```"
-        embed = Embed(title=f"Lowsec Entries nach `{start}`", color=Color.green(),
-                      description=f"Alle Lowsec Eingänge in den Nullsec die weniger als `{max_d}` jumps "
-                                  f"von `{start}` entfernt sind.")
-        embed.add_field(name="Routen", value=msg)
-        await ctx.followup.send(embed=embed)
 
 
 class FRPsState(object):

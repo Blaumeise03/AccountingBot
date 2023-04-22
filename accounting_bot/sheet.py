@@ -14,16 +14,17 @@ from google.oauth2.service_account import Credentials
 from gspread import GSpreadException, Cell
 from gspread.utils import ValueRenderOption, ValueInputOption
 
-from accounting_bot import projects, utils
+from accounting_bot import utils
+from accounting_bot.extensions import projects
 from accounting_bot.config import Config
 from accounting_bot.exceptions import GoogleSheetException, BotOfflineException
-from accounting_bot.project_utils import find_player_row, calculate_changes, verify_batch_data, process_first_column
-from accounting_bot.projects import Project
-from accounting_bot.utils import State, Item
+from accounting_bot.extensions.project_utils import find_player_row, calculate_changes, verify_batch_data, process_first_column
+from accounting_bot.extensions.projects import Project
+from accounting_bot.utils import Item
 
 if TYPE_CHECKING:
     from bot import BotState
-    from accounting_bot.accounting import Transaction
+    from accounting_bot.extensions.accounting import Transaction
 
 logger = logging.getLogger("bot.sheet")
 logger.setLevel(logging.DEBUG)

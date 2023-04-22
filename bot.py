@@ -1,16 +1,14 @@
 import asyncio
+import importlib
 import logging
 import os
 import signal
 import sys
 from asyncio import AbstractEventLoop
 from datetime import datetime
-from threading import Thread
 from typing import Any, List, Callable, Union
 
 import discord
-import mariadb
-import pytesseract.pytesseract
 from discord import ActivityType, Message, DMChannel, ApplicationContext, Interaction, InteractionType, Reaction, \
     RawReactionActionEvent, Member, User
 from discord.ext import commands, tasks
@@ -18,9 +16,8 @@ from discord.ext.commands import CommandOnCooldown, CheckFailure
 from dotenv import load_dotenv
 
 import accounting_bot.commands
-from accounting_bot import accounting, sheet, projects, utils, corpmissionOCR, exceptions
-from accounting_bot.accounting import AccountingView, get_menu_embeds
-from accounting_bot.commands import BaseCommands, HelpCommand, UniverseCommands, FRPsState
+from accounting_bot import sheet, utils, exceptions, ext_utils
+from accounting_bot.commands import BaseCommands, HelpCommand, FRPsState
 from accounting_bot.config import Config, ConfigTree
 from accounting_bot.database import DatabaseConnector
 from accounting_bot.discordLogger import PycordHandler
@@ -64,7 +61,7 @@ class BotState:
     def __init__(self) -> None:
         self.state = State.online
         self.ocr = False
-        self.bot = None  # type: commands.Bot | None
+        self.bot = None  # type: AccountingBot | None
         self.config = None  # type: Config | None
         self.guild = -1
         self.owner = -1
@@ -72,6 +69,7 @@ class BotState:
         self.reloadFuncs = []  # type: List[Callable[[BotState], None]]
         self.user_role = None  # type: int | None
         self.db_connector = None  # type: DatabaseConnector | None
+        self.extensions = {}
 
     def reload(self):
         self.guild = self.config["server"]
@@ -91,7 +89,6 @@ STATE = BotState()
 STATE.state = State.preparing
 exceptions.STATE = STATE
 sheet.STATE = STATE
-corpmissionOCR.STATE = STATE
 utils.STATE = STATE
 
 loop = asyncio.get_event_loop()
@@ -107,6 +104,7 @@ config_structure = {
     "prefix": (str, "§"),
     "server": (int, -1),
     "test_server": (int, -1),
+    "extensions": (list, []),
     "user_role": (int, -1),
     "logChannel": (int, -1),
     "adminLogChannel": (int, -1),
@@ -181,18 +179,6 @@ data_utils.db = UniverseDatabase(
 data_utils.killmail_config = config["killmail_parser"]
 data_utils.killmail_admins = config["killmail_parser.admins"]
 
-try:
-    if config["pytesseract_cmd_path"] != "N/A":
-        pytesseract.pytesseract.tesseract_cmd = config["pytesseract_cmd_path"]
-    else:
-        config.save_config()
-    tesseract_version = pytesseract.pytesseract.get_tesseract_version()
-    logging.info("Tesseract version " + str(tesseract_version) + " installed!")
-    STATE.ocr = True
-except pytesseract.TesseractNotFoundError as error:
-    logging.warning("Tesseract is not installed, OCR will be disabled. Please add tesseract to the PATH or to the "
-                    "config.")
-
 logging.info("Starting up bot...")
 STATE.state = State.starting
 intents = discord.Intents.default()
@@ -202,7 +188,17 @@ intents.message_content = True
 intents.reactions = True
 # noinspection PyUnresolvedReferences,PyDunderSlots
 intents.members = True
-bot = commands.Bot(
+
+
+class AccountingBot(commands.Bot):
+    def __init__(self, state=None, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.state = state or BotState()
+        self.embeds = {}
+
+
+bot = AccountingBot(
+    state=STATE,
     command_prefix=config["prefix"],
     intents=intents,
     # debug_guilds=[config["test_server"], config["server"]],
@@ -211,15 +207,13 @@ bot = commands.Bot(
 )
 STATE.bot = bot
 
-STATE.reloadFuncs.append(accounting.setup)
+# STATE.reloadFuncs.append(accounting.setup)
 STATE.reloadFuncs.append(utils.setup)
-STATE.reloadFuncs.append(projects.setup)
+# STATE.reloadFuncs.append(projects.setup)
 STATE.reloadFuncs.append(accounting_bot.commands.setup)
 
 bot.add_cog(HelpCommand(STATE))
 bot.add_cog(BaseCommands(STATE))
-bot.add_cog(projects.ProjectCommands(bot, config["admins"], config["owner"], config["server"], config["user_role"]))
-bot.add_cog(UniverseCommands(STATE))
 
 STATE.reload()
 
@@ -345,6 +339,7 @@ async def on_command_error(ctx: commands.Context, err: commands.CommandError):
 
 
 @bot.event
+@ext_utils.event_handler
 async def on_ready():
     logging.info("Logged in!")
     guilds = await bot.fetch_guilds().flatten()
@@ -365,29 +360,6 @@ async def on_ready():
         discord_handler.set_channel(log_channel)
     else:
         logging.info("Discord logchannel is deactivated")
-    channel = await bot.fetch_channel(config["menuChannel"])
-    accounting_log = await bot.fetch_channel(config["logChannel"])
-    msg = await channel.fetch_message(config["menuMessage"])
-    # ctx = await bot.get_context(message=msg)
-
-    # Updating View on the menu message
-    await msg.edit(view=AccountingView(),
-                   embeds=get_menu_embeds(), content="")
-
-    # Updating shortcut menus
-    shortcuts = STATE.db_connector.get_shortcuts()
-    logger.info(f"Found {len(shortcuts)} shortcut menus")
-    for (m, c) in shortcuts:
-        chan = bot.get_channel(c)
-        if chan is None:
-            chan = bot.fetch_channel(c)
-        try:
-            msg = await chan.fetch_message(m)
-            await msg.edit(view=AccountingView(),
-                           embed=accounting.EMBED_MENU_SHORTCUT, content="")
-        except discord.errors.NotFound:
-            logger.warning(f"Message {m} in channel {c} not found, deleting it from DB")
-            STATE.db_connector.delete_shortcut(m)
 
     # Updating frp menu
     try:
@@ -400,7 +372,7 @@ async def on_ready():
             logger.info("FRP menu updated")
     except discord.NotFound:
         logger.warning("FRP menu message %s in channel %s not found",
-                        config["frpMenuMessage"], config["frpMenuChannel"])
+                       config["frpMenuMessage"], config["frpMenuChannel"])
 
     # Basic setup completed, bot is operational
     STATE.state = State.online
@@ -413,61 +385,6 @@ async def on_ready():
     logger.info("Google sheets API loaded.")
     if not market_loop.is_running():
         market_loop.start()
-    # Updating unverified accountinglog entries
-    logger.info("Setting up unverified accounting log entries")
-    unverified = STATE.db_connector.get_unverified()
-    logger.info(f"Found {len(unverified)} unverified message(s)")
-    for m in unverified:
-        try:
-            msg = await accounting_log.fetch_message(m)
-        except discord.errors.NotFound:
-            STATE.db_connector.delete(m)
-            continue
-        if msg.content.startswith("Verifiziert von"):
-            logging.warning(f"Transaction already verified but not inside database: %s: %s",
-                            msg.id, msg.content)
-            STATE.db_connector.set_verification(m, 1)
-            continue
-        v = False  # Was transaction verified while the bot was offline?
-        user = None  # User ID who verified the message
-        # Checking all the reactions below the message
-        for r in msg.reactions:
-            emoji = r.emoji
-            if isinstance(emoji, str):
-                name = emoji
-            else:
-                name = emoji.name
-            if name != "✅":
-                continue
-            users = await r.users().flatten()
-            for u in users:
-                if u.id in config["admins"]:
-                    # User is admin, the transaction is therefore verified
-                    v = True
-                    user = u.id
-                    break
-            break
-        if v:
-            # Message was verified
-            try:
-                # Saving transaction to google sheet
-                await accounting.save_embeds(msg, user)
-            except mariadb.Error:
-                pass
-            # Removing the View
-            await msg.edit(view=None)
-        else:
-            # Updating the message View, so it can be used by the users
-            await msg.edit(view=accounting.TransactionView())
-            if len(msg.embeds) > 0:
-                transaction = accounting.transaction_from_embed(msg.embeds[0])
-                state = await transaction.get_state()
-                if state == 2:
-                    await msg.add_reaction("⚠️")
-                elif state == 3:
-                    await msg.add_reaction("❌")
-            else:
-                logging.warning("Message %s is listed as transaction but does not have an embed", msg.id)
 
     # Reload projects
     await sheet.find_projects()
@@ -482,6 +399,7 @@ async def on_message(message: Message):
     if isinstance(message.channel, DMChannel):
         if message.author.id == bot.user.id:
             return
+        has_img = False
         for att in message.attachments:
             if not att.content_type.startswith("image"):
                 continue
@@ -489,17 +407,11 @@ async def on_message(message: Message):
             if not "://cdn.discordapp.com".casefold() in url.casefold():
                 return
             if not isinstance(message.channel, DMChannel):
-                # await message.author.send("Du hast ein Bild im Accountinglog gepostet. Wenn es sich um eine "
-                #                           "Corporationsmission oder eine Spende handelt, kannst Du sie mir hier per "
-                #                           "Direktnachricht schicken, um sie per Texterkennung automatisch verarbeiten "
-                #                           "zu lassen.\nSpenden kannst Du dann auch selbst verifizieren.")
                 return
-            channel = message.author.id
-            thread = Thread(
-                target=corpmissionOCR.handle_image,
-                args=(url, att.content_type, message, channel, message.author.id))
-            thread.start()
-            await message.reply("Verarbeite Bild, bitte warten. Dies dauert einige Sekunden.")
+            has_img = True
+            break
+        if has_img:
+            await message.reply("Image recognition is disabled in the current build")
     if message.channel.id == KILLMAIL_CHANNEL:
         if len(message.embeds) > 0:
             logger.info("Received message %s with embed, parsing killmail", message.id)
@@ -550,12 +462,9 @@ async def on_reaction_add(reaction: Reaction, user: Union[Member, User]):
 
 
 @bot.event
+@ext_utils.event_handler
 async def on_raw_reaction_add(reaction: RawReactionActionEvent):
-    if reaction.emoji.name == "✅" and reaction.channel_id == config["logChannel"]:
-        # Message is not verified
-        channel = bot.get_channel(config["logChannel"])
-        msg = await channel.fetch_message(reaction.message_id)
-        await accounting.verify_transaction(reaction.user_id, msg)
+    pass
 
 
 @bot.event
@@ -575,8 +484,37 @@ def save_config():
     config.save_config()
 
 
+def load_extensions():
+    loaded = []
+    failed = []
+    for name in config["extensions"]:
+        try:
+            logger.info("Loading extension %s", name)
+            mod = importlib.import_module(name)
+            mod.setup(bot)
+            loaded.append(name)
+            STATE.extensions[name] = mod
+        except ImportError:
+            logger.error("Failed to load extension %s: ImportError", name)
+            failed.append(name)
+        except AttributeError as e:
+            logger.error("Failed to load extension %s: AttributeError", name)
+            utils.log_error(logger, e, "extension_loader")
+            failed.append(name)
+        except Exception as e:
+            logger.error("Failed to load extension %s", name)
+            utils.log_error(logger, e, "extension_loader")
+            failed.append(name)
+    if len(failed) == 0:
+        logger.info("Loaded %s extensions: %s", len(loaded), loaded)
+    else:
+        logger.warning("Loaded %s of %s extensions: %s", len(loaded), len(loaded) + len(failed), loaded)
+        logger.warning("Couldn't load these extensions: %s", failed)
+
+
 async def run_bot():
     try:
+        load_extensions()
         logger.warning("Logging in bot")
         await bot.start(token=TOKEN)
     except Exception as e:
@@ -628,7 +566,6 @@ except NotImplementedError:
     signal.signal(signal.SIGINT, kill_bot_sync)
 
 log_loop.start()
-corpmissionOCR.ocr_result_loop.start()
 frp_reminder_loop.start()
 loop.set_exception_handler(handle_asyncio_exception)
 loop.run_until_complete(main())
