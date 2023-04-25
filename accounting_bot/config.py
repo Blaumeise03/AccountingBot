@@ -15,6 +15,8 @@ class ConfigTree:
             self.path = ""
         else:
             self.path = path
+        if raw is None:
+            return
         for name in raw:
             value = raw[name]
             if type(value) == tuple:
@@ -46,7 +48,7 @@ class ConfigTree:
                 return value.value
         return None
 
-    def __setitem__(self, key, value):
+    def __setitem__(self, key, value, force=False):
         if type(key) == str:
             keys = key.split(".")
         elif type(key) == list:
@@ -57,14 +59,21 @@ class ConfigTree:
             return False
         if keys[0] in self.tree:
             val = self.tree[keys[0]]
-            if isinstance(val, ConfigTree):
-                return val.__setitem__(keys[1:], value)
-            elif isinstance(val, ConfigElement):
-                val.value = value
-                return True
+        else:
+            if type(value) == dict:
+                val = ConfigTree()
+            else:
+                val = ConfigElement(None, None)
+            self.tree[keys[0]] = val
+        if isinstance(val, ConfigTree):
+            return val.__setitem__(keys[1:], value, force=force)
+        elif isinstance(val, ConfigElement):
+            val.value = value
+            return True
 
     def load_from_dict(self, raw_dict: dict) -> bool:
         missing_entry = False
+        found = []
         for key in self.tree:
             value = self.tree[key]
             if key in raw_dict:
@@ -72,19 +81,31 @@ class ConfigTree:
                 if isinstance(value, ConfigTree):
                     if type(raw_value) == dict:
                         value.load_from_dict(raw_value)
+                        found.append(key)
                         continue
                     raise ConfigDataTypeException(
                         f"Expected dict, but got {type(raw_value)} for entry {self.path}{key}")
                 if isinstance(value, ConfigElement):
                     if type(raw_value) == value.data_type:
                         value.value = raw_value
+                        found.append(key)
                         continue
                     raise ConfigDataTypeException(
                         f"Expected {value.data_type}, but got {type(raw_value)} for entry {self.path}{key}")
             else:
                 logger.warning("Config entry missing: %s. Using default, please exchange the value.", (self.path + key))
                 missing_entry = True
-        return missing_entry
+        unknown = list(filter(lambda k: k not in found, raw_dict.keys()))
+        if len(unknown) == 0:
+            return missing_entry
+        for key in unknown:
+            value = raw_dict[key]
+            if type(value) == dict:
+                self.tree[key] = ConfigTree()
+                self.tree[key].load_from_dict(value)
+            else:
+                self.tree[key] = ConfigElement(None, None)
+                self.tree[key].value = value
 
     def to_dict(self):
         res = {}
