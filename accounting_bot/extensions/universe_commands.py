@@ -1,6 +1,7 @@
 import io
 import logging
 from typing import TYPE_CHECKING
+import numpy as np
 
 import discord
 from discord import ApplicationContext, option, SlashCommandGroup, ChannelType, Embed, Color
@@ -170,6 +171,56 @@ class UniverseCommands(commands.Cog):
             files = []
         await ctx.followup.send(f"Route von **{first}** nach **{last}**:\n"
                                 f"Min Security: `{sec_min}`\nMax Security: `{sec_max}`\n" + msg, files=files)
+
+    @commands.slash_command(name="angle", description="Finds the angle between two gates")
+    @option("system", description="The system", type=str, required=True)
+    @option("start", description="The origin point", type=str, required=True)
+    @option("obj_a", description="The first gate", type=str, required=True)
+    @option("obj_b", description="The second gate", type=str, required=True)
+    @option(name="silent", description="Default false, if set to true, the command will be executed publicly",
+            default=True, required=False)
+    async def cmd_angle(self, ctx: ApplicationContext, system: str, start: str, obj_a: str, obj_b: str, silent: bool = True):
+        await ctx.response.defer(ephemeral=silent, invisible=False)
+        gates = await data_utils.get_gates(system)
+        cel_start = None
+        cel_b = None
+        cel_a = None
+        for g in gates:
+            name = g.connected_gate.system.name
+            if name.casefold() == start.casefold():
+                cel_start = g
+                start = name
+            elif name.casefold() == obj_a.casefold():
+                cel_a = g
+                obj_a = name
+            elif name.casefold() == obj_b.casefold():
+                cel_b = g
+                obj_b = name
+        if cel_start is None:
+            await ctx.followup.send(f"Celestial `{start}` not found")
+            return
+        if cel_b is None:
+            await ctx.followup.send(f"Celestial `{cel_b}` not found")
+            return
+        if cel_a is None:
+            await ctx.followup.send(f"Celestial `{cel_a}` not found")
+            return
+        s = np.array([cel_start.x, cel_start.y, cel_start.z])
+        b = np.array([cel_b.x, cel_b.y, cel_b.z])
+        a = np.array([cel_a.x, cel_a.y, cel_a.z])
+        # Get direction vectors with the start celestial as their origin
+        s_a = (a - s)
+        s_b = (b - s)
+        # Normalize vectors to fix floating point issues
+        s_a = s_a / np.linalg.norm(s_a)
+        s_b = s_b / np.linalg.norm(s_b)
+        # Calculate the angle between both vectors
+        cos_angle = np.dot(s_a, s_b)
+        angle = np.arccos(cos_angle)
+        angle = np.degrees(angle)
+        await ctx.followup.send(
+            f"Der Winkel zwischen den Gates `{obj_a}` and `{obj_b}` gesehen vom Gate `{start}` beträgt `{angle:.3f}°`."
+        )
 
     @commands.slash_command(name="lowsec_entries", description="Finds a list of all lowsec entries with distance")
     @option("start", description="The origin system", type=str, required=True)

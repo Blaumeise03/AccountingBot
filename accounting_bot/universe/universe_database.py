@@ -20,6 +20,7 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger("data.db")
 
+
 # logger.setLevel(logging.DEBUG)
 # logging.getLogger('sqlalchemy.engine').setLevel(logging.INFO)
 
@@ -143,6 +144,19 @@ class UniverseDatabase:
                          .subqueryload(Celestial.system),
                          joinedload(System.stargates))
                 .filter(System.name.in_(system_names)).all()
+            )
+
+    def fetch_gates(self, system_name: str) -> List[Celestial]:
+        with Session(self.engine, expire_on_commit=False) as conn:
+            # noinspection PyTypeChecker
+            return (
+                conn.query(Celestial)
+                .options(joinedload(Celestial.connected_gate)
+                         .subqueryload(Celestial.system))
+                .join(Celestial.system)
+                .filter(System.name.ilike(system_name))
+                .filter(Celestial.connected_gate != None)
+                .all()
             )
 
     def fetch_constellation(self, constellation_name: str = None, planet_id: int = None) -> Optional[Constellation]:

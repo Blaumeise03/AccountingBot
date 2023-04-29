@@ -17,6 +17,8 @@ from accounting_bot.universe.models import System, Celestial
 from accounting_bot.universe.universe_database import UniverseDatabase
 from accounting_bot.utils import wrap_async, shutdown_procedure, ShutdownOrderType
 
+AU_RATIO = 149597870700
+
 logger = logging.getLogger("data.utils")
 
 db = None  # type: UniverseDatabase | None
@@ -166,6 +168,11 @@ def get_planets(planet_ids: List[int]):
 @wrap_async
 def get_system(system_name: str):
     return db.fetch_system(system_name)
+
+
+@wrap_async
+def get_gates(system_name: str):
+    return db.fetch_gates(system_name)
 
 
 @wrap_async
@@ -532,7 +539,7 @@ def find_path(start_name: str, end_name: str, sec_min: float = None, sec_max: fl
             (dest_gate.x - prev_gate.x) ** 2 +
             (dest_gate.y - prev_gate.y) ** 2 +
             (dest_gate.z - prev_gate.z) ** 2
-        ) / 149597870700
+        ) / AU_RATIO
         # print(f"{current}: {prev} -> {dest}: {distance:.2f} AU")
         result.append((current, prev, dest, distance))
     return result
