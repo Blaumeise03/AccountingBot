@@ -402,16 +402,16 @@ async def verify_transaction(user_id: int, message: Message, interaction: Intera
         await save_embeds(message, user_id)
         if admin_log_channel and (user_id not in STATE.admins or ocr_verified):
             file = None
-            if os.path.exists(IMG_WORKING_DIR + f"/transactions/{str(message.id)}.jpg"):
-                file = discord.File(IMG_WORKING_DIR + f"/transactions/{str(message.id)}.jpg")
+            if os.path.exists(f"{IMG_WORKING_DIR}/transactions/{message.id}.jpg"):
+                file = discord.File(f"{IMG_WORKING_DIR}/transactions/{message.id}.jpg")
             msg = "Transaction `{}` was self-verified by `{}:{}`:\nhttps://discord.com/channels/{}/{}/{}\n" \
                 .format(transaction, user.name, user_id, STATE.guild, ACCOUNTING_LOG, message.id)
             if ocr_verified:
                 msg += "*Transaction was OCR verified*"
             await admin_log_channel.send(msg, file=file)
-            if os.path.exists(IMG_WORKING_DIR + f"/transactions/{str(message.id)}.jpg"):
-                os.remove(IMG_WORKING_DIR + f"/transactions/{str(message.id)}.jpg")
-                logger.info("Deleted file %s", IMG_WORKING_DIR + f"/transactions/{str(message.id)}.jpg")
+            if os.path.exists(f"{IMG_WORKING_DIR}/transactions/{message.id}.jpg"):
+                os.remove(f"{IMG_WORKING_DIR}/transactions/{message.id}.jpg")
+                logger.info(f"Deleted file {IMG_WORKING_DIR}/transactions/{message.id}.jpg")
         if interaction:
             await message.add_reaction("✅")
             await interaction.followup.send("Transaktion verifiziert!", ephemeral=True)
