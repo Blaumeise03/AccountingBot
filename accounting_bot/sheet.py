@@ -715,7 +715,7 @@ async def apply_overflow_split(investments: Dict[str, Dict[str, List[int]]], cha
         })
     log.append(f"Executing {len(batch_change)} changes...")
     logger.info("Executing batch update (%s changes)", len(batch_change))
-    await s.batch_update(batch_change)
+    await s.batch_update(batch_change, value_input_option=ValueInputOption.user_entered)
     log.append("Batch update applied, overflow split completed.")
     logger.info("Batch update applied, overflow split completed")
     return log
