@@ -455,10 +455,15 @@ async def on_reaction_add(reaction: Reaction, user: Union[Member, User]):
             reaction.message != FRPsState.defaultState.view.message and
             reaction.emoji == "🗑️" and user != bot.user
     ):
+        if user not in FRPsState.defaultState.reminder_list:
+            logger.info("%s:%s tried to delete FRP ping", user.id, user.name)
+            await user.send("Du darfst diesen Ping nicht löschen!")
+            return
         await reaction.message.delete(reason=f"Deleted by {user.id}:{user.name}")
+        logger.info("FRP ping was deleted by %s:%s", user.id, user.name)
         if FRPsState.defaultState.ping == reaction.message:
             FRPsState.defaultState.ping = None
-            await FRPsState.defaultState.inform_users("Der Ping wurde gelöscht")
+            await FRPsState.defaultState.inform_users(f"Der Ping wurde von {user.name} gelöscht")
 
 
 @bot.event
