@@ -86,13 +86,21 @@ class UniverseDatabase:
                     continue
                 for price_type, price in prices.items():
                     found = False
+                    # For some reason, the SQL statements don't work with floats. MariaDB will throw an invalid
+                    # parameter error, but when executing the SQL command directly via the terminal, the UPDATE
+                    # statement works perfectly fine. On top of that is the bug inconsistent between the local
+                    # development environment and the production one. And going even further, the bug does not
+                    # seem to be consistent on the production server as well. It does not occur always, one time
+                    # updating the DB server fixed it temporarily. As the floating point problems are only relevant
+                    # for one item (Tritanium) which is currently not being used by the bot in any calculation, the
+                    # values will be inserted as integers into the DB.
                     for p in db_item.prices:  # type: MarketPrice
                         if p.price_type == price_type:
-                            p.price_value = price
+                            p.price_value = int(price)
                             found = True
                             break
                     if not found:
-                        p = MarketPrice(price_type=price_type, price_value=price)
+                        p = MarketPrice(price_type=price_type, price_value=int(price))
                     db_item.prices.append(p)
                 conn.commit()
 
