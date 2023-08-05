@@ -154,9 +154,7 @@ def get_menu_embeds() -> [Embed]:
     :return: an array containing all three menu embeds.
     """
     return [
-        BOT.embeds["MenuEmbedInternal"],
-        BOT.embeds["MenuEmbedExternal"],
-        BOT.embeds["MenuEmbedVCB"],
+        BOT.embeds["MenuEmbedInternal"]
     ]
 
 

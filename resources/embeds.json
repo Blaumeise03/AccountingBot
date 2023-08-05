@@ -26,35 +26,6 @@
     "type": "rich",
     "title": "Allgemein"
   },
-  "MenuEmbedExternal": {
-    "fields": [
-      {
-        "name": "VC-Vertr\u00e4ge",
-        "value": "Wenn ihr \u00fcber VOID gehandelt habt, bitte ebenfalls die \"Einzahlen/Auszahlen\"-Kn\u00f6pfe nehmen. Wenn ihr VC erhalten habt (z.B. SRP) \"Einzahlen\", wenn ihr VC ausgegeben habt (z.B. Shipyard Kauf) \"Auszahlen\"\n\nDen Vertragslink bitte im Feld \"**Referenz**\" eintragen.\n\nDen **Verwendungszweck** bitte \u00e4ndern, dort also z.B. anstatt \"Einzahlung Accounting\" \"**Void SRP**\" eintragen.",
-        "inline": false
-      }
-    ],
-    "color": 15158332,
-    "type": "rich",
-    "title": "VoidCoins"
-  },
-  "MenuEmbedVCB": {
-    "fields": [
-      {
-        "name": "Link",
-        "value": "https://voidcoin.app/pilot/1421",
-        "inline": true
-      },
-      {
-        "name": "Kontoname",
-        "value": "[V2] Massive Dynamic LLC",
-        "inline": true
-      }
-    ],
-    "color": 15158332,
-    "type": "rich",
-    "title": "VCB Kontodaten"
-  },
   "MenuShortcut": {
     "fields": [
       {
