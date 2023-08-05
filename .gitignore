@@ -15,6 +15,7 @@ resources/eve_data
 python
 .env
 config.json
+resources/application_config.json
 tests/test_config.json
 user_overwrites.json
 discord_ids*.json

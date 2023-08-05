@@ -90,6 +90,7 @@ STATE.state = State.preparing
 exceptions.STATE = STATE
 sheet.STATE = STATE
 utils.STATE = STATE
+pi_planer.STATE = STATE
 
 loop = asyncio.get_event_loop()
 
