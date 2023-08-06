@@ -2,16 +2,17 @@ import asyncio
 import logging
 import time
 from collections import defaultdict
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import TYPE_CHECKING, List, Dict, Any
 
 import discord
 import pytz
 from discord import SlashCommandGroup, ApplicationContext, User, Embed, Color, option, ButtonStyle, InputTextStyle, \
     Message
-from discord.ext import commands
+from discord.ext import commands, tasks
 from discord.ui import Button, InputText
 
+from accounting_bot import utils
 from accounting_bot.config import Config, ConfigTree
 from accounting_bot.exceptions import ConfigException
 from accounting_bot.utils import admin_only, online_only, user_only, AutoDisableView, ErrorHandledModal
@@ -57,6 +58,35 @@ def setup(bot: "AccountingBot"):
 
 def teardown(bot: "AccountingBot"):
     bot.remove_cog("ApplicationCommands")
+
+
+@tasks.loop(minutes=5)
+async def apl_loop():
+    delete_sessions = []
+    try:
+        c_time = datetime.now()
+        max_time = timedelta(minutes=15)
+        for session in active_sessions:
+            if (c_time - session.last_action) > max_time:
+                logger.info("Application session for %s:%s timed out on question %s",
+                            session.user.name, session.user.id, len(session.questions))
+                delete_sessions.append(session)
+                await asyncio.gather(
+                    session.message.edit(view=None),
+                    session.user.send("Es tut mir leid, auf Grund von Inaktivität wurde die Bewerbung abgebrochen, dein"
+                                      " aktueller Fortschritt wurde bereits übermittelt. Bitte starte die Bewerbung neu"
+                                      ", du kannst die bereits beantworteten Fragen überspringen (gib einfach einen "
+                                      "Punkt \".\" im Eingabefeld ein)."),
+                    session.update_admin_msg(time_outed=True)
+                )
+    except Exception as e:
+        utils.log_error(logger, e, location="apl_loop")
+    for session in delete_sessions:
+        if session in active_sessions:
+            active_sessions.remove(session)
+
+
+apl_loop.start()
 
 
 class ApplicationSession(object):
@@ -107,7 +137,7 @@ class ApplicationSession(object):
                               f"zu beantworten")
         return embed
 
-    def build_result_embed(self):
+    def build_result_embed(self, time_outed=False):
         created_time = self.user.created_at
         age = datetime.now(pytz.UTC) - created_time
         embed = Embed(
@@ -122,7 +152,7 @@ class ApplicationSession(object):
             if i < len(self.answers):
                 answer = self.answers[i]
             else:
-                answer = "*Steht noch aus...*"
+                answer = "*Befragung abgebrochen*" if time_outed else "*Steht noch aus...*"
             embed.add_field(name=f"Frage {i + 1}: {q.content}", inline=False,
                             value=answer)
         if self.completed:
@@ -131,17 +161,18 @@ class ApplicationSession(object):
                                   f"<t:{int(time.mktime(self.start_time.timetuple()))}:f>.")
         else:
             embed.add_field(name="Status",
-                            value=f"Befragung läuft...\nStartzeit war "
-                                  f"<t:{int(time.mktime(self.start_time.timetuple()))}:f>\nLetzte Antwort wurde "
-                                  f"<t:{int(time.mktime(self.last_action.timetuple()))}:R> abgegeben.")
+                            value=
+                            ("*Befragung abgebrochen*" if time_outed else "Befragung läuft...") + "\nStartzeit war "
+                            f"<t:{int(time.mktime(self.start_time.timetuple()))}:f>\nLetzte Antwort wurde "
+                            f"<t:{int(time.mktime(self.last_action.timetuple()))}:R> abgegeben.")
         return embed
 
-    async def update_admin_msg(self):
+    async def update_admin_msg(self, time_outed=False):
         if self.admin_msg is None:
             channel = await self.bot_state.bot.fetch_channel(config["resultChannel"])
-            self.admin_msg = await channel.send(embed=self.build_result_embed())
+            self.admin_msg = await channel.send(embed=self.build_result_embed(time_outed))
         else:
-            await self.admin_msg.edit(embed=self.build_result_embed())
+            await self.admin_msg.edit(embed=self.build_result_embed(time_outed))
 
     async def update_user_msg(self):
         await self.message.edit(embed=self.build_user_embed())
@@ -262,4 +293,5 @@ class ApplicationCommands(commands.Cog):
     async def cmd_o7_ticket(self, ctx: ApplicationContext):
         await ctx.respond("Opening ticket...", ephemeral=True)
         channel = await self.state.bot.fetch_channel(config["resultChannel"])
-        await channel.send(config["ticket_command"].format_map(defaultdict(str, id=ctx.user.id, reason="Diplomatic Request")))
+        await channel.send(
+            config["ticket_command"].format_map(defaultdict(str, id=ctx.user.id, reason="Diplomatic Request")))
