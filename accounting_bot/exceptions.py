@@ -89,3 +89,11 @@ class NoPermissionsException(InputException):
 
 class SingletonException(Exception):
     pass
+
+
+class PluginException(Exception):
+    pass
+
+
+class PluginNotFoundException(PluginException):
+    pass
