@@ -95,5 +95,13 @@ class PluginException(Exception):
     pass
 
 
-class PluginNotFoundException(PluginException):
+class PluginLoadException(PluginException):
+    pass
+
+
+class PluginDependencyException(PluginLoadException):
+    pass
+
+
+class PluginNotFoundException(PluginLoadException):
     pass
