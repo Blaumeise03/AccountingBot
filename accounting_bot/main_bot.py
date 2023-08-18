@@ -4,21 +4,31 @@ import inspect
 import logging
 import pkgutil
 import re
+import sys
 from abc import ABC
 from enum import Enum
 from types import ModuleType
-from typing import Dict, Any, Union, List
+from typing import Dict, Any, Union, List, Coroutine
 
+import discord
+from discord import ApplicationContext
 from discord.ext import commands
 
 from accounting_bot import utils
-from accounting_bot.exceptions import PluginLoadException, PluginNotFoundException, PluginDependencyException
-from accounting_bot.utils import State
+from accounting_bot.exceptions import PluginLoadException, PluginNotFoundException, PluginDependencyException, \
+    InputException, PluginException
+from accounting_bot.utils import State, log_error, send_exception
 from accounting_bot.config import Config
 
 logger = logging.getLogger("bot.main")
 
+SILENT_EXCEPTIONS = [
+    commands.CommandOnCooldown, InputException, commands.NoPrivateMessage, commands.NotOwner, commands.PrivateMessageOnly,
+    commands.CheckFailure
+]
 
+
+# noinspection PyMethodMayBeStatic
 class AccountingBot(commands.Bot):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -81,6 +91,45 @@ class AccountingBot(commands.Bot):
                     logger.error("Error while unloading plugin %s:%s", plugin.module_name, plugin.name)
                     utils.log_error(logger, e)
 
+    async def on_error(self, event_name, *args, **kwargs):
+        info = sys.exc_info()
+        if info and len(info) > 2 and info[0] == discord.errors.NotFound:
+            logging.warning("discord.errors.NotFound Error in %s: %s", event_name, str(info[1]))
+            return
+        if info and len(info) > 2:
+            utils.log_error(logger, info[1], location="bot.on_error")
+        else:
+            logging.exception("An unknown error occurred: %s", event_name)
+
+    async def on_application_command_error(self, ctx: ApplicationContext, err):
+        """
+        Exception handler for slash commands.
+
+        :param ctx:     Context
+        :param err:   the error that occurred
+        """
+        silent = False
+        for cls in SILENT_EXCEPTIONS:
+            if isinstance(err, cls):
+                silent = True
+                break
+        location = None  # ToDo: Add command name lookup
+        log_error(logger, err, location=location, ctx=ctx, minimal=silent)
+        await send_exception(err, ctx)
+
+    async def on_command_error(self, ctx: commands.Context, err: commands.CommandError):
+        silent = False
+        for cls in SILENT_EXCEPTIONS:
+            if isinstance(err, cls):
+                silent = True
+                break
+        log_error(logging.getLogger(), err, minimal=silent)
+        await send_exception(err, ctx)
+
+    async def on_ready(self):
+        logger.info("Bot has logged in")
+        await self.enable_plugins()
+
 
 base_config = {
     "plugins": (list, []),
@@ -112,11 +161,12 @@ class BotPlugin(ABC):
     Loading and unloading must be a synchronous task, while enabling and disabling must be async
     """
 
-    def __init__(self, bot: AccountingBot, module_name: str) -> None:
+    def __init__(self, bot: AccountingBot, wrapper: "PluginWrapper") -> None:
         super().__init__()
         self.bot = bot
-        self._module_name = module_name
-        self.logger = logging.getLogger("plugin." + self._module_name)
+        self._wrapper = wrapper
+        self.logger = logging.getLogger(self._wrapper.module_name)
+        self.cogs = []  # type: List[commands.Cog]
 
     def info(self, msg, *args):
         self.logger.info(msg, *args)
@@ -127,6 +177,18 @@ class BotPlugin(ABC):
     def error(self, msg, *args, exc_info: Exception):
         self.logger.error(msg, *args)
         utils.log_error(self.logger, exc_info)
+
+    def register_cog(self, cog: commands.Cog):
+        self.cogs.append(cog)
+        self.bot.add_cog(cog)
+        logger.info("Registered cog %s for plugin %s", cog.__cog_name__, self._wrapper.module_name)
+
+    def remove_cog(self, name: str):
+        for cog in self.cogs:
+            if cog.name == name:
+                self.cogs.remove(cog)
+                break
+        self.bot.remove_cog(name)
 
     def on_load(self):
         # Gets called before the Bot starts
@@ -235,7 +297,7 @@ class PluginWrapper(object):
                 f"Can't load plugin {self.module_name}: The module contains multiple plugin classes")
         plugin_cls = classes[0][1]
         try:
-            self.plugin = plugin_cls(bot, self.module_name)  # type: BotPlugin
+            self.plugin = plugin_cls(bot, self)  # type: BotPlugin
             self.plugin.on_load()
         except Exception as e:
             self.status = PluginStatus.CRASHED
@@ -265,6 +327,8 @@ class PluginWrapper(object):
         if self.status != PluginStatus.ENABLED:
             raise PluginLoadException(f"Disabling of plugin {self.module_name} is not possible, as it's not enabled")
         try:
+            for cog in self.plugin.cogs:
+                self.plugin.bot.remove_cog(cog.__cog_name__)
             await self.plugin.on_disable()
         except Exception as e:
             self.status = PluginStatus.CRASHED
