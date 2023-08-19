@@ -68,6 +68,8 @@ class LocalisationHandler(object):
 
     @classmethod
     def get_translation(cls, key: str, raise_not_found=True):
+        if cls.default_handler is None:
+            return f"${key}$"
         return cls.default_handler.get_text(key, raise_not_found)
 
 

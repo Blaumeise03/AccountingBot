@@ -8,17 +8,17 @@ import sys
 from abc import ABC
 from enum import Enum
 from types import ModuleType
-from typing import Dict, Any, Union, List, Coroutine
+from typing import Dict, Union, List, Optional
 
 import discord
-from discord import ApplicationContext
+from discord import ApplicationContext, ApplicationCommandError
 from discord.ext import commands
 
 from accounting_bot import utils
-from accounting_bot.exceptions import PluginLoadException, PluginNotFoundException, PluginDependencyException, \
-    InputException, PluginException
-from accounting_bot.utils import State, log_error, send_exception
 from accounting_bot.config import Config
+from accounting_bot.exceptions import PluginLoadException, PluginNotFoundException, PluginDependencyException, \
+    InputException
+from accounting_bot.utils import State, log_error, send_exception
 
 logger = logging.getLogger("bot.main")
 
@@ -101,7 +101,15 @@ class AccountingBot(commands.Bot):
         else:
             logging.exception("An unknown error occurred: %s", event_name)
 
-    async def on_application_command_error(self, ctx: ApplicationContext, err):
+    def get_plugin_by_cog(self, cog: Optional[commands.Cog]):
+        if cog is None:
+            return None
+        for wrapper in self.plugins:
+            if cog in wrapper.plugin.cogs:
+                return wrapper
+        return None
+
+    async def on_application_command_error(self, ctx: ApplicationContext, err: ApplicationCommandError):
         """
         Exception handler for slash commands.
 
@@ -109,12 +117,15 @@ class AccountingBot(commands.Bot):
         :param err:   the error that occurred
         """
         silent = False
+        plugin = self.get_plugin_by_cog(ctx.cog)
         for cls in SILENT_EXCEPTIONS:
             if isinstance(err, cls):
                 silent = True
                 break
-        location = None  # ToDo: Add command name lookup
-        log_error(logger, err, location=location, ctx=ctx, minimal=silent)
+        location = None
+        if plugin is not None:
+            location = "plugin " + plugin.module_name
+        log_error(plugin.plugin.logger if plugin else logger, err, location=location, ctx=ctx, minimal=silent)
         await send_exception(err, ctx)
 
     async def on_command_error(self, ctx: commands.Context, err: commands.CommandError):
@@ -161,11 +172,11 @@ class BotPlugin(ABC):
     Loading and unloading must be a synchronous task, while enabling and disabling must be async
     """
 
-    def __init__(self, bot: AccountingBot, wrapper: "PluginWrapper") -> None:
+    def __init__(self, bot: AccountingBot, wrapper: "PluginWrapper", p_logger: Optional[logging.Logger]) -> None:
         super().__init__()
         self.bot = bot
         self._wrapper = wrapper
-        self.logger = logging.getLogger(self._wrapper.module_name)
+        self.logger = p_logger or logging.getLogger(self._wrapper.module_name)
         self.cogs = []  # type: List[commands.Cog]
 
     def info(self, msg, *args):

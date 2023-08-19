@@ -4,15 +4,18 @@
 # Depends-On: []
 #
 # End
-from discord import ApplicationContext
+import logging
+
+from discord import ApplicationContext, ApplicationCommandError
 from discord.ext import commands
 
 from accounting_bot.main_bot import BotPlugin, AccountingBot, PluginWrapper
+logger = logging.getLogger("test.plugin_test")
 
 
 class MyPlugin(BotPlugin):
     def __init__(self, bot: AccountingBot, wrapper: PluginWrapper) -> None:
-        super().__init__(bot, wrapper)
+        super().__init__(bot, wrapper, logger)
 
     def on_load(self):
         self.warning("MyPlugin loading")
@@ -30,5 +33,13 @@ class MyPlugin(BotPlugin):
 
 class TestCommands(commands.Cog):
     @commands.slash_command(name="test")
-    async def test(self, ctx):
+    async def test(self, ctx: ApplicationContext):
         raise Exception("Errror")
+
+    @commands.slash_command(name="test2")
+    async def test2(self, ctx: ApplicationContext):
+        await ctx.respond("Echo", ephemeral=True)
+
+    async def cog_command_error(self, ctx: ApplicationContext, error: ApplicationCommandError):
+        logger.info("Command error in test")
+        await ctx.respond("Error", ephemeral=True)
