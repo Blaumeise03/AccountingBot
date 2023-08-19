@@ -2,11 +2,13 @@ import functools
 import importlib
 import inspect
 import logging
+import os
 import pkgutil
 import re
 import sys
 from abc import ABC
 from enum import Enum
+from os import PathLike
 from types import ModuleType
 from typing import Dict, Union, List, Optional
 
@@ -14,10 +16,11 @@ import discord
 from discord import ApplicationContext, ApplicationCommandError
 from discord.ext import commands
 
-from accounting_bot import utils
+from accounting_bot import utils, localization
 from accounting_bot.config import Config
 from accounting_bot.exceptions import PluginLoadException, PluginNotFoundException, PluginDependencyException, \
     InputException
+from accounting_bot.localization import LocalizationHandler
 from accounting_bot.utils import State, log_error, send_exception
 
 logger = logging.getLogger("bot.main")
@@ -37,12 +40,21 @@ class AccountingBot(commands.Bot):
         self.plugins = []  # type: List[PluginWrapper]
         self.config = Config()
         self.config.load_tree(base_config)
+        self.localization = LocalizationHandler()
 
     def is_online(self):
         return self.state.value >= State.online.value
 
-    def load_config(self, path: str):
+    def load_config(self, path: str) -> None:
         self.config.load_config(path)
+
+    def load_localization(self, path: Union[PathLike, str]) -> None:
+        """
+        Adds a localization file, already existing values will be replaced.
+
+        :param path: The path to the file
+        """
+        self.localization.load_from_xml(path)
 
     def load_plugins(self):
         plugins = []
@@ -251,6 +263,8 @@ class PluginWrapper(object):
         self.dependencies = []  # type: List[PluginWrapper]
         self.required_by = []
         self.module = None  # type: ModuleType | None
+        self.localization_raw = None  # type: Union[PathLike, str, None]
+        self.localization_path = None  # type: Union[PathLike, str, None]
 
     def __repr__(self):
         return f"PluginWrapper(module={self.module_name})"
@@ -300,6 +314,17 @@ class PluginWrapper(object):
             self.module = importlib.import_module(self.module_name)
         else:
             self.module = importlib.reload(self.module)
+        if self.localization_raw is not None:
+            self.localization_path = os.path.join(os.path.dirname(self.module.__file__),
+                                                  self.localization_raw)
+            if not os.path.exists(self.localization_path):
+                logger.error("Localization file for plugin %s is missing: %s",
+                             self.name, self.localization_path)
+                self.localization_path = None
+            else:
+                logger.info("Loaded localization for plugin %s", self.name)
+        if self.localization_path is not None:
+            bot.load_localization(self.localization_path)
         classes = inspect.getmembers(self.module, _filter)
         if len(classes) == 0:
             raise PluginNotFoundException("Can't find plugin class in module " + self.module_name)
@@ -387,10 +412,12 @@ class PluginWrapper(object):
         plugin = PluginWrapper(
             name=config.get("Name", module_name),
             module_name=module_name,
-            author=config.get("Author", None)
+            author=config.get("Author", None),
         )
         if "Depends-On" in config:
             plugin.get_dep_names(config["Depends-On"])
+        if "Localization" in config:
+            plugin.localization_raw = config["Localization"]
         return plugin
 
 

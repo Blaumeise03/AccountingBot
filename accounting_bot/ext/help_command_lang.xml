@@ -1,0 +1,93 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<translations>
+    <help>
+        <en>Help</en>
+        <de>Hilfe</de>
+    </help>
+    <help_about>
+        <en>Help about `{}`</en>
+        <de>Hilfe zu `{}`</de>
+    </help_about>
+    <restrictions>
+        <en>Restrictions</en>
+        <de>Einschränkungen</de>
+    </restrictions>
+    <optional>
+        <en>Optional</en>
+        <de>Optional</de>
+    </optional>
+    <required>
+        <en>Required</en>
+        <de>Benötigt</de>
+    </required>
+    <other_cmds>
+        <en>Other commands</en>
+        <de>Andere Befehle</de>
+    </other_cmds>
+    <parameter>
+        <en>Parameter</en>
+        <de>Parameter</de>
+    </parameter>
+    <no_desc_available>
+        <en>No description available</en>
+        <de>Keine Beschreibung verfügbar</de>
+    </no_desc_available>
+    <cmd_not_found>
+        <en>Command/Modul `{selection}` not found. Use `/help` to see a list of all commands. Use the `selection` parameter to select a modul or command.</en>
+        <de>Befehl/Modul `{selection}` nicht gefunden. Nutze `/help`, um eine Liste aller Befehle zu sehen. Mit dem `selection` Parameter lässt sich ein Modul oder ein Befehl auswählen.</de>
+    </cmd_not_found>
+    <ctx_command>
+        <en>Context-menu command</en>
+        <de>Kontext-Menü Befehl</de>
+    </ctx_command>
+    <ctx_command_info>
+        <en>Right-click on a {} and select the command from the `Apps` category to use it.</en>
+        <de>Rechtsklicke zum Verwenden auf eine {} und wähle den Befehl aus der Kategorie `Apps` aus.</de>
+    </ctx_command_info>
+    <message>
+        <en>message</en>
+        <de>Nachricht</de>
+    </message>
+    <user>
+        <en>user</en>
+        <de>Nutzer</de>
+    </user>
+    <emb_help_general_desc>
+        <en>Enter `/help &lt;command&gt;` or `/help &lt;modul&gt;` for more information</en>
+        <de>Gib `/help &lt;Befehl&gt;` oder `/help &lt;Modul&gt;` ein für weitere Informationen</de>
+    </emb_help_general_desc>
+    <emb_help_cog_desc>
+        <en>
+Enter `/help &lt;Befehl>` or `/help &lt;Modul>` for more information.
+For commands details, the optional parameters are denoted by `&lt;Name: Type>` and required parameters with `[Name: Type]`.
+
+Available commands:
+        </en>
+        <de>
+Gib `/help &lt;Befehl>` oder `/help &lt;Modul>` ein für weitere Informationen.
+Bei den Befehlsdetails werden optionale Parameter mit `&lt;Name: Type>` und verpflichtende Parameter mit `[Name: Type]` gekennzeichnet.
+
+Verfügbare Befehle:
+        </de>
+    </emb_help_cog_desc>
+    <opt_silent>
+        <en>Execute the command silently (invisible for others)</en>
+        <de>Führt den Befehl leise aus (unsichtbar für andere)</de>
+    </opt_silent>
+    <help_help_long>
+        <en>Shows the help for all available commands. Use the `selection` parameter to select a specific modul or command to gain more detailed information about it.</en>
+        <de>Zeigt eine Hilfe zu allen verfügbaren Befehlen an. Mit dem `selection` Parameter lässt sich ein Modul oder ein Befehl auswählen, um detailliertere Informationen zu erhalten.</de>
+    </help_help_long>
+    <help_help>
+        <en>
+            Shows the help for commands.
+        </en>
+        <de>
+            Shows the help for commands.
+        </de>
+    </help_help>
+    <help_help_selection>
+        <en>The command/module, to get more information about.</en>
+        <de>Der Befehl/das Modul, zu welchem die Hilfe angezeigt werden soll.</de>
+    </help_help_selection>
+</translations>

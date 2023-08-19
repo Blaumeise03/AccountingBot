@@ -2,6 +2,7 @@
 # Name: HelpCommand
 # Author: Blaumeise03
 # Depends-On: []
+# Localization: help_command_lang.xml
 # End
 import logging
 from typing import Union, Callable, Optional
@@ -13,7 +14,7 @@ from discord.ext import commands
 from discord.ext.commands import Command
 
 from accounting_bot import utils
-from accounting_bot.localisation import t_
+from accounting_bot.localization import t_
 from accounting_bot.main_bot import BotPlugin, AccountingBot, PluginWrapper
 from accounting_bot.utils import CmdAnnotation
 
@@ -41,17 +42,17 @@ def get_cmd_help(cmd: Union[Callable, Command], opt: str = None, long=False, fal
     # ToDo: Improve localisation for plugins
     extra = "_long" if long else ""
     if opt is None:
-        result = t_(f"help_{cmd_name}{extra}", raise_not_found=False)
+        result = t_(f"help_{cmd_name}{extra}")
         if result is None:
-            result = t_(f"help_{cmd_name}", raise_not_found=False)
+            result = t_(f"help_{cmd_name}", fallback=cmd.description)
     if result is None and opt is not None:
-        result = t_(f"help_{cmd_name}_{opt}{extra}", raise_not_found=False)
+        result = t_(f"help_{cmd_name}_{opt}{extra}")
         if result is None:
-            result = t_(f"help_{cmd_name}_{opt}", raise_not_found=False)
+            result = t_(f"help_{cmd_name}_{opt}")
         if result is None:
-            result = t_(f"opt_{opt}{extra}", raise_not_found=False)
-            if result is None:
-                result = t_(f"opt_{opt}", raise_not_found=False)
+            result = t_(f"opt_{opt}{extra}")
+        if result is None:
+            result = t_(f"opt_{opt}")
     if result is None:
         return fallback
     return result
