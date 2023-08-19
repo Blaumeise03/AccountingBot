@@ -1,7 +1,27 @@
 <?xml version="1.0" encoding="UTF-8" ?>
 <translations>
     <help_test>
-        <en>Test Befehl</en>
-        <de>Test command</de>
+        <en>Short test command description, single line</en>
+        <de>Kurze Test-Befehl Hilfe, eine Zeile</de>
     </help_test>
+    <help_test_long>
+        <en>Long test command description, multi-line.</en>
+        <de>Lange Test-Befehl Hilfe, mehrere Zeilen.</de>
+    </help_test_long>
+    <help_echo>
+        <en>Repeats a message</en>
+        <de>Wiederholt eine Nachricht</de>
+    </help_echo>
+    <help_echo_long>
+        <en>Repeats a message provided with the option "echo".</en>
+        <de>Wiederholt eine Nachricht die im Parameter "echo" eingegeben wurde.</de>
+    </help_echo_long>
+    <help_echo_echo>
+        <en>The message to repeat</en>
+        <de>Die zu wiederholende Nachricht</de>
+    </help_echo_echo>
+    <help_echo_echo_long>
+        <en>The message to repeat, may be any text.</en>
+        <de>Die zu wiederholende Nachricht, kann ein beliebiger Text sein.</de>
+    </help_echo_echo_long>
 </translations>

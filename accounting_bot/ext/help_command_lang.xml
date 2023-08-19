@@ -79,12 +79,8 @@ Verfügbare Befehle:
         <de>Zeigt eine Hilfe zu allen verfügbaren Befehlen an. Mit dem `selection` Parameter lässt sich ein Modul oder ein Befehl auswählen, um detailliertere Informationen zu erhalten.</de>
     </help_help_long>
     <help_help>
-        <en>
-            Shows the help for commands.
-        </en>
-        <de>
-            Shows the help for commands.
-        </de>
+        <en>Shows the help for commands.</en>
+        <de>Zeigt Hilfe zu den Befehlen an.</de>
     </help_help>
     <help_help_selection>
         <en>The command/module, to get more information about.</en>

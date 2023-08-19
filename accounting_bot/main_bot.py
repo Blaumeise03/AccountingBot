@@ -42,6 +42,15 @@ class AccountingBot(commands.Bot):
         self.config.load_tree(base_config)
         self.localization = LocalizationHandler()
 
+        def _get_locale(ctx: commands.Context):
+            if isinstance(ctx, ApplicationContext) and ctx.locale is not None:
+                if ctx.locale.startswith("en-"):
+                    return "en"
+                return ctx.locale
+            return "en"
+
+        self.localization.init_bot(self, _get_locale)
+
     def is_online(self):
         return self.state.value >= State.online.value
 
