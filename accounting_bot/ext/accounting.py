@@ -5,12 +5,11 @@
 # End
 import asyncio
 import logging
-import os
 import time
 from abc import ABC, abstractmethod
 from asyncio import Lock
 from datetime import datetime
-from typing import Optional, Callable, TypeVar
+from typing import Optional, Callable, TypeVar, Tuple
 from typing import Union, List
 
 import discord
@@ -29,6 +28,7 @@ from accounting_bot import utils
 from accounting_bot.exceptions import BotOfflineException, AccountingException, ConfigException, NoPermissionException
 from accounting_bot.ext.accounting_db import AccountingDB
 from accounting_bot.ext.sheet import sheet_main
+from accounting_bot.ext.sheet.member import MembersPlugin
 from accounting_bot.ext.sheet.sheet_main import SheetPlugin
 from accounting_bot.main_bot import BotPlugin, PluginWrapper, AccountingBot
 from accounting_bot.utils import AutoDisableView, ErrorHandledModal, parse_number, admin_only, \
@@ -39,16 +39,8 @@ _T = TypeVar("_T")
 
 logger = logging.getLogger("bot.ext.accounting")
 
-wallet_lock = asyncio.Lock()
 
-ACCOUNTING_LOG = None  # type: int | None
-ADMIN_LOG = None  # type: int | None
-SHIPYARD_ADMINS = []
-IMG_WORKING_DIR = None  # type: str | None
 NAME_SHIPYARD = "Buyback Program"
-wallets = {}  # type: {str: int}
-investments = {}  # type: {str: int}
-wallets_last_reload = 0
 
 # Database lock
 database_lock = Lock()
@@ -88,6 +80,11 @@ class AccountingPlugin(BotPlugin):
         self.timezone = "Europe/Berlin"  # type: str
         self.embeds = []  # type: List[Embed]
         self.sheet = None  # type: SheetPlugin | None
+        self.member_p = None  # type: MembersPlugin | None
+        self.wallet_lock = asyncio.Lock()
+        self.wallets = {}  # type: {str: int}
+        self.investments = {}  # type: {str: int}
+        self.wallets_last_reload = 0
 
     def on_load(self):
         self.accounting_log = self.config["logChannel"]
@@ -113,6 +110,7 @@ class AccountingPlugin(BotPlugin):
         self.register_cog(AccountingCommands(self))
         self.embeds = [self.bot.get_plugin("EmbedPlugin").embeds["MenuEmbedInternal"]]
         self.sheet = self.bot.get_plugin("SheetMain")
+        self.member_p = self.bot.get_plugin("MembersPlugin")
 
     async def on_enable(self):
         return await super().on_enable()
@@ -134,7 +132,8 @@ class AccountingPlugin(BotPlugin):
                 (
                     "Du hast ISK auf Deinem Accounting erhalten." if receive else "Es wurde ISK von deinem Konto abgebucht.") +
                 "\nDein Kontostand beträgt `{:,} ISK`".format(
-                    await self.get_balance(transaction.name_to if receive else transaction.name_from, default=-1)) + "`",
+                    await self.get_balance(transaction.name_to if receive else transaction.name_from,
+                                           default=-1)),
                 embed=transaction.create_embed())
         elif discord_id > 0:
             logger.warning("Can't inform user %s (%s) about about the transaction %s -> %s: %s (%s)",
@@ -164,22 +163,20 @@ class AccountingPlugin(BotPlugin):
     async def inform_players(self, transaction: "Transaction"):
         # ToDo: Fix bug were balance gets subtracted two times from cache
         # Update wallets
-        if transaction.name_from and transaction.name_from in wallets:
-            wallets[transaction.name_from] = wallets[transaction.name_from] - transaction.amount
-        if transaction.name_to and transaction.name_to in wallets:
-            wallets[transaction.name_to] = wallets[transaction.name_to] + transaction.amount
+        if transaction.name_from and transaction.name_from in self.wallets:
+            self.wallets[transaction.name_from] = self.wallets[transaction.name_from] - transaction.amount
+        if transaction.name_to and transaction.name_to in self.wallets:
+            self.wallets[transaction.name_to] = self.wallets[transaction.name_to] + transaction.amount
         await self.load_wallets()
 
         # Find the discord account
         if transaction.name_from:
-            id_from, _, perfect = await utils.get_or_find_discord_id(self.bot, self.guild, self.user_role,
-                                                                     transaction.name_from)
+            id_from, _, perfect = self.member_p.get_discord_id(transaction.name_from)
             if not perfect:
                 id_from = None
             await self.inform_player(transaction, id_from, receive=False)
         if transaction.name_to:
-            id_to, _, perfect = await utils.get_or_find_discord_id(self.bot, self.guild, self.user_role,
-                                                                   transaction.name_to)
+            id_to, _, perfect = self.member_p.get_discord_id(transaction.name_to)
             if not perfect:
                 id_to = None
             await self.inform_player(transaction, id_to, receive=True)
@@ -227,10 +224,10 @@ class AccountingPlugin(BotPlugin):
         if not self.bot.is_online():
             raise BotOfflineException()
 
-        if ADMIN_LOG is not None:
-            admin_log_channel = self.bot.get_channel(ADMIN_LOG)
+        if self.admin_log is not None:
+            admin_log_channel = self.bot.get_channel(self.admin_log)
             if admin_log_channel is None:
-                admin_log_channel = await self.bot.fetch_channel(ADMIN_LOG)
+                admin_log_channel = await self.bot.fetch_channel(self.admin_log)
         else:
             admin_log_channel = None
         is_unverified = self.db.is_unverified_transaction(message=message.id)
@@ -252,7 +249,7 @@ class AccountingPlugin(BotPlugin):
         if not has_permissions and isinstance(transaction,
                                               Transaction) and transaction.name_from and transaction.name_to:
             # Only transactions between two players can be self-verified
-            owner_id, _, _ = await utils.get_or_find_discord_id(player_name=transaction.name_from)
+            owner_id, _, _ = self.member_p.get_discord_id(transaction.name_from)
             if owner_id and user_id == owner_id:
                 # Check if the balance is sufficient
                 await self.load_wallets()
@@ -288,14 +285,8 @@ class AccountingPlugin(BotPlugin):
                 has_permissions = True
                 logger.info("User " + str(
                     user_id) + " is owner of transaction " + transaction.__str__() + " and has sufficient balance")
-        ocr_verified = False
-        if isinstance(transaction, Transaction) and transaction.detect_type() == 1:
-            owner_id, _, _ = await utils.get_or_find_discord_id(player_name=transaction.name_to)
-            if owner_id and user_id == owner_id:
-                ocr_verified = self.db.get_ocr_verification(message.id)
-                has_permissions = has_permissions or ocr_verified
         if isinstance(transaction, ShipyardTransaction) and not has_permissions:
-            has_permissions = user_id in SHIPYARD_ADMINS
+            has_permissions = user_id in self.admins_shipyard
         if not has_permissions:
             if interaction:
                 await interaction.followup.send(
@@ -332,18 +323,10 @@ class AccountingPlugin(BotPlugin):
 
         # Save transaction
         await self.save_embeds(message, user_id)
-        if admin_log_channel and (user_id not in self.admins or ocr_verified):
-            file = None
-            if os.path.exists(f"{IMG_WORKING_DIR}/transactions/{message.id}.jpg"):
-                file = discord.File(f"{IMG_WORKING_DIR}/transactions/{message.id}.jpg")
+        if admin_log_channel and (user_id not in self.admins):
             msg = "Transaction `{}` was self-verified by `{}:{}`:\nhttps://discord.com/channels/{}/{}/{}\n" \
-                .format(transaction, user.name, user_id, self.guild, ACCOUNTING_LOG, message.id)
-            if ocr_verified:
-                msg += "*Transaction was OCR verified*"
-            await admin_log_channel.send(msg, file=file)
-            if os.path.exists(f"{IMG_WORKING_DIR}/transactions/{message.id}.jpg"):
-                os.remove(f"{IMG_WORKING_DIR}/transactions/{message.id}.jpg")
-                logger.info(f"Deleted file {IMG_WORKING_DIR}/transactions/{message.id}.jpg")
+                .format(transaction, user.name, user_id, self.guild, self.accounting_log, message.id)
+            await admin_log_channel.send(msg)
         if interaction:
             await message.add_reaction("✅")
             await interaction.followup.send("Transaktion verifiziert!", ephemeral=True)
@@ -396,13 +379,12 @@ class AccountingPlugin(BotPlugin):
         logger.debug("Saved row")
 
     async def load_wallets(self, force=False, validate=False):
-        global wallets, investments, wallets_last_reload
         t = time.time()
-        if (t - wallets_last_reload) < 60 * 60 and not force:
+        if (t - self.wallets_last_reload) < 60 * 60 and not force:
             return
-        async with wallet_lock:
-            wallets_last_reload = t
-            wallets.clear()
+        async with self.wallet_lock:
+            self.wallets_last_reload = t
+            self.wallets.clear()
             sheet = await self.sheet.get_sheet()
             wk_accounting = await sheet.worksheet("Accounting")
             user_raw = await wk_accounting.get_values(sheet_main.MEMBERS_AREA_LITE,
@@ -412,27 +394,43 @@ class AccountingPlugin(BotPlugin):
                     bal = u[sheet_main.MEMBERS_WALLET_INDEX]
                     if type(bal) == int or type(bal) == float:
                         if validate and type(bal) == float:
-                            logger.warning("Balance for %s is a float: %s", u[sheet_main.MEMBERS_NAME_INDEX], bal)
-                        wallets[u[sheet_main.MEMBERS_NAME_INDEX]] = int(bal)
+                            logger.warning("Balance for %s is a float: %s", u[0], bal)
+                        self.wallets[u[0]] = int(bal)
                 if len(u) >= 4:
                     inv = u[sheet_main.MEMBERS_INVESTMENTS_INDEX]
                     if type(inv) == int or type(inv) == float:
                         if validate and type(inv) == float:
                             # logger.warning("Investment sum for %s is a float: %s", u[MEMBERS_NAME_INDEX], inv)
                             pass
-                        investments[u[sheet_main.MEMBERS_NAME_INDEX]] = int(inv)
+                        self.investments[u[0]] = int(inv)
 
     async def get_balance(self, name: str, default: Optional[int] = None) -> int:
-        async with wallet_lock:
-            if name in wallets:
-                return wallets[name]
+        async with self.wallet_lock:
+            name = self.member_p.get_main_name(name)
+            name = self.sheet.check_name_overwrites(name)
+            if name in self.wallets:
+                return self.wallets[name]
             return default
 
     async def get_investments(self, name: str, default: Optional[int] = None) -> int:
-        async with wallet_lock:
-            if name in investments:
-                return investments[name]
+        async with self.wallet_lock:
+            name = self.member_p.get_main_name(name)
+            name = self.sheet.check_name_overwrites(name)
+            if name in self.investments:
+                return self.investments[name]
             return default
+
+    def parse_player(self, string: str) -> Tuple[Optional[str], bool]:
+        """
+        Finds the closest playername match for a given string.
+        It returns the name or None if not found, as well as a
+        boolean indicating whether it was a perfect match.
+
+        :param string: The string which should be looked up
+        :return: (Playername: str or None, Perfect match: bool)
+        """
+        p = self.bot.get_plugin("MembersPlugin")
+        return p.parse_player(string)
 
 
 def user_only() -> Callable[[_T], _T]:
@@ -495,6 +493,7 @@ def main_guild_only() -> Callable[[_T], _T]:
 
         CmdAnnotation.annotate_cmd(func, CmdAnnotation.main_guild)
         return commands.check(predicate)(func)
+
     return decorator
 
 
@@ -506,19 +505,6 @@ def get_current_time() -> str:
     """
     now = datetime.now()
     return now.strftime("%d.%m.%Y %H:%M")
-
-
-def parse_player(string: str) -> (Union[str, None], bool):
-    """
-    Finds the closest playername match for a given string.
-    It returns the name or None if not found, as well as a
-    boolean indicating whether it was a perfect match.
-
-    :param string: The string which should be looked up
-    :return: (Playername: str or None, Perfect match: bool)
-    """
-    # Todo: Complete playername parsing
-    return utils.parse_player(string, [])
 
 
 class AccountingCommands(Cog):
@@ -612,9 +598,9 @@ class AccountingCommands(Cog):
 
     @Cog.listener()
     async def on_raw_reaction_add(self, reaction: RawReactionActionEvent):
-        if reaction.emoji.name == "✅" and reaction.channel_id == self.bot.config["logChannel"]:
+        if reaction.emoji.name == "✅" and reaction.channel_id == self.config["logChannel"]:
             # The Message is not verified
-            channel = self.bot.get_channel(self.bot.config["logChannel"])
+            channel = self.bot.get_channel(self.config["logChannel"])
             msg = await channel.fetch_message(reaction.message_id)
             await self.plugin.verify_transaction(reaction.user_id, msg)
 
@@ -622,8 +608,8 @@ class AccountingCommands(Cog):
     async def on_raw_reaction_remove(self, reaction: RawReactionActionEvent):
         if (
                 reaction.emoji.name == "✅" and
-                reaction.channel_id == self.bot.config["logChannel"] and
-                reaction.user_id in self.bot.config["admins"]
+                reaction.channel_id == self.config["logChannel"] and
+                reaction.user_id in self.config["admins"]
         ):
             logger.info(f"{reaction.user_id} removed checkmark from {reaction.message_id}!")
 
@@ -683,7 +669,7 @@ class AccountingCommands(Cog):
         else:
             user_id = user.id
 
-        name, _, _ = utils.get_main_account(discord_id=user_id)
+        name, _, _ = self.plugin.member_p.find_main_name(discord_id=user_id)
         if name is None:
             await ctx.followup.send("This discord account is not connected to any ingame account!", ephemeral=True)
             return
@@ -699,7 +685,7 @@ class AccountingCommands(Cog):
 
 class TransactionBase(ABC):
     @abstractmethod
-    def has_permissions(self, user_name, admins, operation="") -> bool:
+    def has_permissions(self, user_name: str, plugin: AccountingPlugin, operation="") -> bool:
         pass
 
 
@@ -741,15 +727,15 @@ class Transaction(TransactionLike):
 
     """
 
-    def has_permissions(self, user, admins, operation="") -> bool:
+    def has_permissions(self, user, plugin: AccountingPlugin, operation="") -> bool:
         match operation:
             case "delete":
                 return (
-                        self.name_from and utils.get_main_account(self.name_from) == user or
-                        self.name_to and utils.get_main_account(self.name_to) == user
+                        self.name_from and plugin.member_p.find_main_name(self.name_from) == user or
+                        self.name_to and plugin.member_p.find_main_name(self.name_to) == user
                 )
             case "verify":
-                return user in admins
+                return user in plugin.admins
         return False
 
     # Transaction types
@@ -898,10 +884,11 @@ class Transaction(TransactionLike):
                 if modal.title.casefold() == "Auszahlen".casefold():
                     name_type = 0
             if name_type != -1:
-                name, match = parse_player(field.value.strip())
+                name, match = plugin.parse_player(field.value.strip())
                 if name is None:
                     warnings += f"Hinweis: Name \"{field.value}\" konnte nicht gefunden werden!\n"
                     return None, warnings
+                name = plugin.member_p.get_main_name(name)
                 if not match:
                     warnings += f"Hinweis: Name \"{field.value}\" wurde zu \"**{name}**\" geändert!\n"
                 if name_type == 0:
@@ -927,7 +914,7 @@ class Transaction(TransactionLike):
 
         # Check wallet ownership and balance
         if transaction.name_from:
-            user_id, _, _ = await utils.get_or_find_discord_id(player_name=transaction.name_from)
+            user_id, _, _ = plugin.member_p.get_discord_id(player_name=transaction.name_from)
             await plugin.load_wallets()
             if (user_id is None or user != user_id) and user not in plugin.admins:
                 warnings += "**Fehler**: Dieses Konto gehört dir nicht bzw. dein Discordaccount ist nicht " \
@@ -1129,14 +1116,14 @@ async def send_transaction(plugin: AccountingPlugin,
         if isinstance(embed, PackedTransaction):
             transaction = embed
             embed = transaction.to_embed()
-        msg = await plugin.bot.get_channel(ACCOUNTING_LOG).send(embeds=[embed], view=TransactionView(plugin))
+        msg = await plugin.bot.get_channel(plugin.accounting_log).send(embeds=[embed], view=TransactionView(plugin))
         try:
             plugin.db.add_transaction(msg.id, interaction.user.id)
             if transaction is None:
                 transaction = plugin.transaction_from_embed(embed)
                 if isinstance(transaction, ShipyardTransaction):
                     transaction = ShipyardTransaction.from_embed(embed, plugin.timezone)
-                    if interaction.user.id in SHIPYARD_ADMINS:
+                    if interaction.user.id in plugin.admins_shipyard:
                         transaction.authorized = True
                         note += "\nDu kannst diese Transaktion selbst verifizieren"
             if not transaction:
@@ -1212,7 +1199,7 @@ class AccountingView(AutoDisableView):
         i = 0
         for (msg_id, user_id) in unverified:
             if len(msg) < 1900:
-                msg += f"\nhttps://discord.com/channels/{self.plugin.guild}/{ACCOUNTING_LOG}/{msg_id} von <@{user_id}>"
+                msg += f"\nhttps://discord.com/channels/{self.plugin.guild}/{self.plugin.accounting_log}/{msg_id} von <@{user_id}>"
                 i += 1
             else:
                 msg += f"\nUnd {len(unverified) - i} weitere..."
@@ -1244,10 +1231,10 @@ class TransactionView(AutoDisableView):
             raise BotOfflineException()
         (owner, verified) = self.plugin.db.get_owner(interaction.message.id)
         transaction = self.plugin.transaction_from_embed(interaction.message.embeds[0])
-        user_name = utils.get_main_account(discord_id=interaction.user.id)
+        user_name = self.plugin.member_p.find_main_name(discord_id=interaction.user.id)
         has_perm = owner == interaction.user.id or interaction.user.id in self.plugin.admins
         if not has_perm:
-            has_perm = transaction.has_permissions(user_name, self.plugin.admins, "delete")
+            has_perm = transaction.has_permissions(user_name, self.plugin, "delete")
         if not verified and has_perm:
             await interaction.message.delete()
             self.plugin.db.delete(interaction.message.id)
@@ -1373,12 +1360,16 @@ class TransferModal(ErrorHandledModal):
             return
         if transaction.name_from:
             f = transaction.name_from
-            transaction.name_from = self.plugin.sheet.check_name_overwrites(transaction.name_from)
+            transaction.name_from = self.plugin.sheet.check_name_overwrites(
+                self.plugin.member_p.get_main_name(transaction.name_from)
+            )
             if f != transaction.name_from:
                 warnings += f"Info: Der Sender wurde zu \"{transaction.name_from}\" geändert.\n"
         if transaction.name_to:
             t = transaction.name_to
-            transaction.name_to = self.plugin.sheet.check_name_overwrites(transaction.name_to)
+            transaction.name_to = self.plugin.sheet.check_name_overwrites(
+                self.plugin.member_p.get_main_name(transaction.name_to)
+            )
             if t != transaction.name_to:
                 warnings += f"Info: Der Empfänger wurde zu \"{transaction.name_to}\" geändert.\n"
         view = ConfirmView(self.plugin)
@@ -1440,12 +1431,12 @@ class ShipyardModal(ErrorHandledModal):
     async def callback(self, interaction: Interaction):
         if not self.plugin.bot.is_online():
             raise BotOfflineException()
-        buyer, buyer_is_match = parse_player(self.children[0].value)
+        buyer, buyer_is_match = self.plugin.parse_player(self.children[0].value)
         ship = self.children[1].value.strip()
         price, warn_price = parse_number(self.children[2].value)
         station_fees, warn_fees = parse_number(self.children[3].value)
         if self.children[4].value is not None:
-            builder, builder_is_match = parse_player(self.children[4].value)
+            builder, builder_is_match = self.plugin.parse_player(self.children[4].value)
         else:
             builder = None
             builder_is_match = True
@@ -1456,8 +1447,11 @@ class ShipyardModal(ErrorHandledModal):
             await interaction.response.send_message(
                 f"Spieler \"{self.children[0].value}\" konnte nicht gefunden werden!", ephemeral=True)
             return
+        buyer = self.plugin.sheet.check_name_overwrites(self.plugin.member_p.get_main_name(buyer))
         if not buyer_is_match:
             warnings += f"Hinweis: Käufer \"{self.children[0].value}\" wurde zu \"**{buyer}**\" geändert!\n"
+        if buyer is not None:
+            builder = self.plugin.sheet.check_name_overwrites(self.plugin.member_p.get_main_name(builder))
         if not builder_is_match and len(self.children[4].value) > 0:
             warnings += f"Warnung: Bauer \"{self.children[4].value}\" wurde zu \"**{builder}**\" geändert!\n"
         if price is None:

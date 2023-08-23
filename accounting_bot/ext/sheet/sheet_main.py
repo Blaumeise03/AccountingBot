@@ -1,11 +1,14 @@
 # PluginConfig
 # Name: SheetMain
 # Author: Blaumeise03
+# Depends-On: [accounting_bot.ext.sheet.member]
 # End
 import datetime
+import functools
 import json
 import logging
 from os.path import exists
+from typing import Dict
 
 import gspread_asyncio
 from discord.ext import commands
@@ -13,6 +16,7 @@ from google.oauth2.service_account import Credentials
 from gspread.utils import ValueRenderOption
 
 from accounting_bot.exceptions import GoogleSheetException
+from accounting_bot.ext.sheet.member import Player, MembersPlugin
 from accounting_bot.main_bot import BotPlugin, AccountingBot, PluginWrapper
 
 logger = logging.getLogger("bot.sheet")
@@ -30,12 +34,6 @@ lastChanges = datetime.datetime(1970, 1, 1)
 MEMBERS_WALLET_INDEX = 2  # The column index of the balance
 MEMBERS_INVESTMENTS_INDEX = 3  # The column index of the investments
 MEMBERS_AREA_LITE = "A4:D"  # The reduced area of the member list
-MEMBERS_AREA = "A4:O"  # The area of the member list
-MEMBERS_NAME_INDEX = 0  # The column index of the name
-MEMBERS_ACTIVE_INDEX = 10  # The column index of the "active" column
-MEMBERS_RANK_INDEX = 8  # The column index of the "rank" column
-MEMBERS_NOTE_INDEX = 14  # The column containing notes for users
-
 MARKET_PRICE_INDEXES = [6, 7, 9]  # The columns containing market prices
 MARKET_ITEM_INDEX = 0  # The column containing the item names
 MARKET_AREA = "A:J"  # The total area
@@ -46,6 +44,17 @@ CONFIG_TREE = {
     "log_level": (str, "INFO")
 }
 
+CONFIG_TREE_MEMBERS = {
+    "sheet_name": (str, "N/A"),
+    "path_discord_ids": (str, "discord_ids.json"),
+    "members_area": (str, "A4:O"),
+    "members_active_index": (int, 10),
+    "members_name_index": (int, 0),
+    "members_rank_index": (int, 8),
+    "members_note_index": (int, 14),
+    "members_note_alt_prefix": (str, "Twink von "),
+}
+
 
 class SheetPlugin(BotPlugin):
     def __init__(self, bot: AccountingBot, wrapper: PluginWrapper) -> None:
@@ -53,6 +62,8 @@ class SheetPlugin(BotPlugin):
         self.name_overwrites = {}
         self.config = self.bot.create_sub_config("sheet")
         self.config.load_tree(CONFIG_TREE)
+        self.member_config = self.config.create_sub_config("members")
+        self.member_config.load_tree(CONFIG_TREE_MEMBERS)
         self.sheet_id = None
         self.agcm = gspread_asyncio.AsyncioGspreadClientManager(get_creds)
 
@@ -70,6 +81,13 @@ class SheetPlugin(BotPlugin):
         self.sheet_id = self.config["sheet_id"]
         if self.sheet_id == "N/A":
             self.sheet_id = None
+        members_plugin = self.bot.get_plugin("MembersPlugin")  # type: MembersPlugin
+        (
+            members_plugin
+            .set_data_source()
+            .map_data(functools.partial(load_usernames, plugin=self))
+            .map_data(functools.partial(load_discord_ids, path=self.member_config["path_discord_ids"]))
+        )
 
     async def on_enable(self):
         return await super().on_enable()
@@ -145,3 +163,70 @@ class SheetCog(commands.Cog):
         self.plugin.sheet_name = sheet.title
         logger.info("Sheet connected")
 
+
+async def load_usernames(players: Dict[str, Player], plugin: SheetPlugin) -> Dict[str, Player]:
+    sheet = await plugin.get_sheet()
+    config = plugin.member_config
+    # Load usernames
+    wk_accounting = await sheet.worksheet(config["sheet_name"])
+    user_raw = await wk_accounting.get_values(config["members_area"],
+                                              value_render_option=ValueRenderOption.unformatted)
+    inactive_players = []
+    i_member_active = config["members_active_index"]
+    i_member_name = config["members_name_index"]
+    i_member_rank = config["members_rank_index"]
+    i_member_note = config["members_note_index"]
+    member_note_alt_prefix = config["members_note_alt_prefix"]
+    alt_chars = {}  # type: Dict[str, str]
+
+    for row in user_raw:
+        user = None
+        # Check if main account
+        if len(row) > i_member_active and row[i_member_active]:
+            user = Player(name=row[i_member_name].strip())
+            players[user.name] = user
+        # Check if in the corp (and therefore has a rank)
+        if len(row) > i_member_rank and len(row[i_member_rank].strip()) > 0:
+            if user:
+                user.rank = row[i_member_rank].strip()
+            else:
+                inactive_players.append(row[i_member_rank].strip())
+            # Check if it is an alt of a main account
+            if len(row) > i_member_note and not row[i_member_active]:
+                note = row[i_member_note]  # type: str
+                if note.startswith(member_note_alt_prefix):
+                    note = note.replace(member_note_alt_prefix, "").strip()
+                    alt_chars[row[i_member_name].strip()] = note
+    for alt, main in alt_chars.items():
+        if main not in players:
+            continue
+        player = players[main]
+        player.alts.append(alt)
+        players[alt] = player
+        if main in inactive_players and alt not in inactive_players:
+            inactive_players.remove(main)
+
+    logger.info("Loaded %s chars", len(players))
+    players = dict(filter(lambda t: t[0] not in inactive_players, players.items()))
+    logger.info("Found %s active chars", len(players))
+    return players
+
+
+def load_discord_ids(players: Dict[str, Player], path: str):
+    with open(path, "r") as file:
+        raw = json.load(file)
+    if "owners" in raw:
+        owner_ids = raw["owners"]
+    else:
+        owner_ids = {}
+    if "granted_permissions" in raw:
+        perms_ids = raw["granted_permissions"]
+    else:
+        perms_ids = {}
+    for player in players.values():
+        if player.name in owner_ids:
+            player.discord_id = owner_ids[player.name]
+        if player.name in perms_ids:
+            player.authorized_discord_ids.append(perms_ids[player.name])
+    logger.info("Loaded discord ids")
+    return players

@@ -1,7 +1,6 @@
 import asyncio
 import calendar
 import datetime
-import difflib
 import functools
 import io
 import json
@@ -9,16 +8,14 @@ import logging
 import math
 import re
 import traceback
-from abc import ABC, abstractmethod
 from concurrent.futures import ThreadPoolExecutor
 from enum import Enum
 from os.path import exists
-from typing import Union, Tuple, Optional, Type, List, Callable, TypeVar, Dict, Coroutine, TYPE_CHECKING
+from typing import Union, Optional, Type, List, Callable, TypeVar, Dict, Coroutine, TYPE_CHECKING
 
 import cv2
 import discord
-from discord import Interaction, ApplicationContext, InteractionResponded, ActivityType, Member, DMChannel, \
-    ApplicationCommand
+from discord import Interaction, ApplicationContext, InteractionResponded, ActivityType, ApplicationCommand
 from discord.ext import commands
 from discord.ext.commands import Bot, Context, Command, CheckFailure, NotOwner
 from discord.ui import View, Modal, Item, Button
@@ -26,7 +23,7 @@ from numpy import ndarray
 
 from accounting_bot import exceptions
 from accounting_bot.config import Config
-from accounting_bot.exceptions import LoggedException, NoPermissionException, BotOfflineException, ConfigException, \
+from accounting_bot.exceptions import LoggedException, NoPermissionException, BotOfflineException, \
     UnhandledCheckException
 
 if TYPE_CHECKING:
@@ -100,7 +97,7 @@ def parse_number(string: str) -> (int, str):
         warnings += "Hinweis: Es wurden Punkte und/oder Kommas erkannt, die Zahl wird automatisch nach " \
                     "dem Format \"1,000,000.00 ISK\" geparsed.\n"
 
-    if bool(re.match(r"[0-9]+(,[0-9]+)*(\.[0-9]+)?[a-zA-Z]*", string)):
+    if bool(re.match(r"\d+(,\d+)*(\.\d+)?[a-zA-Z]*", string)):
         number = re.sub(r"[,a-zA-Z ]", "", string).split(".", 1)[0]
         return int(number), warnings
     else:
@@ -329,108 +326,6 @@ def str_to_list(text: str, sep=";") -> List[str]:
     return text_list
 
 
-def get_main_account(name: str = None, discord_id: int = None) -> Tuple[Union[str, None], Union[str, None], bool]:
-    """
-    Finds the closest playername match for a given string. And returns the main account of this player, together with
-    the parsed input name and the information, whether it was a perfect match.
-    Alternatively searches for the character name belonging to the discord account.
-
-    :param name: the string which should be looked up or
-    :param discord_id: the id to search for
-    :return:    Main Char: str or None,
-                Char name: str or None,
-                Perfect match: bool
-    """
-    if name is None and discord_id is None:
-        return None, None, False
-    if discord_id is not None:
-        for main_char, d_id in discord_users.items():
-            if d_id == discord_id:
-                return main_char, main_char, True
-        return None, None, False
-    names = difflib.get_close_matches(name, ingame_chars, 1)
-    if len(names) > 0:
-        n = str(names[0])
-        main_char = n
-        if main_char in ingame_twinks:
-            main_char = ingame_twinks[main_char]
-        if name.casefold() == n.casefold():
-            return main_char, n, True
-        return main_char, n, False
-    return None, None, False
-
-
-def parse_player(string: str, users: [str]) -> (Union[str, None], bool):
-    """
-    Finds the closest playername match for a given string. It returns the name or None if not found, as well as a
-    boolean indicating whether it was a perfect match.
-
-    :param string: the string which should be looked up
-    :param users: the available usernames
-    :return: (Playername: str or None, Perfect match: bool)
-    """
-    names = difflib.get_close_matches(string, users, 1)
-    if len(names) > 0:
-        name = str(names[0])
-        if name.casefold() == string.casefold():
-            return str(names[0]), True
-        return str(names[0]), False
-    return None, False
-
-
-async def get_or_find_discord_id(bot: Bot = None, guild: int = None, user_role: int = None, player_name="") \
-        -> Tuple[Optional[int], Optional[str], Optional[bool]]:
-    if bot is None:
-        bot = BOT
-    if guild is None:
-        guild = CONFIG["server"]
-    if user_role is None:
-        user_role = CONFIG["user_role"]
-    player_name = get_main_account(name=player_name)[0]
-
-    discord_id = get_discord_id(player_name)
-    if discord_id:
-        return discord_id, player_name, True
-    name, perfect, nicknames = await find_discord_id(bot, guild, user_role, player_name)
-    if perfect:
-        return nicknames[name], name, True
-    return None, name, False
-
-
-def get_discord_id(name: str):
-    if name in discord_users:
-        return discord_users[name]
-    else:
-        return None
-
-
-async def find_discord_id(bot, guild, user_role, player_name):
-    nicknames = dict(await bot.get_guild(guild)
-                     .fetch_members()
-                     .filter(lambda m: m.get_role(user_role) is not None)
-                     .map(lambda m: (m.nick if m.nick is not None else m.name, m.id))
-                     .flatten())
-    name, perfect = parse_player(player_name, nicknames)
-    return name, perfect, nicknames
-
-
-def save_discord_id(name: str, discord_id: int):
-    if name in discord_users and discord_users[name] == discord_id:
-        return
-    while discord_id in discord_users.values():
-        for k, v in list(discord_users.items()):
-            if v == discord_id:
-                logger.warning("Deleted discord id %s (user: %s)", v, k)
-                del discord_users[k]
-    discord_users[name] = discord_id
-    save_discord_config()
-
-
-def save_discord_config():
-    with open("discord_ids.json", "w") as outfile:
-        json.dump(discord_users, outfile, indent=4)
-
-
 class CmdAnnotation(Enum):
     admin = "Admin only"
     owner = "Owner only"
@@ -546,7 +441,7 @@ class Item(object):
                 continue
             line = re.sub("\t", "    ", line.strip())  # Replace Tabs with spaces
             line = re.sub("^\\d+ *", "", line.strip())  # Delete first column (numeric Index)
-            if len(re.findall("[0-9]+", line.strip())) > 1:
+            if len(re.findall(r"\d+", line.strip())) > 1:
                 line = re.sub(" *[0-9.]+$", "", line.strip())  # Delete last column (Valuation, decimal)
             item = re.sub(" +\\d+$", "", line)
             quantity = line.replace(item, "").strip()
