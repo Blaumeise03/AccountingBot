@@ -13,10 +13,10 @@ from types import ModuleType
 from typing import Dict, Union, List, Optional
 
 import discord
-from discord import ApplicationContext, ApplicationCommandError
+from discord import ApplicationContext, ApplicationCommandError, User, Member
 from discord.ext import commands
 
-from accounting_bot import utils, localization
+from accounting_bot import utils, localization, exceptions
 from accounting_bot.config import Config
 from accounting_bot.exceptions import PluginLoadException, PluginNotFoundException, PluginDependencyException, \
     InputException
@@ -29,11 +29,41 @@ SILENT_EXCEPTIONS = [
     commands.CommandOnCooldown, InputException, commands.NoPrivateMessage, commands.NotOwner, commands.PrivateMessageOnly,
     commands.CheckFailure
 ]
+LOUD_EXCEPTIONS = [
+    exceptions.UnhandledCheckException
+]
+base_config = {
+    "plugins": (list, []),
+    "error_log_channel": (int, -1),
+    "admins": (list, []),
+    "test_server": (int, -1),
+    "main_server": (int, -1)
+}
+
+
+@functools.total_ordering
+class PluginState(Enum):
+    MISSING_DEPENDENCIES = -1
+    CRASHED = 0
+    UNLOADED = 1
+    LOADED = 2
+    ENABLED = 3
+
+    def __repr__(self) -> str:
+        return f"PluginStatus({self.name})"
+
+    def __eq__(self, other):
+        if not isinstance(other, PluginState):
+            return False
+        return other.value == self.value
+
+    def __gt__(self, other):
+        return self.value > other.value
 
 
 # noinspection PyMethodMayBeStatic
 class AccountingBot(commands.Bot):
-    def __init__(self, *args, **kwargs):
+    def __init__(self, config_path: str, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.state = State.offline
         self.embeds = {}
@@ -41,6 +71,8 @@ class AccountingBot(commands.Bot):
         self.config = Config()
         self.config.load_tree(base_config)
         self.localization = LocalizationHandler()
+        self.config_path = config_path
+        self.admins = []  # type: List[int]
 
         def _get_locale(ctx: commands.Context):
             if isinstance(ctx, ApplicationContext) and ctx.locale is not None:
@@ -51,11 +83,28 @@ class AccountingBot(commands.Bot):
 
         self.localization.init_bot(self, _get_locale)
 
+    def is_admin(self, user: Union[int, User, Member]):
+        if isinstance(user, (User, Member)):
+            if user.id in self.admins:
+                return True
+            return self.owner_id is not None and user.id == self.owner_id
+        if type(user) == int:
+            if user in self.admins:
+                return True
+            return self.owner_id is not None and user == self.owner_id
+        raise TypeError(f"Expected User or int, got {type(user)}")
+
     def is_online(self):
         return self.state.value >= State.online.value
 
-    def load_config(self, path: str) -> None:
-        self.config.load_config(path)
+    def load_config(self) -> None:
+        self.config.load_config(self.config_path)
+
+    def save_config(self) -> None:
+        self.config.save_config(self.config_path)
+
+    def create_sub_config(self, root_key: str) -> Config:
+        return self.config.create_sub_config(root_key)
 
     def load_localization(self, path: Union[PathLike, str]) -> None:
         """
@@ -66,6 +115,8 @@ class AccountingBot(commands.Bot):
         self.localization.load_from_xml(path)
 
     def load_plugins(self):
+        self.state = State.preparing
+        self.load_config()
         plugins = []
         for plugin in self.config["plugins"]:
             try:
@@ -81,13 +132,25 @@ class AccountingBot(commands.Bot):
             return
         for plugin in plugins:
             try:
+                self.load_config()
                 plugin.load_plugin(self)
                 self.plugins.append(plugin)
             except PluginLoadException as e:
                 logger.error("Error while loading plugin %s:%s", plugin.module_name, plugin.name)
                 utils.log_error(logger, e)
+        self.save_config()
+
+    async def fetch_owner(self):
+        app = await self.application_info()  # type: ignore
+        if app.team:
+            self.owner_ids = {m.id for m in app.team.members}
+        else:
+            self.owner_id = app.owner.id
 
     async def enable_plugins(self):
+        self.state = State.starting
+        if self.owner_id is None:
+            await self.fetch_owner()
         for plugin in self.plugins:
             try:
                 await plugin.enable_plugin()
@@ -97,7 +160,7 @@ class AccountingBot(commands.Bot):
 
     async def shutdown(self):
         for plugin in reversed(self.plugins):
-            if plugin.status == PluginStatus.ENABLED:
+            if plugin.state == PluginState.ENABLED:
                 try:
                     await plugin.disable_plugin()
                 except PluginLoadException as e:
@@ -105,7 +168,7 @@ class AccountingBot(commands.Bot):
                     utils.log_error(logger, e)
 
         for plugin in reversed(self.plugins):
-            if plugin.status == PluginStatus.LOADED:
+            if plugin.state == PluginState.LOADED:
                 try:
                     plugin.unload_plugin()
                 except PluginLoadException as e:
@@ -118,7 +181,7 @@ class AccountingBot(commands.Bot):
             logging.warning("discord.errors.NotFound Error in %s: %s", event_name, str(info[1]))
             return
         if info and len(info) > 2:
-            utils.log_error(logger, info[1], location="bot.on_error")
+            utils.log_error(logger, info[1], location=event_name if event_name else "bot.on_error")
         else:
             logging.exception("An unknown error occurred: %s", event_name)
 
@@ -129,6 +192,15 @@ class AccountingBot(commands.Bot):
             if cog in wrapper.plugin.cogs:
                 return wrapper
         return None
+
+    def get_plugin(self, name: str, require_state=PluginState.LOADED):
+        for wrapper in self.plugins:
+            if wrapper.name == name or wrapper.module_name == name:
+                if wrapper.state < require_state:
+                    raise PluginLoadException(
+                        f"Plugin {wrapper.name} has invalid state, required was {require_state.name}, got {wrapper.state.name}")
+                return wrapper.plugin
+        raise PluginNotFoundException(f"Plugin {name} was not found")
 
     async def on_application_command_error(self, ctx: ApplicationContext, err: ApplicationCommandError):
         """
@@ -143,9 +215,13 @@ class AccountingBot(commands.Bot):
             if isinstance(err, cls):
                 silent = True
                 break
+        for cls in LOUD_EXCEPTIONS:
+            if isinstance(err, cls):
+                silent = False
+                break
         location = None
         if plugin is not None:
-            location = "plugin " + plugin.module_name
+            location = "plugin " + plugin.name
         log_error(plugin.plugin.logger if plugin else logger, err, location=location, ctx=ctx, minimal=silent)
         await send_exception(err, ctx)
 
@@ -155,22 +231,17 @@ class AccountingBot(commands.Bot):
             if isinstance(err, cls):
                 silent = True
                 break
+        for cls in LOUD_EXCEPTIONS:
+            if isinstance(err, cls):
+                silent = False
+                break
         log_error(logging.getLogger(), err, minimal=silent)
         await send_exception(err, ctx)
 
     async def on_ready(self):
         logger.info("Bot has logged in")
         await self.enable_plugins()
-
-
-base_config = {
-    "plugins": (list, []),
-    "owner": (int, -1),
-    "error_log_channel": (int, -1),
-    "admins": (list, []),
-    "test_server": (int, -1),
-    "main_server": (int, -1)
-}
+        self.state = State.online
 
 
 class BotPlugin(ABC):
@@ -239,26 +310,6 @@ class BotPlugin(ABC):
         pass
 
 
-@functools.total_ordering
-class PluginStatus(Enum):
-    MISSING_DEPENDENCIES = -1
-    CRASHED = 0
-    UNLOADED = 1
-    LOADED = 2
-    ENABLED = 3
-
-    def __repr__(self) -> str:
-        return f"PluginStatus({self.name})"
-
-    def __eq__(self, other):
-        if not isinstance(other, PluginStatus):
-            return False
-        return other.value == self.value
-
-    def __gt__(self, other):
-        return self.value > other.value
-
-
 class PluginWrapper(object):
     def __init__(self, name: str, module_name: str, author: str = None,
                  dep_names: Union[List[str], None] = None) -> None:
@@ -267,7 +318,7 @@ class PluginWrapper(object):
         self.module_name = module_name
         self.name = name
         self.plugin = None  # type: BotPlugin | None
-        self.status = PluginStatus.UNLOADED
+        self.state = PluginState.UNLOADED
         self.dep_names = [] if dep_names is None else dep_names
         self.dependencies = []  # type: List[PluginWrapper]
         self.required_by = []
@@ -312,14 +363,14 @@ class PluginWrapper(object):
             return inspect.getmodule(o).__name__ == self.module_name and issubclass(o, BotPlugin)
 
         logger.debug("Loading %s:%s", self.module_name, self.name)
-        if self.status == PluginStatus.MISSING_DEPENDENCIES:
+        if self.state == PluginState.MISSING_DEPENDENCIES:
             raise PluginLoadException(f"Can't load plugin {self.module_name}: Missing dependencies")
         for p in self.dependencies:
-            if p.status < PluginStatus.LOADED:
-                raise PluginLoadException(f"Can't load plugin {self.module_name}: Requirement {p.module_name} is not loaded: {p.status}")
+            if p.state < PluginState.LOADED:
+                raise PluginLoadException(f"Can't load plugin {self.module_name}: Requirement {p.module_name} is not loaded: {p.state}")
         if not reload:
-            if self.status > PluginStatus.UNLOADED:
-                raise PluginLoadException(f"Can't load plugin {self.module_name}: Plugin is already loaded with status " + self.status.name)
+            if self.state > PluginState.UNLOADED:
+                raise PluginLoadException(f"Can't load plugin {self.module_name}: Plugin is already loaded with status " + self.state.name)
             self.module = importlib.import_module(self.module_name)
         else:
             self.module = importlib.reload(self.module)
@@ -345,68 +396,68 @@ class PluginWrapper(object):
             self.plugin = plugin_cls(bot, self)  # type: BotPlugin
             self.plugin.on_load()
         except Exception as e:
-            self.status = PluginStatus.CRASHED
-            raise PluginLoadException(f"Plugin {self.module_name} crashed during loading", e)
+            self.state = PluginState.CRASHED
+            raise PluginLoadException(f"Plugin {self.module_name} crashed during loading") from e
         logger.debug("Loaded %s:%s", self.module_name, self.name)
-        self.status = PluginStatus.LOADED
+        self.state = PluginState.LOADED
 
     async def enable_plugin(self):
-        if self.status == PluginStatus.ENABLED:
+        if self.state == PluginState.ENABLED:
             raise PluginLoadException(f"Plugin {self.module_name} is already enabled")
-        if self.status != PluginStatus.LOADED:
+        if self.state != PluginState.LOADED:
             raise PluginLoadException(f"Plugin {self.module_name} is not loaded")
         for p in self.dependencies:
-            if p.status < PluginStatus.ENABLED:
+            if p.state < PluginState.ENABLED:
                 raise PluginLoadException(
-                    f"Can't load plugin {self.module_name}: Requirement {p.module_name} is not enabled: {p.status}")
+                    f"Can't load plugin {self.module_name}: Requirement {p.module_name} is not enabled: {p.state}")
         logger.info("Enabling plugin %s:%s", self.module_name, self.name)
         try:
             await self.plugin.on_enable()
         except Exception as e:
-            self.status = PluginStatus.CRASHED
-            raise PluginLoadException(f"Loading of plugin {self.module_name} failed", e)
-        self.status = PluginStatus.ENABLED
+            self.state = PluginState.CRASHED
+            raise PluginLoadException(f"Loading of plugin {self.module_name} failed") from e
+        self.state = PluginState.ENABLED
         logger.info("Enabled plugin %s:%s", self.module_name, self.name)
 
     async def disable_plugin(self):
-        if self.status != PluginStatus.ENABLED:
+        if self.state != PluginState.ENABLED:
             raise PluginLoadException(f"Disabling of plugin {self.module_name} is not possible, as it's not enabled")
         try:
             for cog in self.plugin.cogs:
                 self.plugin.bot.remove_cog(cog.__cog_name__)
             await self.plugin.on_disable()
         except Exception as e:
-            self.status = PluginStatus.CRASHED
-            raise PluginLoadException(f"Disabling of plugin {self.module_name} failed", e)
-        self.status = PluginStatus.LOADED
+            self.state = PluginState.CRASHED
+            raise PluginLoadException(f"Disabling of plugin {self.module_name} failed") from e
+        self.state = PluginState.LOADED
 
     def unload_plugin(self):
-        if self.status != PluginStatus.LOADED:
+        if self.state != PluginState.LOADED:
             raise PluginLoadException(f"Unloading of plugin {self.module_name} is not possible, as it's not loaded")
         try:
             self.plugin.on_unload()
         except Exception as e:
-            self.status = PluginStatus.CRASHED
-            raise PluginLoadException(f"Unloading of plugin {self.module_name} failed", e)
-        self.status = PluginStatus.UNLOADED
+            self.state = PluginState.CRASHED
+            raise PluginLoadException(f"Unloading of plugin {self.module_name} failed") from e
+        self.state = PluginState.UNLOADED
 
     async def reload_plugin(self, bot: AccountingBot, force=False):
         logger.info("Reloading plugin %s", self.module_name)
-        if self.status == PluginStatus.ENABLED:
+        if self.state == PluginState.ENABLED:
             try:
                 await self.disable_plugin()
             except PluginLoadException as e:
                 if not force:
-                    raise PluginLoadException(f"Reloading of plugin {self.module_name} failed", e)
+                    raise PluginLoadException(f"Reloading of plugin {self.module_name} failed") from e
                 else:
                     logger.warning("Plugin %s threw an error while disabling, ignoring it", self.module_name)
                     utils.log_error(logger, e, "reload_plugin", minimal=True)
-        if self.status == PluginStatus.LOADED:
+        if self.state == PluginState.LOADED:
             try:
                 self.unload_plugin()
             except PluginLoadException as e:
                 if not force:
-                    raise PluginLoadException(f"Reloading of plugin {self.module_name} failed", e)
+                    raise PluginLoadException(f"Reloading of plugin {self.module_name} failed") from e
                 else:
                     logger.warning("Plugin %s threw an error while unloading, ignoring it", self.module_name)
                     utils.log_error(logger, e, "reload_plugin", minimal=True)
@@ -495,12 +546,12 @@ def find_plugin_order(plugins: List[PluginWrapper]):
         try:
             plugin.dependencies = plugin.find_dependencies(plugins)
             for dep in plugin.dependencies:
-                if dep.status == PluginStatus.MISSING_DEPENDENCIES:
-                    plugin.status = PluginStatus.MISSING_DEPENDENCIES
+                if dep.state == PluginState.MISSING_DEPENDENCIES:
+                    plugin.state = PluginState.MISSING_DEPENDENCIES
         except PluginDependencyException as e:
             logger.error("Failed to resolve dependencies for plugin %s: %s", plugin, str(e))
             if plugin is not None:
-                plugin.status = PluginStatus.MISSING_DEPENDENCIES
+                plugin.state = PluginState.MISSING_DEPENDENCIES
     root = []
     for plugin in plugins:
         if len(plugin.dependencies) == 0:

@@ -58,9 +58,7 @@ intents.reactions = True
 # noinspection PyUnresolvedReferences,PyDunderSlots
 intents.members = True
 
-bot = AccountingBot(intents=intents, help_command=None)
-bot.load_config(CNFG_PATH)
-bot.config.save_config(CNFG_PATH)
+bot = AccountingBot(intents=intents, help_command=None, config_path=CNFG_PATH)
 bot.load_plugins()
 
 

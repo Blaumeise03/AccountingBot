@@ -1,12 +1,6 @@
 from abc import ABC, abstractmethod
-from typing import TYPE_CHECKING
 
-from discord.ext.commands import CommandError
-
-if TYPE_CHECKING:
-    from bot import BotState
-
-STATE = None  # type: BotState | None
+from discord.ext.commands import CommandError, CheckFailure
 
 
 class InputException(CommandError):
@@ -64,7 +58,7 @@ class ConfigDataTypeException(ConfigException):
 
 class BotOfflineException(Exception):
     def __init__(self, message="Action can't be executed", *args: object) -> None:
-        super().__init__(str(STATE.state) + ": " + str(message), *args)
+        super().__init__(str(message), *args)
 
 
 class PlanetaryProductionException(InputException):
@@ -83,7 +77,7 @@ class KillmailException(Exception):
     pass
 
 
-class NoPermissionsException(InputException):
+class NoPermissionException(InputException):
     pass
 
 
@@ -104,4 +98,7 @@ class PluginDependencyException(PluginLoadException):
 
 
 class PluginNotFoundException(PluginLoadException):
+    pass
+
+class UnhandledCheckException(CheckFailure):
     pass

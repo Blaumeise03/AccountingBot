@@ -15,12 +15,15 @@ class ConfigElement:
         self.value = default
         self.unused = False
 
+    def __repr__(self):
+        return f"ConfigElement({self.data_type}:{self.value})"
+
 
 class Config:
     def __init__(self):
         self._tree = {}
 
-    def _create_sub_config(self, path: str) -> None:
+    def create_sub_config(self, path: str) -> "Config":
         """
         Creates a new sub config for the given path. All missing keys will be generated.
 
@@ -30,11 +33,14 @@ class Config:
         key = split[0]
         if key not in self._tree:
             self._tree[key] = Config()
+            return self._tree[key]
         if not isinstance(self._tree[key], Config):
             raise ConfigException(f"Can't insert subconfig for key {path}, as this path already has a value")
         if len(split) > 1:
             # noinspection PyProtectedMember
-            self._tree[key]._create_sub_config(split[1])
+            self._tree[key].create_sub_config(split[1])
+        else:
+            return self._tree[key]
 
     def load_tree(self, tree: Dict[str, Any], root_key: str | None = None) -> None:
         """
@@ -59,7 +65,7 @@ class Config:
         """
         config = self
         if root_key is not None and len(root_key) > 0:
-            self._create_sub_config(root_key)
+            self.create_sub_config(root_key)
             config = self[root_key]
         for key, value in tree.items():
             if isinstance(value, Tuple):
@@ -70,9 +76,19 @@ class Config:
                 if not isinstance(value[1], value[0]):
                     raise ConfigException(f"Expected default value for second entry of tuple for key {key}, got {type(value[1])}")
                 if key in config._tree:
+                    if config._tree[key].unused:
+                        config._tree[key].data_type = value[0]
+                        config._tree[key].default = value[1]
+                        config._tree[key].unused = False
+                        continue
                     raise ConfigException(f"Can't load config tree: Key {key} already exists in config")
                 config._tree[key] = ConfigElement(value[0], value[1])
             elif isinstance(value, Dict):
+                if key in config._tree:
+                    if isinstance(config._tree[key], Config):
+                        config._tree[key].load_tree(value)
+                        continue
+                    raise ConfigException(f"Can't load config tree: Key {key} already exists in config but is not a subconfig")
                 sub_config = Config()
                 sub_config.load_tree(value)
                 config._tree[key] = sub_config
@@ -105,11 +121,14 @@ class Config:
             if key not in self:
                 split = key.split(".", 1)
                 if len(split) > 1:
-                    self._create_sub_config(key.split(".", 1)[0])
-                self._tree[key] = ConfigElement(type(value), value)
-                self._tree[key].unused = True
-            elif isinstance(self[key], Config):
-                self[key]._from_dict(value)
+                    self.create_sub_config(split[0])
+                if isinstance(value, Dict):
+                    self.create_sub_config(split[0])
+                    self[split[0]]._from_dict(value)
+                else:
+                    self._tree[key] = ConfigElement(type(value), value)
+                if isinstance(self._tree[key], ConfigElement):
+                    self._tree[key].unused = True
             else:
                 self[key] = value
 
@@ -159,6 +178,10 @@ class Config:
             if len(split) > 1:
                 element[split[1]] = value
                 return
+            if isinstance(value, Dict):
+                for k, v in value.items():
+                    self[split[0]][k] = v
+                return
             raise ConfigException(f"Can't update value for key {key} as it is a subconfig")
         raise ConfigException(f"Unexpected value for key {key}: {type(element)}. Expected ConfigElement or Config")
 
@@ -168,3 +191,6 @@ class Config:
             return True
         except (ConfigException, KeyError):
             return False
+
+    def __iter__(self):
+        return self._tree.__iter__()

@@ -13,7 +13,7 @@ from abc import ABC, abstractmethod
 from concurrent.futures import ThreadPoolExecutor
 from enum import Enum
 from os.path import exists
-from typing import Union, Tuple, Optional, TYPE_CHECKING, Type, List, Callable, TypeVar, Dict, Coroutine
+from typing import Union, Tuple, Optional, Type, List, Callable, TypeVar, Dict, Coroutine, TYPE_CHECKING
 
 import cv2
 import discord
@@ -26,15 +26,15 @@ from numpy import ndarray
 
 from accounting_bot import exceptions
 from accounting_bot.config import Config
-from accounting_bot.exceptions import LoggedException, NoPermissionsException, BotOfflineException, ConfigException
+from accounting_bot.exceptions import LoggedException, NoPermissionException, BotOfflineException, ConfigException, \
+    UnhandledCheckException
 
 if TYPE_CHECKING:
-    from bot import BotState
+    from accounting_bot.main_bot import AccountingBot
 
 logger = logging.getLogger("bot.utils")
 CONFIG = None  # type: Config | None
 BOT = None  # type: Bot | None
-STATE = None  # type: BotState | None
 
 discord_users = {}  # type: {str: int}
 ingame_twinks = {}
@@ -50,7 +50,6 @@ executor = ThreadPoolExecutor(max_workers=5)
 loop = asyncio.get_event_loop()
 _T = TypeVar("_T")
 
-help_infos = {}  # type: Dict[Callable, str]
 cmd_annotations = {}  # type: Dict[Callable, List[CmdAnnotation]]
 BOUNTY_ADMINS = []
 
@@ -303,8 +302,7 @@ def image_to_file(img: ndarray, encoding: str, filename: str):
     is_success, im_buf_arr = cv2.imencode(encoding, img)
     if is_success:
         img_byte = io.BytesIO(im_buf_arr)
-        file = discord.File(img_byte, filename)
-        return file
+        return discord.File(img_byte, filename)
     return None
 
 
@@ -380,7 +378,7 @@ def parse_player(string: str, users: [str]) -> (Union[str, None], bool):
     return None, False
 
 
-async def get_or_find_discord_id(bot=None, guild=None, user_role=None, player_name="") \
+async def get_or_find_discord_id(bot: Bot = None, guild: int = None, user_role: int = None, player_name="") \
         -> Tuple[Optional[int], Optional[str], Optional[bool]]:
     if bot is None:
         bot = BOT
@@ -457,96 +455,58 @@ class CmdAnnotation(Enum):
         return rchop(msg, ", ")
 
 
-def help_info(value: str = "", options: Dict[str, str] = None):
-    def _callback(func: Callable):
-        help_infos[func] = value
-        return func
-    return _callback
+def cmd_check(coro: Callable) -> Callable:
+    """
+    Command predicates should be annotated with this, all errors inside the predicate will get handled automatically.
+
+    :param coro:
+    :return:
+    """
+    async def _error_handled(*args, **kwargs):
+        try:
+            return await coro(*args, **kwargs)
+        except Exception as e:
+            if isinstance(e, CheckFailure):
+                raise e
+            raise UnhandledCheckException("Unhandled error during command check") from e
+    return _error_handled
 
 
 def admin_only(admin_type="global") -> Callable[[_T], _T]:
     def decorator(func):
+        @cmd_check
         async def predicate(ctx: ApplicationContext) -> bool:
-            is_admin = ctx.user.id in STATE.admins or ctx.user.id == STATE.owner
+            # noinspection PyTypeChecker
+            bot = ctx.bot  # type: AccountingBot
+            is_admin = bot.is_admin(ctx.user)
             if admin_type == "bounty" and not is_admin:
                 is_admin = ctx.user.id in BOUNTY_ADMINS
             if not is_admin:
                 raise CheckFailure("Can't execute command") \
-                    from NoPermissionsException("Only an administrators may execute this command")
+                    from NoPermissionException("Only an administrators may execute this command")
             return True
         CmdAnnotation.annotate_cmd(func, CmdAnnotation.admin)
         return commands.check(predicate)(func)
     return decorator
 
 
-def user_only() -> Callable[[_T], _T]:
-    def decorator(func):
-        async def predicate(ctx: ApplicationContext) -> bool:
-            is_admin = ctx.user.id in STATE.admins or ctx.user.id == STATE.owner
-            is_user = False
-            if isinstance(ctx.user, Member) and ctx.guild is not None and ctx.guild == STATE.guild:
-                is_user = STATE.user_role is None or ctx.user.get_role(STATE.user_role) is not None
-            else:
-                guild = STATE.bot.get_guild(STATE.guild)
-                if guild is None:
-                    guild = await STATE.bot.fetch_guild(STATE.guild)
-                if guild is None:
-                    raise ConfigException(f"Guild with id {STATE.guild} not found")
-                user = guild.get_member(ctx.user.id)
-                if user is None:
-                    try:
-                        user = await guild.fetch_member(ctx.user.id)
-                    except discord.errors.NotFound:
-                        pass
-                if user is not None and user.get_role(STATE.user_role) is not None:
-                    is_user = True
-            if not is_admin and not is_user:
-                if isinstance(ctx.channel, DMChannel):
-                    location = "DMChannel"
-                else:
-                    c_name = ctx.channel.name if hasattr(ctx.channel, "name") else str(ctx.channel.type)
-                    location = f"channel {ctx.channel.id}:'{c_name}' in guild "
-                    if ctx.guild is None:
-                        location += "N/A"
-                    else:
-                        location += f"{ctx.guild.name}:{ctx.guild.id}"
-                logger.warning("Unauthorized access attempt for command %s by user %s:%s in %s",
-                               get_cmd_name(ctx.command), ctx.user.name, ctx.user.id, location)
-                raise CheckFailure("Can't execute command")\
-                    from NoPermissionsException("Only users with the member role may use this command")
-            return True
-        CmdAnnotation.annotate_cmd(func, CmdAnnotation.user)
-        return commands.check(predicate)(func)
-    return decorator
-
-
 def online_only() -> Callable[[_T], _T]:
-    # noinspection PyUnusedLocal
+    @cmd_check
     async def predicate(ctx: ApplicationContext) -> bool:
-        if not STATE.is_online():
-            raise CheckFailure("Can't execute command") \
-                from BotOfflineException("Can't execute command currently")
+        # noinspection PyTypeChecker
+        bot = ctx.bot  # type: AccountingBot
+        if not bot.is_online():
+            raise CheckFailure() from BotOfflineException("Can't execute the command while the bot is offline")
         return True
     return commands.check(predicate)
 
 
-def main_guild_only() -> Callable[[_T], _T]:
-    def decorator(func):
-        async def predicate(ctx: ApplicationContext) -> bool:
-            if (ctx.guild is None or ctx.guild.id != STATE.guild) and ctx.user.id != STATE.owner:
-                raise CheckFailure() from NoPermissionsException(
-                    "This command can only be executed when the bot is fully online")
-            return True
-        CmdAnnotation.annotate_cmd(func, CmdAnnotation.main_guild)
-        return commands.check(predicate)(func)
-    return decorator
-
-
 def owner_only() -> Callable[[_T], _T]:
     def decorator(func):
+        @cmd_check
         async def predicate(ctx: Context) -> bool:
             if not await ctx.bot.is_owner(ctx.author):
-                raise NotOwner("You do not own this bot.")
+                raise NotOwner("Command may only be used by the owner")
             return True
 
         CmdAnnotation.annotate_cmd(func, CmdAnnotation.owner)
@@ -630,35 +590,6 @@ class Item(object):
         for item in items:
             res += f"{item.name}: {item.amount}\n"
         return res
-
-
-class TransactionBase(ABC):
-    @abstractmethod
-    def has_permissions(self, user_name: int) -> bool:
-        pass
-
-
-# noinspection PyMethodMayBeStatic
-class TransactionLike(TransactionBase, ABC):
-    def get_from(self) -> Optional[str]:
-        return None
-
-    def get_to(self) -> Optional[str]:
-        return None
-
-    @abstractmethod
-    def get_amount(self) -> int:
-        pass
-
-    def get_time(self) -> Optional[datetime.datetime]:
-        return None
-
-    @abstractmethod
-    def get_purpose(self) -> str:
-        pass
-
-    def get_reference(self) -> Optional[str]:
-        return None
 
 
 class OCRBaseData:
@@ -749,7 +680,7 @@ class ShutdownOrderType(Enum):
 
 
 def shutdown_procedure(order: ShutdownOrderType):
-    def decorator(func: Callable):#
+    def decorator(func: Callable):
         ShutdownProcedure(order, func)
     return decorator
 
