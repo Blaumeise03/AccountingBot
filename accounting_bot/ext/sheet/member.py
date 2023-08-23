@@ -25,6 +25,9 @@ class Player:
         self.alts = []  # type: List[str]
         self.authorized_discord_ids = []  # type: List[int]
 
+    def has_permissions(self, discord_id: int):
+        return discord_id == self.discord_id or discord_id in self.authorized_discord_ids
+
 
 class DataChain:
     def __init__(self, parent: Optional["DataChain"] = None) -> None:
@@ -129,3 +132,9 @@ class MembersPlugin(BotPlugin):
         name, perfect = self.parse_player(name)
         player = self.get_user(name)
         return player.name if player else None, name, perfect
+
+    def has_permissions(self, discord_id: int, player_name: str):
+        user = self.get_user(player_name)
+        if user is None:
+            return False
+        return discord_id == user.discord_id or discord_id in user.authorized_discord_ids

@@ -29,6 +29,8 @@ SCOPES = ["https://spreadsheets.google.com/feeds",
 SHEET_LOG_NAME = "Accounting Log"
 SHEET_MARKET_NAME = "Ressourcenbedarf Projekte"
 
+USER_OVERWRITES_FILE = "user_overwrites.json"
+
 lastChanges = datetime.datetime(1970, 1, 1)
 
 MEMBERS_WALLET_INDEX = 2  # The column index of the balance
@@ -68,13 +70,13 @@ class SheetPlugin(BotPlugin):
         self.agcm = gspread_asyncio.AsyncioGspreadClientManager(get_creds)
 
     def on_load(self):
-        if exists("user_overwrites.json"):
-            with open("user_overwrites.json") as json_file:
+        if exists(USER_OVERWRITES_FILE):
+            with open(USER_OVERWRITES_FILE) as json_file:
                 self.name_overwrites = json.load(json_file)
             logger.info("User overwrite config loaded")
         else:
             config = {}
-            with open("user_overwrites.json", "w") as outfile:
+            with open(USER_OVERWRITES_FILE) as outfile:
                 json.dump(config, outfile, indent=4)
                 logger.warning("User overwrite config not found, created new one")
         logger.setLevel(self.config["log_level"])
@@ -86,6 +88,7 @@ class SheetPlugin(BotPlugin):
             members_plugin
             .set_data_source()
             .map_data(functools.partial(load_usernames, plugin=self))
+            .map_data(load_user_overwrites)
             .map_data(functools.partial(load_discord_ids, path=self.member_config["path_discord_ids"]))
         )
 
@@ -213,8 +216,17 @@ async def load_usernames(players: Dict[str, Player], plugin: SheetPlugin) -> Dic
 
 
 def load_discord_ids(players: Dict[str, Player], path: str):
-    with open(path, "r") as file:
-        raw = json.load(file)
+    if exists(path):
+        with open(path, "r") as file:
+            raw = json.load(file)
+    else:
+        raw = {
+            "owners": {},
+            "granted_permissions": {}
+        }
+        with open(path) as outfile:
+            json.dump(raw, outfile, indent=4)
+            logger.warning("Discord id list not found, created new one")
     if "owners" in raw:
         owner_ids = raw["owners"]
     else:
@@ -227,6 +239,21 @@ def load_discord_ids(players: Dict[str, Player], path: str):
         if player.name in owner_ids:
             player.discord_id = owner_ids[player.name]
         if player.name in perms_ids:
-            player.authorized_discord_ids.append(perms_ids[player.name])
+            player.authorized_discord_ids.extend(perms_ids[player.name])
     logger.info("Loaded discord ids")
+    return players
+
+
+def load_user_overwrites(players: Dict[str, Player]):
+    count = 0
+    if exists(USER_OVERWRITES_FILE):
+        with open(USER_OVERWRITES_FILE, "r") as file:
+            raw = json.load(file)
+        for k, v in raw.items():
+            if k in players or v is not None:
+                continue
+            pseudo_user = Player(name=k)
+            players[k] = pseudo_user
+            count += 1
+    logger.info("Loaded %s pseudo-users from overwrites config", count)
     return players

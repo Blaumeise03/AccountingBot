@@ -246,11 +246,12 @@ class AccountingPlugin(BotPlugin):
             return
         has_permissions = user_id in self.admins
         user = await self.bot.get_or_fetch_user(user_id)
+        user_from = self.member_p.get_user(transaction.name_from)
+        user_to = self.member_p.get_user(transaction.name_to)
         if not has_permissions and isinstance(transaction,
                                               Transaction) and transaction.name_from and transaction.name_to:
             # Only transactions between two players can be self-verified
-            owner_id, _, _ = self.member_p.get_discord_id(transaction.name_from)
-            if owner_id and user_id == owner_id:
+            if user_from.has_permissions(user_id):
                 # Check if the balance is sufficient
                 await self.load_wallets()
                 bal = await self.get_balance(transaction.name_from)
