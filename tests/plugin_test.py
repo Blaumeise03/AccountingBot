@@ -1,7 +1,8 @@
 # PluginConfig
-# Name: Test Plugin
+# Name: TestPlugin
 # Author: Blaumeise03
 # Depends-On: []
+# Load-After: []
 # Localization: plugin_test_lang.xml
 # End
 import logging

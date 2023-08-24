@@ -1,6 +1,7 @@
 import functools
 import importlib
 import inspect
+import itertools
 import logging
 import os
 import pkgutil
@@ -10,7 +11,7 @@ from abc import ABC
 from enum import Enum
 from os import PathLike
 from types import ModuleType
-from typing import Dict, Union, List, Optional
+from typing import Dict, Union, List, Optional, Tuple
 
 import discord
 from discord import ApplicationContext, ApplicationCommandError, User, Member
@@ -312,7 +313,7 @@ class BotPlugin(ABC):
 
 class PluginWrapper(object):
     def __init__(self, name: str, module_name: str, author: str = None,
-                 dep_names: Union[List[str], None] = None) -> None:
+                 dep_names: Optional[List[str]] = None, opt_dep_names: Optional[List[str]] = None) -> None:
         super().__init__()
         self.author = author
         self.module_name = module_name
@@ -320,7 +321,9 @@ class PluginWrapper(object):
         self.plugin = None  # type: BotPlugin | None
         self.state = PluginState.UNLOADED
         self.dep_names = [] if dep_names is None else dep_names
+        self.opt_dep_names = [] if opt_dep_names is None else opt_dep_names
         self.dependencies = []  # type: List[PluginWrapper]
+        self.optional_dependencies = []  # type: List[PluginWrapper]
         self.required_by = []
         self.module = None  # type: ModuleType | None
         self.localization_raw = None  # type: Union[PathLike, str, None]
@@ -332,15 +335,19 @@ class PluginWrapper(object):
     def get_dep_names(self, dependencies: str):
         self.dep_names = list(filter(lambda s: len(s) > 0, map(str.strip, dependencies.lstrip("[").rstrip("]").split(","))))
 
-    def find_dependencies(self, plugins: List["PluginWrapper"]) -> List["PluginWrapper"]:
+    def get_opt_dep_names(self, dependencies: str):
+        self.opt_dep_names = list(filter(lambda s: len(s) > 0, map(str.strip, dependencies.lstrip("[").rstrip("]").split(","))))
+
+    def find_dependencies(self, plugins: List["PluginWrapper"]) -> Tuple[List["PluginWrapper"], List["PluginWrapper"]]:
         """
         Finds all the required dependencies if possible.
         Raises a PluginDependencyException if there are missing dependencies.
 
         :param plugins: The list of available plugins
-        :return: The list of required dependencies
+        :return: The list of required and optional dependencies
         """
         res = []
+        opt_res = []
         found = []
         for p in plugins:
             if p.module_name in self.dep_names:
@@ -348,8 +355,10 @@ class PluginWrapper(object):
                 found.append(p.module_name)
                 if self not in p.required_by:
                     p.required_by.append(self)
+            if p.module_name in self.opt_dep_names:
+                opt_res.append(p)
         if len(found) == len(self.dep_names):
-            return res
+            return res, opt_res
         if len(found) > len(self.dep_names):
             raise PluginDependencyException(
                 f"Found more dependencies than required, found {found}, required: {self.dep_names}")
@@ -544,7 +553,7 @@ def find_plugin_order(plugins: List[PluginWrapper]):
         return []
     for plugin in plugins:
         try:
-            plugin.dependencies = plugin.find_dependencies(plugins)
+            plugin.dependencies, plugin.optional_dependencies = plugin.find_dependencies(plugins)
             for dep in plugin.dependencies:
                 if dep.state == PluginState.MISSING_DEPENDENCIES:
                     plugin.state = PluginState.MISSING_DEPENDENCIES
@@ -554,7 +563,7 @@ def find_plugin_order(plugins: List[PluginWrapper]):
                 plugin.state = PluginState.MISSING_DEPENDENCIES
     root = []
     for plugin in plugins:
-        if len(plugin.dependencies) == 0:
+        if len(plugin.dependencies) == 0 == len(plugin.optional_dependencies):
             root.append(plugin)
     if len(root) == 0:
         raise PluginDependencyException("Failed to resolve dependency tree root: no root plugin found")
@@ -562,7 +571,7 @@ def find_plugin_order(plugins: List[PluginWrapper]):
     left = plugins.copy()
 
     def _dep_filter(p: PluginWrapper):
-        for d in p.dependencies:
+        for d in itertools.chain(p.dependencies, p.optional_dependencies):
             if d not in order:
                 return False
         return True
