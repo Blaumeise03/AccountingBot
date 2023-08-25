@@ -203,6 +203,12 @@ class AccountingBot(commands.Bot):
                 return wrapper.plugin
         raise PluginNotFoundException(f"Plugin {name} was not found")
 
+    def has_plugin(self, name: str, require_state=PluginState.LOADED):
+        for wrapper in self.plugins:
+            if wrapper.name == name or wrapper.module_name == name:
+                return wrapper.state >= require_state
+        return False
+
     async def on_application_command_error(self, ctx: ApplicationContext, err: ApplicationCommandError):
         """
         Exception handler for slash commands.

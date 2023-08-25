@@ -15,14 +15,13 @@ from typing import Union, Optional, Type, List, Callable, TypeVar, Dict, Corouti
 
 import cv2
 import discord
-from discord import Interaction, ApplicationContext, InteractionResponded, ActivityType, ApplicationCommand
+from discord import Interaction, ApplicationContext, InteractionResponded, ApplicationCommand
 from discord.ext import commands
-from discord.ext.commands import Bot, Context, Command, CheckFailure, NotOwner
+from discord.ext.commands import Context, Command, CheckFailure, NotOwner
 from discord.ui import View, Modal, Item, Button
 from numpy import ndarray
 
 from accounting_bot import exceptions
-from accounting_bot.config import Config
 from accounting_bot.exceptions import LoggedException, NoPermissionException, BotOfflineException, \
     UnhandledCheckException
 
@@ -30,14 +29,6 @@ if TYPE_CHECKING:
     from accounting_bot.main_bot import AccountingBot
 
 logger = logging.getLogger("bot.utils")
-CONFIG = None  # type: Config | None
-BOT = None  # type: Bot | None
-
-discord_users = {}  # type: {str: int}
-ingame_twinks = {}
-ingame_chars = []
-main_chars = []
-resource_order = []  # type: List[str]
 
 if exists("discord_ids.json"):
     with open("discord_ids.json") as json_file:
@@ -48,18 +39,6 @@ loop = asyncio.get_event_loop()
 _T = TypeVar("_T")
 
 cmd_annotations = {}  # type: Dict[Callable, List[CmdAnnotation]]
-BOUNTY_ADMINS = []
-
-terminate_funcs = []  # type: List[ShutdownProcedure]
-
-
-def setup(state: "BotState"):
-    global STATE, CONFIG, BOT, resource_order, BOUNTY_ADMINS
-    STATE = state
-    CONFIG = STATE.config
-    BOT = STATE.bot
-    resource_order = state.config["project_resources"]
-    BOUNTY_ADMINS = state.config["killmail_parser.admins"]
 
 
 def wrap_async(func: Callable[..., _T]):
@@ -375,7 +354,7 @@ def admin_only(admin_type="global") -> Callable[[_T], _T]:
             bot = ctx.bot  # type: AccountingBot
             is_admin = bot.is_admin(ctx.user)
             if admin_type == "bounty" and not is_admin:
-                is_admin = ctx.user.id in BOUNTY_ADMINS
+                raise NotImplementedError("Bounty system is not yet implemented")
             if not is_admin:
                 raise CheckFailure("Can't execute command") \
                     from NoPermissionException("Only an administrators may execute this command")
@@ -421,80 +400,6 @@ def guild_only() -> Callable:
     return inner
 
 
-class Item(object):
-    def __init__(self, name: str, amount: Union[int, float]):
-        self.name = name
-        self.amount = amount
-
-    @staticmethod
-    def sort_list(items: List[Item], order: List[str]) -> None:
-        for item in items:  # type: Item
-            if item.name not in order:
-                order.append(item.name)
-        items.sort(key=lambda x: order.index(x.name) if x.name in order else math.inf)
-
-    @staticmethod
-    def parse_ingame_list(raw: str) -> List[Item]:
-        items = []  # type: List[Item]
-        for line in raw.split("\n"):
-            if re.fullmatch("[a-zA-Z ]*", line):
-                continue
-            line = re.sub("\t", "    ", line.strip())  # Replace Tabs with spaces
-            line = re.sub("^\\d+ *", "", line.strip())  # Delete first column (numeric Index)
-            if len(re.findall(r"\d+", line.strip())) > 1:
-                line = re.sub(" *[0-9.]+$", "", line.strip())  # Delete last column (Valuation, decimal)
-            item = re.sub(" +\\d+$", "", line)
-            quantity = line.replace(item, "").strip()
-            if len(quantity) == 0:
-                continue
-            item = item.strip()
-            found = False
-            for i in items:
-                if i.name == item:
-                    i.amount += int(quantity)
-                    found = True
-                    break
-            if not found:
-                items.append(Item(item, int(quantity)))
-        Item.sort_list(items, resource_order)
-        return items
-
-    @staticmethod
-    def parse_list(raw: str, skip_negative=False) -> List[Item]:
-        items = []  # type: List[Item]
-        for line in raw.split("\n"):
-            if re.fullmatch("[a-zA-Z ]*", line):
-                continue
-            line = re.sub("\t", "    ", line.strip())  # Replace Tabs with spaces
-            line = re.sub("^\\d+ *", "", line.strip())  # Delete first column (numeric Index)
-            item = re.sub(" +[0-9.]+$", "", line)
-            quantity = line.replace(item, "").strip()
-            if len(quantity) == 0:
-                continue
-            item = item.strip()
-            quantity = float(quantity)
-            if skip_negative and quantity < 0:
-                continue
-            items.append(Item(item, quantity))
-        Item.sort_list(items, resource_order)
-        return items
-
-    @staticmethod
-    def to_string(items):
-        res = ""
-        for item in items:
-            res += f"{item.name}: {item.amount}\n"
-        return res
-
-
-class OCRBaseData:
-    def __init__(self) -> None:
-        super().__init__()
-        self.bounding_box = None  # type: dict[str, int] | None
-        self.img = None  # type: ndarray | None
-        self.valid = False  # type: bool
-
-
 class ErrorHandledModal(Modal):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -529,11 +434,11 @@ class AutoDisableView(ErrorHandledView):
             except discord.errors.HTTPException as e:
                 logger.info("Can't edit view: %s", e)
                 try:
-                    c = await STATE.bot.fetch_channel(self.message.channel.id)
-                    msg = await c.fetch_message(self.message.id)
+                    # Maybe this can be removed or has to be refactored
+                    msg = await self.message.channel.fetch_message(self.message.id)
                     await msg.edit(view=None)
                 except discord.errors.HTTPException as e2:
-                    logger.info("Can't fetch message of view to edit: %s", e2)
+                    logger.error("Can't fetch message of view to edit: %s", e2)
         self.clear_items()
         self.disable_all_items()
 
@@ -574,50 +479,13 @@ class ShutdownOrderType(Enum):
         return o.value == self.value
 
 
-def shutdown_procedure(order: ShutdownOrderType):
-    def decorator(func: Callable):
-        ShutdownProcedure(order, func)
-    return decorator
 
 
-class ShutdownProcedure(object):
-    def __init__(self, order: ShutdownOrderType, callback: Callable):
-        self.order = order
-        self.callable = callback
-        terminate_funcs.append(self)
-
-    @staticmethod
-    async def execute_phase(phase: ShutdownOrderType):
-        for procedure in filter(lambda s: s.order == phase, terminate_funcs):
-            try:
-                if asyncio.iscoroutinefunction(procedure.callable):
-                    await procedure.callable()
-                else:
-                    procedure.callable()
-            except Exception as error:
-                log_error(logger, error, location="shutdown")
 
 
-@shutdown_procedure(order=ShutdownOrderType.user_input)
+
+
 def shutdown_executor():
     logger.warning("Stopping data_utils executor")
     executor.shutdown(wait=True)
 
-
-async def terminate_bot():
-    logger.critical("Terminating bot")
-    STATE.state = State.terminated
-    activity = discord.Activity(name="Shutting down...", type=ActivityType.custom)
-    if BOT is not None:
-        await BOT.change_presence(status=discord.Status.idle, activity=activity)
-    await ShutdownProcedure.execute_phase(ShutdownOrderType.user_input)
-    # Wait for all pending interactions to complete
-    logger.warning("Waiting for interactions to complete")
-    await asyncio.sleep(15)
-    await ShutdownProcedure.execute_phase(ShutdownOrderType.database)
-    await ShutdownProcedure.execute_phase(ShutdownOrderType.final)
-    await asyncio.sleep(10)
-    # Closing the connection should end the event loop directly, causing the program to exit
-    # Should this not happen within 10 seconds, the program will be terminated anyways
-    logger.error("Force closing process")
-    exit(1)

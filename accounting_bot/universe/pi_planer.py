@@ -1,3 +1,9 @@
+# PluginConfig
+# Name: PiPlanerPlugin
+# Author: Blaumeise03
+# Depends-On: [accounting_bot.universe.data_utils]
+# Load-After: [accounting_bot.ext.projects]
+# End
 import base64
 import difflib
 import itertools
@@ -11,8 +17,9 @@ import discord
 from discord import User, Embed, Color, ApplicationContext, Message, InputTextStyle
 from discord.ui import InputText, Button
 
-from accounting_bot import sheet, utils
+from accounting_bot import utils
 from accounting_bot.exceptions import PlanetaryProductionException, PiPlanerException
+from accounting_bot.main_bot import BotPlugin, AccountingBot, PluginWrapper
 from accounting_bot.universe import data_utils
 from accounting_bot.universe.models import PiPlanSettings, PiPlanResource
 from accounting_bot.utils import ErrorHandledModal, AutoDisableView, Item, ConfirmView
@@ -24,18 +31,29 @@ pending_resources = {}  # type: Dict[str, float]
 last_reload = datetime(1907, 1, 1)
 pi_resources = []
 pi_ids = {}  # type: Dict[str, int]
-help_embed = None  # type: Embed | None
+STATE = None
 autoarray_help_a = "N/A"
 autoarray_help_b = "N/A"
 
 
-async def reload_pending_resources():
+class PiPlanerPlugin(BotPlugin):
+    def __init__(self, bot: AccountingBot, wrapper: PluginWrapper) -> None:
+        super().__init__(bot, wrapper, logger)
+
+    def on_load(self):
+        super().on_load()
+
+    def get_session(self, user: User):
+        return PiPlanningSession(self, user)
+
+
+async def reload_pending_resources(project):
     global pending_resources, pi_resources, last_reload, pi_ids
     difference = datetime.now() - last_reload
     if difference < timedelta(minutes=15):
         return
     logger.info("Reloading pending resources")
-    items = await sheet.load_pending_resources()
+    items = await project.load_pending_resources()
     pending_resources = items
     res = await data_utils.get_items_by_type("pi")
     pi_resources = list(map(lambda i: i.name, res))
@@ -172,7 +190,7 @@ class Array:
         msg = (f"Zeitraum           Einnahmen\n"
                f"Pro Tag   {income_sum * 24:14,.0f} ISK\n"
                f"Pro Woche {income_sum * 24 * 7:14,.0f} ISK\n"
-               f"Pro Monat {income_sum * 24 * 7 * 30:14,.0f} ISK")
+               f"Pro Monat {income_sum * 24 * 30:14,.0f} ISK")
         return msg
 
 
@@ -463,7 +481,7 @@ class PiPlaner:
             if p_type >= 1000000:
                 # Fuels have IDs with 420020000xx
                 p_type -= 1000000
-            if p_type > 31:
+            if p_type > 32:
                 raise PiPlanerException(f"Resource id {p_type} is to high")
             data += to_bits(p_type, 5)
         data_bytes = bytes(to_bytes(iter(data)))
@@ -502,7 +520,8 @@ class PiPlaner:
 
 
 class PiPlanningSession:
-    def __init__(self, user: User) -> None:
+    def __init__(self, plugin: PiPlanerPlugin, user: User) -> None:
+        self.plugin = plugin
         self.user_id = user.id
         self.user = user
         self.plans = []  # type: List[PiPlaner]
@@ -611,6 +630,10 @@ class PiPlanningSession:
         self.plans.remove(plan)
         self._deleted.append(plan)
         self.set_active(None)
+        if len(self.plans) == 0:
+            p = self.create_new_plan()
+            p.user_id = plan.user_id
+            p.user_name = plan.user_name
 
 
 # noinspection PyUnusedLocal
@@ -623,7 +646,7 @@ class PiPlanningView(AutoDisableView):
     @discord.ui.button(emoji="✖️", style=discord.ButtonStyle.red, row=0)
     async def btn_close(self, button: Button, ctx: ApplicationContext):
         await self.message.delete()
-        await ctx.response.send_message(f"Um die Änderungen zu speichern, klicke auf 💾", ephemeral=True)
+        await ctx.response.send_message("Um die Änderungen zu speichern, klicke auf 💾", ephemeral=True)
 
     @discord.ui.button(emoji="💾", style=discord.ButtonStyle.green, row=0)
     async def btn_save(self, button: Button, ctx: ApplicationContext):
@@ -645,13 +668,12 @@ class PiPlanningView(AutoDisableView):
 
     @discord.ui.button(emoji="❓", style=discord.ButtonStyle.grey, row=0)
     async def btn_help(self, button: Button, ctx: ApplicationContext):
-        await ctx.response.send_message(embed=help_embed, ephemeral=True)
+        await ctx.response.send_message(embed=STATE.bot.embeds["PiPlanerHelp"], ephemeral=True)
 
     @discord.ui.button(emoji="🗑️", style=discord.ButtonStyle.red, row=1)
     async def btn_delete(self, button: Button, ctx: ApplicationContext):
         async def _delete(_ctx: ApplicationContext):
-            self.session.delete_plan(self.plan)
-            self.plan = None
+            self.session.delete_plan(self.session.get_active_plan())
             self.session.isEditing = False
             await _ctx.response.send_message("Plan gelöscht", ephemeral=True)
             await self.session.refresh_msg()

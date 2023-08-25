@@ -10,8 +10,9 @@ from sqlalchemy import create_engine, update, between, select, delete, or_
 from sqlalchemy.orm import Session, joinedload, contains_eager
 
 from accounting_bot import utils
-from accounting_bot.config import Config, ConfigTree
+from accounting_bot.config import Config
 from accounting_bot.exceptions import PlanetaryProductionException, KillmailException, DatabaseException
+from accounting_bot.ext.sheet.member import MembersPlugin
 from accounting_bot.universe import models
 from accounting_bot.universe.models import *
 
@@ -71,7 +72,7 @@ class UniverseDatabase:
         MarketPrice.__table__.create(bind=self.engine, checkfirst=True)
         Killmail.__table__.create(bind=self.engine, checkfirst=True)
         Bounty.__table__.create(bind=self.engine, checkfirst=True)
-        logger.info("Setup completed")
+        logger.info("Database setup completed")
 
     def save_market_data(self, items: Dict[str, Dict[str, Any]]) -> None:
         with Session(self.engine) as conn:
@@ -444,8 +445,6 @@ class UniverseDatabase:
                             found_arrays.append(array)
                             arrays.append(res)
                             break
-                        if found is not None:
-                            break
                 if found is not None:
                     break
             for array in pi_plan.arrays:
@@ -615,7 +614,7 @@ class UniverseDatabase:
             )
             conn.execute(stmt)
 
-    def verify_bounties(self, kill_id_start: int, kill_id_end: int, time: datetime = None):
+    def verify_bounties(self, plugin: MembersPlugin, kill_id_start: int, kill_id_end: int, time: datetime = None):
         warnings = []
         with Session(self.engine) as conn:
             killmails = conn.query(Killmail).filter(Killmail.id >= kill_id_start, Killmail.id <= kill_id_end).all()
@@ -631,7 +630,7 @@ class UniverseDatabase:
                     if found_main:
                         break
                 if not found_main:
-                    player, char, _ = utils.get_main_account(name=killmail.final_blow)
+                    player, _, _ = plugin.get_main_name(name=killmail.final_blow)
                     if player is not None:
                         bounty = Bounty(
                             kill_id=killmail.id,
@@ -754,17 +753,16 @@ class DatabaseInitializer(UniverseDatabase):
         pool.starmap(self.init_db_from_csv, args)
         logger.info("Threadpool finished, database initialized")
 
-    def auto_init_item_types(self, types: Dict[str, Tuple[int, int]]):
+    def auto_init_item_types(self, item_types: Dict[str, Tuple[int, int]]):
         with self.engine.begin() as conn:
             logger.info("Initializing item types for database")
-            for k, v in types.items():
+            for k, v in item_types.items():
                 logger.info("Updating item type for [%s, %s] to '%s'", v[0], v[1], k)
                 stmt = (update(Item)
                         .where(between(Item.id, v[0], v[1]))
                         .values(type=k)
                         )
-                result = conn.execute(stmt)
-                pass
+                conn.execute(stmt)
             logger.info("Item types updated")
 
     def auto_init_stargates(self, file_path: str):
@@ -799,7 +797,6 @@ class DatabaseInitializer(UniverseDatabase):
                     )  # type: Celestial | None
                     system_b = gate_b.system  # type: System
                     system_a.stargates.append(system_b)
-                    pass
                 conn.commit()
             logger.info("Stargates loaded")
 
@@ -827,8 +824,6 @@ class DatabaseInitializer(UniverseDatabase):
             logger.info("Fixing systems")
             file_length = get_file_len(path)
             with open(path, "r") as file:
-                # all_systems = conn.query(System).all()
-                checked = []
                 line_i = 0
                 for line in file:
                     line_i += 1
@@ -897,8 +892,9 @@ if __name__ == '__main__':
     path = input("Enter path to config: ")
     if path.strip() == "":
         path = "../../config.json"
-    config = Config(path, ConfigTree(config_structure))
-    config.load_config()
+    config = Config()
+    config.load_tree(config_structure)
+    config.load_config(path)
     db = DatabaseInitializer(
         username=config["db.user"],
         password=config["db.password"],
