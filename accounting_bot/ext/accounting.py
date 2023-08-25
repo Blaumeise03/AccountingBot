@@ -2,6 +2,7 @@
 # Name: AccountingPlugin
 # Author: Blaumeise03
 # Depends-On: [accounting_bot.ext.embeds, accounting_bot.ext.sheet.sheet_main]
+# Localization: accounting_lang.xml
 # End
 import asyncio
 import logging

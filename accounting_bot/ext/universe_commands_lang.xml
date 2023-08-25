@@ -1,0 +1,67 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<translations>
+    <help_pi_stats>
+        <en>View statistical data for pi in a selected constellation</en>
+        <de>Zeigt eine Statistik der pi einer Konstellation</de>
+    </help_pi_stats>
+    <help_pi_stats_long>
+        <en>Creates a boxplot about the efficiency of all pi planets of the constellation. The planets get compared to the best planet in New Eden or to the best planet in the selected regions.</en>
+        <de>Erzeugt einen Boxplot über die Effizienz alle pi Planeten der Konstellation. Die Planeten werden mit dem besten Planeten in New Eden, oder in den ausgewählten Regionen, verglichen.</de>
+    </help_pi_stats_long>
+    <help_pi_stats_const>
+        <en>The targeted constellation</en>
+        <de>Die gewünschte Konstellation</de>
+    </help_pi_stats_const>
+    <help_pi_stats_compare_regions>
+        <en>The regions to compare the constellation against</en>
+        <de>Die Regionen, gegen die die Konstellation verglichen werden soll</de>
+    </help_pi_stats_compare_regions>
+    <help_pi_stats_compare_regions_long>
+        <en>The regions to compare the constellation against, the efficiency of the planets will be calculated in percent compared to the best Planet in these Regions. If no regions specified, the best planet in New Eden will be used.</en>
+        <de>Die Regionen, gegen die die Konstellation verglichen werden soll. Die Effizienz der Planeten wird als Prozent im Vergleich zum besten Planeten in diesen Regionen berechnet. Wenn keine Regionen ausgewählt werden, wird der beste Planet in New Eden verwendet.</de>
+    </help_pi_stats_compare_regions_long>
+    <help_pi_stats_vertical>
+        <en>If set to true, the boxplot will be vertical instead</en>
+        <de>Wenn auf true gesetzt, wird ein vertikaler Boxplot erzeugt</de>
+    </help_pi_stats_vertical>
+    <help_pi_find>
+        <en>Returns a list with the best planets for selected pi</en>
+        <de>Liefert eine Liste mit dem besten Planeten für ausgewählte pi</de>
+    </help_pi_find>
+    <help_pi_find_long>
+        <en>
+            Searches the best planets for the given resource. There are two modi:
+*Constellation*-wise: If a constellation is given for `const_sys`, the planets will be searched within this constellation.
+*System + distance*-wise: If a system is given (and an additional `distance`), the planets will be searched within the range of this system.
+        </en>
+        <de>
+            Sucht die besten Planeten für eine angegebene Ressource. Es gibt zwei Suchmodi:
+Nach *Konstellation*: Wenn für `const_sys` eine Konstellation angegeben wurde, werden Planeten innerhalb dieser Konstellation gesucht.
+Nach *System + Distanz*: Wenn stattdessen ein System für `const_sys` angegeben wurde, werden Planeten innerhalb von `distance` Jumps zu diesem System gesucht.
+        </de>
+    </help_pi_find_long>
+    <help_pi_find_const_sys>
+        <en>The constellation or origin system</en>
+        <de>Die Konstellation oder das Ausgangssystem</de>
+    </help_pi_find_const_sys>
+    <help_pi_find_resource>
+        <en>The targeted resource</en>
+        <de>Die gesuchte Ressource</de>
+    </help_pi_find_resource>
+    <help_pi_find_distance>
+        <en>The distance from the origin system</en>
+        <de>Die Distanz zum Ausgangssystem</de>
+    </help_pi_find_distance>
+    <help_pi_find_amount>
+        <en>The Number of planets to return</en>
+        <de>Die Anzahl der zu suchenden Planeten</de>
+    </help_pi_find_amount>
+    <help_pi_planer>
+        <en>Opens the pi planer to manage your planets</en>
+        <de>Öffnet deinen Pi-Planer um deine Planeten zu verwalten</de>
+    </help_pi_planer>
+    <help_pi_planer_long>
+        <en>Opens the pi planer via direct message. It can be used to plan the pi production, for more information open the planer and press ❓.</en>
+        <de>Öffnet den Pi-Planer per Direktnachricht. Mit ihm kann die Pi-Produktion geplant sein, für weitere Informationen öffne den Pi-Planer und klicke auf ❓.</de>
+    </help_pi_planer_long>
+</translations>

@@ -2,6 +2,7 @@
 # Name: UniversePlugin
 # Author: Blaumeise03
 # Depends-On: [accounting_bot.universe.pi_planer]
+# Localization: universe_commands_lang.xml
 # End
 import io
 import logging
