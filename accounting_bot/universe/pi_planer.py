@@ -150,7 +150,11 @@ class Array:
                     case "d":
                         msg += f"{array.base_output * array.amount * 24:7,.0f}"
                     case "i":
-                        msg += f"{array.base_output * array.amount * 24 * get_price(array.resource, price_types):9,.0f}"
+                        price = get_price(array.resource, price_types)
+                        if price is not None:
+                            msg += f"{array.base_output * array.amount * 24 * price:9,.0f}"
+                        else:
+                            msg += "    ???  "
                     case _:
                         msg += m
             msg += "\n"
@@ -168,11 +172,15 @@ class Array:
         if income_sum is None:
             income_sum = 0
             for array in arrays:
-                income_sum += array.base_output * array.amount * get_price(array.resource, price_types)
+                price = get_price(array.resource, price_types)
+                if price is not None:
+                    income_sum += array.base_output * array.amount * price
+                else:
+                    income_sum += 0
         msg = (f"Zeitraum           Einnahmen\n"
                f"Pro Tag   {income_sum * 24:14,.0f} ISK\n"
                f"Pro Woche {income_sum * 24 * 7:14,.0f} ISK\n"
-               f"Pro Monat {income_sum * 24 * 7 * 30:14,.0f} ISK")
+               f"Pro Monat {income_sum * 24 * 30:14,.0f} ISK")
         return msg
 
 
@@ -264,6 +272,8 @@ class PiPlaner:
         best_price = None
         for res_name in item_prices.keys():
             price = get_price(res_name, self.preferred_prices)
+            if price is None:
+                price = 0
             for p in all_planets:
                 if p["res"] == res_name:
                     found = False
@@ -650,8 +660,7 @@ class PiPlanningView(AutoDisableView):
     @discord.ui.button(emoji="🗑️", style=discord.ButtonStyle.red, row=1)
     async def btn_delete(self, button: Button, ctx: ApplicationContext):
         async def _delete(_ctx: ApplicationContext):
-            self.session.delete_plan(self.plan)
-            self.plan = None
+            self.session.delete_plan(self.session.get_active_plan())
             self.session.isEditing = False
             await _ctx.response.send_message("Plan gelöscht", ephemeral=True)
             await self.session.refresh_msg()
