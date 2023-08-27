@@ -105,12 +105,13 @@ class MembersPlugin(BotPlugin):
         """
         Returns the discord id, username and true if the name was matched perfectly (else false)
 
+        :param only_id:
         :param player_name:
         :return: The discord id, username and a boolean
         """
         player_name, perfect = self.parse_player(player_name)
         player = self.get_user(player_name)
-        if only_id:
+        if not only_id:
             return player.discord_id if player else None, player.name, perfect
         else:
             return player.discord_id if player else None
