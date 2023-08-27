@@ -14,10 +14,10 @@ from types import ModuleType
 from typing import Dict, Union, List, Optional, Tuple
 
 import discord
-from discord import ApplicationContext, ApplicationCommandError, User, Member
+from discord import ApplicationContext, ApplicationCommandError, User, Member, Embed, Color, option
 from discord.ext import commands
 
-from accounting_bot import utils, localization, exceptions
+from accounting_bot import utils, exceptions
 from accounting_bot.config import Config
 from accounting_bot.exceptions import PluginLoadException, PluginNotFoundException, PluginDependencyException, \
     InputException
@@ -74,6 +74,9 @@ class AccountingBot(commands.Bot):
         self.localization = LocalizationHandler()
         self.config_path = config_path
         self.admins = []  # type: List[int]
+        # It is correct, trust me ;-)
+        # noinspection PyTypeChecker
+        self.add_application_command(cmd_status)
 
         def _get_locale(ctx: commands.Context):
             if isinstance(ctx, ApplicationContext) and ctx.locale is not None:
@@ -203,6 +206,13 @@ class AccountingBot(commands.Bot):
                 return wrapper.plugin
         raise PluginNotFoundException(f"Plugin {name} was not found")
 
+    def get_plugins(self, require_state: Optional[PluginState] = None, exact=True) -> List["PluginWrapper"]:
+        res = []
+        for wrapper in self.plugins:
+            if require_state is None or (wrapper.state == require_state) or not exact and (wrapper.state > require_state):
+                res.append(wrapper)
+        return res
+
     def has_plugin(self, name: str, require_state=PluginState.LOADED):
         for wrapper in self.plugins:
             if wrapper.name == name or wrapper.module_name == name:
@@ -249,6 +259,14 @@ class AccountingBot(commands.Bot):
         logger.info("Bot has logged in")
         await self.enable_plugins()
         self.state = State.online
+
+
+@commands.slash_command(name="status")
+@option(name="silent", description="Execute the command silently", type=bool, required=False, default=True)
+async def cmd_status(ctx: ApplicationContext, silent: bool):
+    await ctx.response.defer(ephemeral=silent)
+    embed = await build_status_embed(ctx.bot)
+    await ctx.followup.send(embed=embed)
 
 
 class BotPlugin(ABC):
@@ -587,3 +605,41 @@ def find_plugin_order(plugins: List[PluginWrapper]):
         left.remove(n)
         order.append(n)
     return order
+
+
+async def build_status_embed(bot: AccountingBot) -> Embed:
+    owner = None
+    if bot.owner_id is not None:
+        o = bot.get_user(bot.owner_id)
+        if o is None:
+            try:
+                o = await bot.fetch_user(bot.owner_id)
+            except discord.NotFound:
+                pass
+        if o is not None:
+            owner = o.name
+    desc = f"Status: `{bot.state.name}`\nShard-ID: `{bot.shard_id}`\nShards: `{bot.shard_count}`\nPing: `{bot.latency:.3f} sec`\n" \
+           f"Owner: `{owner}`"
+    embed = Embed(title="Bot Status", colour=Color.gold(), description=desc)
+    embed.add_field(
+        name="Plugins", inline=False,
+        value=f"```\n"
+              f"All: {len(bot.get_plugins())}\n"
+              f"Missing Dep: {len(bot.get_plugins(PluginState.MISSING_DEPENDENCIES))}\n"
+              f"Crashed: {len(bot.get_plugins(PluginState.CRASHED))}\n"
+              f"Unloaded: {len(bot.get_plugins(PluginState.UNLOADED))}\n"
+              f"Loaded: {len(bot.get_plugins(PluginState.LOADED))}\n"
+              f"Enabled: {len(bot.get_plugins(PluginState.ENABLED))}\n```"
+    )
+    desc = ""
+    for plugin in sorted(map(lambda w: w.name, bot.get_plugins(PluginState.ENABLED))):
+        desc += plugin + ", "
+    desc = desc.rstrip(", ")
+    if len(desc) == 0:
+        desc = "N/A"
+    embed.add_field(
+        name="Enabled Plugins", inline=False,
+        value=f"```\n{desc}\n```"
+    )
+    embed.set_thumbnail(url=str(bot.user.display_avatar.url))
+    return embed
