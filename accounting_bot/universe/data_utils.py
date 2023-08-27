@@ -14,7 +14,7 @@ import numpy as np
 import plotly.graph_objects as go
 from discord import Embed
 
-from accounting_bot import utils
+from accounting_bot.config import Config
 from accounting_bot.exceptions import InputException
 from accounting_bot.ext.members import MembersPlugin
 from accounting_bot.main_bot import BotPlugin, AccountingBot, PluginWrapper
@@ -736,27 +736,25 @@ def extract_value(embed: Embed, field_name: str, field_regex: str):
     return m.group(1)
 
 
-# noinspection PyUnreachableCode
 @wrap_async
-def save_killmail(embed: Embed):
-    raise NotImplementedError("WIP, currently not supported")
-    # Todo: Fix & move bounty system
-    if killmail_config["field_id"] == "":
+def save_killmail(embed: Embed, member_plugin: MembersPlugin):
+    config = data_plugin.killmail_config
+    if config["field_id"] == "":
         return 0
     kill_data = {}
     for key in ["id", "final_blow", "ship", "kill_value", "system"]:
-        kill_data[key] = extract_value(embed, killmail_config[f"field_{key}"], killmail_config[f"regex_{key}"])
+        kill_data[key] = extract_value(embed, config[f"field_{key}"], config[f"regex_{key}"])
     if None in kill_data.values():
         logger.warning("Embed with title '%s' doesn't contains a valid killmail: %s", embed.title, kill_data)
         return 0
-    db.save_killmail(kill_data)
+    data_plugin.db.save_killmail(kill_data)
     m = re.fullmatch(r"\[[a-zA-Z0-9]+] (.*)", kill_data["final_blow"])
     if len(m.groups()) == 0:
         return 1
-    player, char, _ = utils.get_main_account(name=m.group(1))
+    player, _, _ = member_plugin.find_main_name(name=m.group(1))
     if player is None:
         return 1
-    db.save_bounty(int(kill_data["id"]), player, "M")
+    data_plugin.db.save_bounty(int(kill_data["id"]), player, "M")
     return 2
 
 
@@ -767,12 +765,9 @@ def get_kill_id(embed: Embed):
     return int(kill_id)
 
 
-# noinspection PyUnreachableCode
 @wrap_async
 def add_bounty(kill_id: int, player: str, bounty_type: str):
-    raise NotImplementedError("WIP, currently not supported")
-    utils.get_main_account(name=player)
-    db.save_bounty(kill_id, player, bounty_type)
+    data_plugin.db.save_bounty(kill_id, player, bounty_type)
 
 
 @wrap_async
