@@ -99,7 +99,9 @@ class MembersPlugin(BotPlugin):
             return str(names[0]), False
         return None, False
 
-    def get_discord_id(self, player_name: str) -> Tuple[Optional[int], Optional[str], bool]:
+    def get_discord_id(self, player_name: str, only_id=False) -> Union[
+        Tuple[Optional[int], Optional[str], bool], int
+    ]:
         """
         Returns the discord id, username and true if the name was matched perfectly (else false)
 
@@ -108,7 +110,10 @@ class MembersPlugin(BotPlugin):
         """
         player_name, perfect = self.parse_player(player_name)
         player = self.get_user(player_name)
-        return player.discord_id if player else None, player.name, perfect
+        if only_id:
+            return player.discord_id if player else None, player.name, perfect
+        else:
+            return player.discord_id if player else None
 
     def find_main_name(self, name: str = None, discord_id: int = None) -> Tuple[Optional[str], Optional[str], bool]:
         """

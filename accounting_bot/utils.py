@@ -18,7 +18,7 @@ import discord
 from discord import Interaction, ApplicationContext, InteractionResponded, ApplicationCommand
 from discord.ext import commands
 from discord.ext.commands import Context, Command, CheckFailure, NotOwner
-from discord.ui import View, Modal, Item, Button
+from discord.ui import View, Modal, Button
 from numpy import ndarray
 
 from accounting_bot import exceptions
@@ -410,7 +410,7 @@ class ErrorHandledModal(Modal):
 
 
 class ErrorHandledView(View):
-    def __init__(self, *items: Item,
+    def __init__(self, *items: discord.ui.Item,
                  timeout: Optional[float] = 300.0):
         super().__init__(*items, timeout=timeout)
 
@@ -468,24 +468,6 @@ class State(Enum):
     online = 4
 
 
-class ShutdownOrderType(Enum):
-    user_input = 0
-    database = 1
-    final = 2
-
-    def __eq__(self, o: object) -> bool:
-        if not isinstance(o, ShutdownOrderType):
-            return False
-        return o.value == self.value
-
-
-
-
-
-
-
-
 def shutdown_executor():
     logger.warning("Stopping data_utils executor")
     executor.shutdown(wait=True)
-

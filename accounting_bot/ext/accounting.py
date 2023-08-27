@@ -1,7 +1,7 @@
 # PluginConfig
 # Name: AccountingPlugin
 # Author: Blaumeise03
-# Depends-On: [accounting_bot.ext.embeds, accounting_bot.ext.sheet.sheet_main]
+# Depends-On: [accounting_bot.ext.embeds, accounting_bot.ext.members, accounting_bot.ext.sheet.sheet_main]
 # Localization: accounting_lang.xml
 # End
 import asyncio
@@ -29,7 +29,7 @@ from accounting_bot import utils
 from accounting_bot.exceptions import BotOfflineException, AccountingException, ConfigException, NoPermissionException
 from accounting_bot.ext.accounting_db import AccountingDB
 from accounting_bot.ext.sheet import sheet_main
-from accounting_bot.ext.sheet.member import MembersPlugin
+from accounting_bot.ext.members import MembersPlugin
 from accounting_bot.ext.sheet.sheet_main import SheetPlugin
 from accounting_bot.main_bot import BotPlugin, PluginWrapper, AccountingBot
 from accounting_bot.utils import AutoDisableView, ErrorHandledModal, parse_number, admin_only, \

@@ -21,8 +21,9 @@ from accounting_bot import utils
 from accounting_bot.exceptions import PlanetaryProductionException, PiPlanerException
 from accounting_bot.main_bot import BotPlugin, AccountingBot, PluginWrapper
 from accounting_bot.universe import data_utils
+from accounting_bot.universe.data_utils import Item
 from accounting_bot.universe.models import PiPlanSettings, PiPlanResource
-from accounting_bot.utils import ErrorHandledModal, AutoDisableView, Item, ConfirmView
+from accounting_bot.utils import ErrorHandledModal, AutoDisableView, ConfirmView
 
 logger = logging.getLogger("data.pi")
 item_prices = {}  # type: Dict[str,Dict[str, Union[int, float]]]

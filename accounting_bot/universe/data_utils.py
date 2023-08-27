@@ -16,7 +16,7 @@ from discord import Embed
 
 from accounting_bot import utils
 from accounting_bot.exceptions import InputException
-from accounting_bot.ext.sheet.member import MembersPlugin
+from accounting_bot.ext.members import MembersPlugin
 from accounting_bot.main_bot import BotPlugin, AccountingBot, PluginWrapper
 from accounting_bot.universe.models import System, Celestial
 from accounting_bot.universe.universe_database import UniverseDatabase

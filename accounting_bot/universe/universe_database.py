@@ -12,7 +12,7 @@ from sqlalchemy.orm import Session, joinedload, contains_eager
 from accounting_bot import utils
 from accounting_bot.config import Config
 from accounting_bot.exceptions import PlanetaryProductionException, KillmailException, DatabaseException
-from accounting_bot.ext.sheet.member import MembersPlugin
+from accounting_bot.ext.members import MembersPlugin
 from accounting_bot.universe import models
 from accounting_bot.universe.models import *
 
