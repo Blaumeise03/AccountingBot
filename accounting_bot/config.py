@@ -38,7 +38,7 @@ class Config:
             raise ConfigException(f"Can't insert subconfig for key {path}, as this path already has a value")
         if len(split) > 1:
             # noinspection PyProtectedMember
-            self._tree[key].create_sub_config(split[1])
+            return self._tree[key].create_sub_config(split[1])
         else:
             return self._tree[key]
 
@@ -73,8 +73,8 @@ class Config:
                     raise ConfigException(f"Expected tuple with length two for key {key}, got length {len(value)}")
                 if type(value[0]) != type:
                     raise ConfigException(f"Expected type for first entry of tuple for key {key}, got {type(value[0])}")
-                if not isinstance(value[1], value[0]):
-                    raise ConfigException(f"Expected default value for second entry of tuple for key {key}, got {type(value[1])}")
+                if value[1] is not None and not isinstance(value[1], value[0]):
+                    raise ConfigException(f"Expected default value of type {value[0]} for second entry of tuple for key {key}, got {type(value[1])}")
                 if key in config._tree:
                     if config._tree[key].unused:
                         config._tree[key].data_type = value[0]
