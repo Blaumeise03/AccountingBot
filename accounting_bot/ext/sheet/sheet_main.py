@@ -1,7 +1,7 @@
 # PluginConfig
 # Name: SheetMain
 # Author: Blaumeise03
-# Depends-On: [accounting_bot.ext.sheet.member]
+# Depends-On: [accounting_bot.ext.members]
 # End
 import datetime
 import functools
@@ -16,7 +16,7 @@ from google.oauth2.service_account import Credentials
 from gspread.utils import ValueRenderOption
 
 from accounting_bot.exceptions import GoogleSheetException
-from accounting_bot.ext.sheet.member import Player, MembersPlugin
+from accounting_bot.ext.members import Player, MembersPlugin
 from accounting_bot.main_bot import BotPlugin, AccountingBot, PluginWrapper
 
 logger = logging.getLogger("bot.sheet")
@@ -67,6 +67,7 @@ class SheetPlugin(BotPlugin):
         self.member_config = self.config.create_sub_config("members")
         self.member_config.load_tree(CONFIG_TREE_MEMBERS)
         self.sheet_id = None
+        self.sheet_name = None
         self.agcm = gspread_asyncio.AsyncioGspreadClientManager(get_creds)
 
     def on_load(self):
@@ -97,7 +98,10 @@ class SheetPlugin(BotPlugin):
 
     async def get_sheet(self):
         agc = await self.agcm.authorize()
-        return await agc.open_by_key(self.sheet_id)
+        sheet = await agc.open_by_key(self.sheet_id)
+        if self.sheet_name is None:
+            self.sheet_name = sheet.get_title()
+        return sheet
 
     def check_name_overwrites(self, name: str) -> str:
         """

@@ -1,7 +1,12 @@
+# PluginConfig
+# Name: ProjectPlugin
+# Author: Blaumeise03
+# Depends-On: [accounting_bot.ext.members, accounting_bot.ext.sheet.sheet_main]
+# End
+import asyncio
+import functools
 import logging
-from enum import Enum
-from typing import Dict, List, Tuple
-from typing import TYPE_CHECKING
+from typing import Dict, List, Tuple, Callable
 
 import discord
 import pytz
@@ -11,49 +16,103 @@ from discord.ext.commands import cooldown
 from discord.ui import InputText
 from gspread import Cell
 
-from accounting_bot import sheet, utils
-from accounting_bot.extensions import project_utils
+from accounting_bot import utils
 from accounting_bot.exceptions import GoogleSheetException, BotOfflineException
-from accounting_bot.extensions.project_utils import format_list
-from accounting_bot.utils import string_to_file, list_to_string, AutoDisableView, ErrorHandledModal, Item, admin_only, online_only, \
-    user_only
-
-if TYPE_CHECKING:
-    from bot import BotState, AccountingBot
+from accounting_bot.ext.accounting import user_only
+from accounting_bot.ext.members import MembersPlugin
+from accounting_bot.ext.sheet.projects import project_utils, _project_tools
+from accounting_bot.ext.sheet import sheet_main
+from accounting_bot.ext.sheet.projects.project_utils import format_list, Project
+from accounting_bot.ext.sheet.sheet_main import SheetPlugin
+from accounting_bot.main_bot import BotPlugin, AccountingBot, PluginWrapper
+from accounting_bot.universe.data_utils import Item
+from accounting_bot.utils import string_to_file, list_to_string, AutoDisableView, ErrorHandledModal, admin_only, \
+    online_only
 
 logger = logging.getLogger("bot.projects")
-logger.setLevel(logging.DEBUG)
-ADMINS = []
-OWNER = -1
-GUILD = -1
-USER_ROLE = -1
-BOT = None  # type: commands.Bot | None
-STATE = None  # type: BotState | None
+# logger.setLevel(logging.DEBUG)
+CONFIG_TREE = {
+    "sheet_overview_name": (str, "Ressourcenbedarf Projekte"),
+    "sheet_overflow_name": (str, "Projektüberlauf"),
+    "overview_area": (str, "A:B"),
+    "overview_item_index": (int, 0),
+    "overview_quantity_index": (int, 1)
+}
 
 
-def setup(bot: "AccountingBot"):
-    global STATE, BOT
-    STATE = bot.state
-    BOT = bot
-    config = STATE.config
-    bot.add_cog(ProjectCommands(bot, config["admins"], config["owner"], config["server"], config["user_role"]))
+class ProjectPlugin(BotPlugin):
+    def __init__(self, bot: AccountingBot, wrapper: PluginWrapper) -> None:
+        super().__init__(bot, wrapper, logger)
+        self.projects_lock = asyncio.Lock()
+        self.wk_project_names = []  # type: [str]
+        self.all_projects = []  # type: [Project]
+        self.sheet = None  # type: SheetPlugin | None
+        self.member_p = None  # type: MembersPlugin | None
+        self.config = self.bot.create_sub_config("sheet.projects")
+        self.config.load_tree(CONFIG_TREE)
+        self.project_resources = []  # type: List[str]
+        self.bot.save_config()
+
+    async def find_projects(self):
+        return await _project_tools.find_projects(self)
+
+    async def load_projects(self):
+        return await _project_tools.load_projects(self)
+
+    async def insert_investments(self, player: str, investments: Dict[str, List[int]]):
+        return await _project_tools.insert_investments(self, player, investments)
+
+    async def split_overflow(self, log):
+        return await _project_tools.split_overflow(self, log)
+
+    async def apply_overflow_split(self,
+                                   investments: Dict[str, Dict[str, List[int]]],
+                                   changes: List[Tuple[Cell, int]]):
+        return await _project_tools.apply_overflow_split(self, investments, changes)
+
+    def on_load(self):
+        self.sheet = self.bot.get_plugin("SheetMain")
+        self.member_p = self.bot.get_plugin("MembersPlugin")
+        self.register_cog(ProjectCommands(self))
+        self.project_resources = self.bot.config["sheet.project_resources"]
+
+    async def on_enable(self):
+        await self.find_projects()
+        await self.load_projects()
 
 
-def teardown(bot: "AccountingBot"):
-    bot.remove_cog("ProjectCommands")
+async def _check_permissions(plugin, interaction):
+    if not (
+            interaction.user.guild_permissions.administrator or interaction.user.id in plugin.admins or await plugin.bot.is_owner(interaction.user)
+    ):
+        await interaction.response.send_message("Missing permissions", ephemeral=True)
+        return
+    if not plugin.bot.is_online():
+        raise BotOfflineException()
+
+
+def button_admin_check(func: Callable):
+    @functools.wraps(func)
+    async def _wrapper(self, button, interaction: Interaction):
+        await _check_permissions(self.plugin, interaction)
+        return await func(self, button, interaction)
+
+    return _wrapper
+
+
+def modal_admin_check(func: Callable):
+    @functools.wraps(func)
+    async def _wrapper(self, interaction: Interaction):
+        await _check_permissions(self.plugin, interaction)
+        return await func(self, interaction)
+
+    return _wrapper
 
 
 class ProjectCommands(commands.Cog):
-    def __init__(self, bot, admins, owner, guild, user_role):
-        global ADMINS, BOT, OWNER, GUILD, USER_ROLE
-        self.bot = bot
-        BOT = bot
-        self.admins = admins
-        ADMINS = admins
-        self.owner = owner
-        OWNER = owner
-        GUILD = guild
-        USER_ROLE = user_role
+    def __init__(self, plugin: ProjectPlugin):
+        self.plugin = plugin
+
 
     @commands.slash_command(name="loadprojects", description="Loads and list all projects")
     @cooldown(1, 5, commands.BucketType.default)
@@ -62,10 +121,10 @@ class ProjectCommands(commands.Cog):
     async def load_projects(self, ctx: discord.commands.context.ApplicationContext,
                             silent: Option(bool, "Execute command silently", required=False, default=True)):
         await ctx.response.defer(ephemeral=True)
-        log = await sheet.load_projects()
-        res = "Projectlist version: " + sheet.lastChanges.astimezone(pytz.timezone("Europe/Berlin")).strftime(
+        log = await self.plugin.load_projects()
+        res = "Projectlist version: " + sheet_main.lastChanges.astimezone(pytz.timezone("Europe/Berlin")).strftime(
             "%d.%m.%Y %H:%M") + "\n"
-        for p in sheet.allProjects:
+        for p in self.plugin.all_projects:
             res += p.to_string() + "\n\n"
 
         await ctx.respond("Projektliste:", files=[
@@ -76,10 +135,9 @@ class ProjectCommands(commands.Cog):
     @user_only()
     async def list_projects(self, ctx: ApplicationContext,
                             silent: Option(bool, "Execute command silently", required=False, default=True)):
-        res = "Projectlist version: " + sheet.lastChanges.astimezone(pytz.timezone("Europe/Berlin")).strftime(
-            "%d.%m.%Y %H:%M") + "\n"
-        async with sheet.projects_lock:
-            for p in sheet.allProjects:
+        res = "Projectlist version: N/A\n"
+        async with self.plugin.projects_lock:
+            for p in self.plugin.all_projects:
                 res += p.to_string() + "\n\n"
         await ctx.respond("Projektliste:", file=string_to_file(res, "project_list.txt"), ephemeral=silent)
 
@@ -98,32 +156,32 @@ class ProjectCommands(commands.Cog):
             priority_projects = priority_project.split(";")
         else:
             priority_projects = [priority_project]
-        await ctx.response.send_modal(ListModal(skip_loading, priority_projects))
+        await ctx.response.send_modal(ListModal(self.plugin, skip_loading, priority_projects))
 
     @commands.slash_command(name="splitoverflow", description="Splits the overflow onto the projects")
     @commands.cooldown(1, 5, commands.BucketType.default)
     @admin_only()
     async def split_overflow(self, ctx: ApplicationContext):
         await ctx.defer()
-        await sheet.load_projects()
+        await self.plugin.load_projects()
         log = []
-        investments, changes = await sheet.split_overflow(log)
+        investments, changes = await self.plugin.split_overflow(log)
         msg_list = []
         for player, invests in investments.items():
             for proj, invest in invests.items():
                 for index, amount in enumerate(invest):
                     if amount == 0:
                         continue
-                    item = sheet.PROJECT_RESOURCES[index]
+                    item = self.plugin.project_resources[index]
                     msg_list.append(f"{player}: {amount} {item} -> {proj}")
         await ctx.followup.send(f"Überlauf berechnet, soll {len(changes)} Änderung durchgeführt werden?",
                                 file=string_to_file(list_to_string(msg_list), "split.txt"),
-                                view=ConfirmOverflowView(investments, changes, log), ephemeral=False)
+                                view=ConfirmOverflowView(self.plugin, investments, changes, log), ephemeral=False)
 
 
 # noinspection PyUnusedLocal
 class ConfirmView(AutoDisableView):
-    def __init__(self, investments: Dict[str, List[int]], player: str, log=None, split=None):
+    def __init__(self, plugin: ProjectPlugin, investments: Dict[str, List[int]], player: str, log=None, split=None):
         super().__init__()
         if log is None:
             log = []
@@ -131,22 +189,17 @@ class ConfirmView(AutoDisableView):
         self.investments = investments
         self.player = player
         self.split = split
+        self.plugin = plugin
 
     @discord.ui.button(label="Eintragen", style=discord.ButtonStyle.green)
+    @button_admin_check
     async def btn_confirm_callback(self, button, interaction: Interaction):
-        if not (
-                interaction.user.guild_permissions.administrator or interaction.user.id in ADMINS or interaction.user.id == OWNER):
-            await interaction.response.send_message("Missing permissions", ephemeral=True)
-            return
-        if not STATE.is_online():
-            raise BotOfflineException()
         await interaction.response.defer(ephemeral=False, invisible=False)
-
         await interaction.message.edit(view=None)
         self.log.append("Inserting into sheet...")
         try:
             logger.info("Inserting investments for player %s: %s", self.player, self.investments)
-            log, results = await sheet.insert_investments(self.player, self.investments)
+            log, results = await self.plugin.insert_investments(self.player, self.investments)
             success = True
             self.log += log
         except GoogleSheetException as e:
@@ -159,11 +212,11 @@ class ConfirmView(AutoDisableView):
             success = False
         msg_list = format_list(self.split, results)
         msg_files = [string_to_file(list_to_string(self.log), "log.txt")]
-        base_message = (("An **ERROR** occurred during execution of the command" if not success else
-                         "Investition wurde eingetragen!"))
+        base_message = ("An **ERROR** occurred during execution of the command" if not success else
+                        "Investition wurde eingetragen!")
 
         msg_files.append(utils.string_to_file(msg_list, "split.txt"))
-        view = InformPlayerView(BOT, self.player, self.split, results, base_message)
+        view = InformPlayerView(self.plugin, self.player, self.split, results, base_message)
         await view.load_user()
         view.message = await interaction.followup.send(
             base_message,
@@ -174,46 +227,44 @@ class ConfirmView(AutoDisableView):
 
 
 class ConfirmOverflowView(AutoDisableView):
-    def __init__(self, investments: Dict[str, Dict[str, List[int]]], changes: [(Cell, int)], log=None):
+    def __init__(self, plugin: ProjectPlugin, investments: Dict[str, Dict[str, List[int]]], changes: [(Cell, int)],
+                 log=None):
         super().__init__()
         if log is None:
             log = []
         self.log = log
         self.investments = investments
         self.changes = changes
+        self.plugin = plugin
 
     @discord.ui.button(label="Eintragen", style=discord.ButtonStyle.green)
+    @button_admin_check
     async def btn_confirm_callback(self, button, interaction: Interaction):
-        if not (
-                interaction.user.guild_permissions.administrator or interaction.user.id in ADMINS or interaction.user.id == OWNER):
-            await interaction.response.send_message("Missing permissions", ephemeral=True)
-            return
-        if not STATE.is_online():
-            raise BotOfflineException()
         await interaction.response.defer(invisible=False)
         await interaction.message.edit(view=None)
-        log = await sheet.apply_overflow_split(self.investments, self.changes)
+        log = await self.plugin.apply_overflow_split(self.investments, self.changes)
         await interaction.followup.send("Überlauf wurde auf die Projekte verteilt!",
                                         file=string_to_file(list_to_string(log)))
 
 
 # noinspection PyUnusedLocal
 class InformPlayerView(AutoDisableView):
-    def __init__(self, bot: commands.Bot, user: str, split: {str: [(str, int)]}, results: {str, bool}, base_message):
+    def __init__(self, plugin: ProjectPlugin, user: str, split: {str: [(str, int)]}, results: {str, bool},
+                 base_message):
         super().__init__()
         self.base_message = base_message
         self.results = results
         self.split = split
-        self.bot = bot
+        self.plugin = plugin
         self.user = user
-        self.discord_id = utils.get_discord_id(user)
+        self.discord_id, _, _ = self.plugin.member_p.get_discord_id(user)
 
     async def load_user(self):
         if self.discord_id is None:
-            main_char, _, _ = utils.get_main_account(name=self.user)
+            main_char, _, _ = self.plugin.member_p.find_main_name(name=self.user)
             if main_char is None:
                 main_char = self.user
-            discord_id, name, perfect = await utils.get_or_find_discord_id(self.bot, GUILD, USER_ROLE, main_char)
+            discord_id = self.plugin.member_p.get_discord_id(main_char, only_id=True)
             if discord_id is not None:
                 self.discord_id = discord_id
 
@@ -221,15 +272,12 @@ class InformPlayerView(AutoDisableView):
         await self.message.edit(self.base_message + f"\n\nSoll der Nutzer <@{self.discord_id}> benachrichtigt werden?")
 
     @discord.ui.button(label="Senden", style=discord.ButtonStyle.green)
+    @button_admin_check
     async def btn_send_callback(self, button, interaction: Interaction):
-        if not (
-                interaction.user.guild_permissions.administrator or interaction.user.id in ADMINS or interaction.user.id == OWNER):
-            await interaction.response.send_message("Missing permissions", ephemeral=True)
-            return
         if self.discord_id is None:
             await interaction.response.send_message("Kein Nutzer gefunden...", ephemeral=True)
             return
-        user = await BOT.get_or_fetch_user(self.discord_id)
+        user = await self.plugin.bot.get_or_fetch_user(self.discord_id)
         admin_name = interaction.user.nick if interaction.user.nick is not None else interaction.user.name
         message = f"Dein Investitionsvertrag wurde von {admin_name} angenommen und für {self.user} eingetragen:\n"
         msg_list = f"```\n{format_list(self.split, self.results)}\n```"
@@ -245,13 +293,8 @@ class InformPlayerView(AutoDisableView):
         await interaction.message.edit(view=None)
 
     @discord.ui.button(label="Ändern", style=discord.ButtonStyle.blurple)
+    @button_admin_check
     async def btn_change_callback(self, button, interaction: Interaction):
-        if not STATE.is_online():
-            raise BotOfflineException()
-        if not (
-                interaction.user.guild_permissions.administrator or interaction.user.id in ADMINS or interaction.user.id == OWNER):
-            await interaction.response.send_message("Missing permissions", ephemeral=True)
-            return
         await interaction.response.send_modal(InformPlayerView.DiscordUserModal(self))
 
     class DiscordUserModal(ErrorHandledModal):
@@ -267,15 +310,15 @@ class InformPlayerView(AutoDisableView):
         async def callback(self, interaction: Interaction):
             name = self.children[0].value
             discord_id = self.children[1].value
-            matched_name, _, perfect = utils.get_main_account(name)
+            matched_name, _, _ = self.view.plugin.member_p.find_main_name(name)
 
             if matched_name is not None:
-                matched_name = sheet.check_name_overwrites(matched_name)
-                utils.save_discord_id(matched_name, int(discord_id))
+                matched_name = self.view.plugin.sheet.check_name_overwrites(matched_name)
+                # utils.save_discord_id(matched_name, int(discord_id))
                 await interaction.response.send_message(
                     f"Spieler {matched_name} wurde zur ID {discord_id} eingespeichert!\n",
                     ephemeral=True)
-                self.view.discord_id = utils.get_discord_id(matched_name)
+                self.view.discord_id = discord_id
                 await self.view.update_message()
             else:
                 await interaction.response.send_message(f"Fehler, Spieler {name} nicht gefunden!", ephemeral=True)
@@ -283,28 +326,25 @@ class InformPlayerView(AutoDisableView):
 
 class ListModal(ErrorHandledModal):
     def __init__(self,
+                 plugin: ProjectPlugin,
                  skip_loading: bool,
                  priority_projects: [str],
                  *args, **kwargs):
         super().__init__(title="Ingame List Parser", *args, **kwargs)
         self.skip_loading = skip_loading
+        self.plugin = plugin
         self.priority_projects = priority_projects
         self.add_item(InputText(label="Spielername", placeholder="Spielername", required=True))
         self.add_item(InputText(label="Ingame List", placeholder="Ingame liste hier einfügen",
                                 required=True, style=InputTextStyle.long))
 
+    @modal_admin_check
     async def callback(self, interaction: Interaction):
-        if not (
-                interaction.user.guild_permissions.administrator or interaction.user.id in ADMINS or interaction.user.id == OWNER):
-            await interaction.response.send_message("Missing permissions", ephemeral=True)
-            return
         logger.debug("Insert Investments command received")
-        if not STATE.is_online():
-            raise BotOfflineException()
         await interaction.response.send_message("Bitte warten, dies kann einige Sekunden dauern.", ephemeral=True)
         log = []
-        player, is_perfect = utils.parse_player(self.children[0].value, sheet.users)
-        player = sheet.check_name_overwrites(player)
+        player, _, is_perfect = self.plugin.member_p.find_main_name(self.children[0].value)
+        player = self.plugin.sheet.check_name_overwrites(player)
         if player is None:
             await interaction.followup.send(f"Fehler: Spieler \"{self.children[0].value}\" nicht gefunden!")
             return
@@ -314,108 +354,24 @@ class ListModal(ErrorHandledModal):
             await interaction.followup.send(
                 "Eingabe verarbeitet, lade Projekte. Bitte warten, dies dauert nun einige Sekunden", ephemeral=True)
             log.append("Reloading projects...")
-            await sheet.load_projects()
+            await self.plugin.load_projects()
         log.append("Splitting contract...")
-        async with sheet.projects_lock:
+        async with self.plugin.projects_lock:
             logger.debug("Splitting contract for %s ", player)
-            split = Project.split_contract(items, sheet.allProjects, self.priority_projects)
+            split = Project.split_contract(items, self.plugin.all_projects, self.priority_projects)
         log.append("Calculating investments...")
-        investments = Project.calc_investments(split)
+        investments = Project.calc_investments(split, self.plugin.project_resources)
         message = ""
         if not is_perfect:
             message = f"Meintest du \"{player}\"? (Deine Eingabe war \"{self.children[0].value}\").\n"
         msg_list = project_utils.format_list(split, [])
         message += f"Eingelesene items: \n```\n{Item.to_string(items)}\n```\n" \
                    f"Willst du diese Liste als Investition für {player} eintragen?\n" \
-                   f"Sheet: `{sheet.sheet_name}`"
+                   f"Sheet: `{self.plugin.sheet.sheet_name}`"
         msg_file = [utils.string_to_file(msg_list, "split.txt")]
 
         await interaction.followup.send(
             message,
-            view=ConfirmView(investments, player, log, split),
+            view=ConfirmView(self.plugin, investments, player, log, split),
             files=msg_file,
             ephemeral=False)
-        return
-
-
-class Project(object):
-    def __init__(self, name: str):
-        self.name = name
-        self.exclude = Project.ExcludeSettings.none
-        self.pendingResources = []  # type: List[Item]
-        self.investments_range = None
-
-    def get_pending_resource(self, resource: str) -> int:
-        resource = resource.casefold()
-        for item in self.pendingResources:
-            if item.name.casefold() == resource:
-                return item.amount
-        return 0
-
-    def to_string(self) -> str:
-        exclude = ""
-        if self.exclude == Project.ExcludeSettings.all:
-            exclude = " (ausgeblendet)"
-        elif self.exclude == Project.ExcludeSettings.investments:
-            exclude = " (keine Investitionen)"
-        res = f"{self.name}{exclude}\nRessource: ausstehende Menge"
-        for r in self.pendingResources:  # type: Item
-            res += f"\n{r.name}: {r.amount}"
-        return res
-
-    @staticmethod
-    def split_contract(items,
-                       project_list: List['Project'],
-                       priority_projects: List[str] = None,
-                       extra_res: List[int] = None) -> Dict[str, List[Tuple[str, int]]]:
-        projects_ordered = project_list[::-1]  # Reverse the list
-        item_names = sheet.PROJECT_RESOURCES
-        if priority_projects is None:
-            priority_projects = []
-        else:
-            for p_name in reversed(priority_projects):
-                for p in projects_ordered:  # type: Project
-                    if p.name == p_name:
-                        projects_ordered.remove(p)
-                        projects_ordered.insert(0, p)
-        split = {}  # type: {str: [(str, int)]}
-        for item in items:  # type: Item
-            left = item.amount
-            split[item.name] = []
-            for project in projects_ordered:  # type: Project
-                if project.exclude != Project.ExcludeSettings.none:
-                    continue
-                pending = project.get_pending_resource(item.name)
-                if item.name in item_names:
-                    index = item_names.index(item.name)
-                    if extra_res and len(extra_res) > index:
-                        pending -= extra_res[index]
-                amount = min(pending, left)
-                if pending > 0 and amount > 0:
-                    left -= amount
-                    split[item.name].append((project.name, amount))
-            if left > 0:
-                split[item.name].append(("overflow", left))
-        return split
-
-    @staticmethod
-    def calc_investments(split: {str: [(str, int)]}):
-        log = []
-        investments = {}  # type: (str, [int])
-        item_names = sheet.PROJECT_RESOURCES
-        for item_name in split:  # type: str
-            if item_name in item_names:
-                index = item_names.index(item_name)
-            else:
-                log.append(f"Error: {item_name} is not a project resource!")
-                continue
-            for (project, amount) in split[item_name]:  # type: str, int
-                if project not in investments:
-                    investments[project] = [0] * len(item_names)
-                investments[project][index] += amount
-        return investments
-
-    class ExcludeSettings(Enum):
-        none = 0  # Don't exclude the project
-        investments = 1  # Exclude the project from investments
-        all = 2  # Completely hides the project
