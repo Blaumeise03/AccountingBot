@@ -8,7 +8,7 @@ import functools
 import json
 import logging
 from os.path import exists
-from typing import Dict
+from typing import Dict, List
 
 import gspread_asyncio
 from discord.ext import commands
@@ -91,6 +91,11 @@ class SheetPlugin(BotPlugin):
             .map_data(functools.partial(load_usernames, plugin=self))
             .map_data(load_user_overwrites)
             .map_data(functools.partial(load_discord_ids, path=self.member_config["path_discord_ids"]))
+        )
+        (
+            members_plugin
+            .set_save_data_chain()
+            .map_data(functools.partial(save_discord_ids, path=self.member_config["path_discord_ids"]))
         )
 
     async def on_enable(self):
@@ -197,7 +202,7 @@ async def load_usernames(players: Dict[str, Player], plugin: SheetPlugin) -> Dic
             if user:
                 user.rank = row[i_member_rank].strip()
             else:
-                inactive_players.append(row[i_member_rank].strip())
+                inactive_players.append(row[i_member_name].strip())
             # Check if it is an alt of a main account
             if len(row) > i_member_note and not row[i_member_active]:
                 note = row[i_member_note]  # type: str
@@ -221,7 +226,7 @@ async def load_usernames(players: Dict[str, Player], plugin: SheetPlugin) -> Dic
 
 def load_discord_ids(players: Dict[str, Player], path: str):
     if exists(path):
-        with open(path, "r") as file:
+        with open(path, "r", encoding="utf-8") as file:
             raw = json.load(file)
     else:
         raw = {
@@ -246,6 +251,19 @@ def load_discord_ids(players: Dict[str, Player], path: str):
             player.authorized_discord_ids.extend(perms_ids[player.name])
     logger.info("Loaded discord ids")
     return players
+
+
+def save_discord_ids(players: List[Player], path: str):
+    raw = {
+        "owners": {}, "granted_permissions": {}
+    }
+    for player in players:
+        if player.discord_id is not None:
+            raw["owners"][player.name] = player.discord_id
+        if len(player.authorized_discord_ids) > 0:
+            raw["granted_permissions"][player.name] = player.authorized_discord_ids
+    with open(path, "w", encoding="utf-8") as file:
+        json.dump(raw, file, ensure_ascii=False, indent=4)
 
 
 def load_user_overwrites(players: Dict[str, Player]):
