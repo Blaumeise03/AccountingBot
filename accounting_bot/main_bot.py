@@ -156,6 +156,8 @@ class AccountingBot(commands.Bot):
         if self.owner_id is None:
             await self.fetch_owner()
         for plugin in self.plugins:
+            if plugin.state == PluginState.ENABLED:
+                continue
             try:
                 await plugin.enable_plugin()
             except PluginLoadException as e:
