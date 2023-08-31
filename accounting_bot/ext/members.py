@@ -107,6 +107,13 @@ class MembersPlugin(BotPlugin):
                 players = current.func(players)
             current = current.next
         self._name_lookup_table = players
+        new = {}
+        for player in players.values():
+            for alt in player.alts:
+                if alt not in self._name_lookup_table:
+                    new[alt] = player
+        for name, player in new.items():
+            self._name_lookup_table[name] = player
         self.players = set(self._name_lookup_table.values())
         self.main_chars = set(map(lambda p: p.name, self.players))
         logger.info("Loaded %s players", len(self.players))

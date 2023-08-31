@@ -682,8 +682,8 @@ class Transaction(TransactionLike):
         match operation:
             case "delete":
                 return (
-                        self.name_from and plugin.member_p.find_main_name(self.name_from) == user or
-                        self.name_to and plugin.member_p.find_main_name(self.name_to) == user
+                        self.name_from and plugin.member_p.get_main_name(self.name_from) == user or
+                        self.name_to and plugin.member_p.get_main_name(self.name_to) == user
                 )
             case "verify":
                 return user in plugin.admins
@@ -1182,7 +1182,7 @@ class TransactionView(AutoDisableView):
             raise BotOfflineException()
         (owner, verified) = self.plugin.db.get_owner(interaction.message.id)
         transaction = self.plugin.transaction_from_embed(interaction.message.embeds[0])
-        user_name = self.plugin.member_p.find_main_name(discord_id=interaction.user.id)
+        user_name = self.plugin.member_p.find_main_name(discord_id=interaction.user.id)[0]
         has_perm = owner == interaction.user.id or interaction.user.id in self.plugin.admins
         if not has_perm:
             has_perm = transaction.has_permissions(user_name, self.plugin, "delete")
