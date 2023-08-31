@@ -14,7 +14,8 @@ from types import ModuleType
 from typing import Dict, Union, List, Optional, Tuple
 
 import discord
-from discord import ApplicationContext, ApplicationCommandError, User, Member, Embed, Color, option
+from discord import ApplicationContext, ApplicationCommandError, User, Member, Embed, Color, option, Thread
+from discord.abc import GuildChannel, PrivateChannel
 from discord.ext import commands
 
 from accounting_bot import utils, exceptions
@@ -260,6 +261,15 @@ class AccountingBot(commands.Bot):
         logger.info("Bot has logged in")
         await self.enable_plugins()
         self.state = State.online
+
+    async def get_or_fetch_channel(self, channel_id: int) -> Union[GuildChannel, Thread, PrivateChannel, None]:
+        channel = self.get_channel(channel_id)
+        if channel is None:
+            try:
+                channel = await self.fetch_channel(channel_id)
+            except (discord.NotFound, discord.Forbidden):
+                return None
+        return channel
 
 
 @commands.slash_command(name="status")
@@ -535,7 +545,7 @@ def get_raw_plugin_config(plugin_name: str) -> Dict[str, str]:
     # noinspection PyUnresolvedReferences
     plugin_path = module.get_filename()
     raw_settings = {}
-    with open(plugin_path, "r") as file:
+    with open(plugin_path, "r", encoding="utf-8") as file:
         is_config = False
         for line in file:
             if not is_config and not (len(line.lstrip()) == 0 or line.lstrip().startswith("#")):
