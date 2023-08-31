@@ -17,8 +17,7 @@ import discord
 import discord.ext
 import mariadb
 import pytz
-from discord import Embed, Interaction, Color, Message, ApplicationContext, option, User, RawReactionActionEvent, \
-    Member, DMChannel
+from discord import Embed, Interaction, Color, Message, ApplicationContext, option, User, RawReactionActionEvent
 from discord.ext import commands
 from discord.ext.commands import Cog, CheckFailure
 from discord.ui import Modal, InputText
@@ -26,10 +25,10 @@ from gspread.utils import ValueInputOption, ValueRenderOption
 from numpy import ndarray
 
 from accounting_bot import utils
-from accounting_bot.exceptions import BotOfflineException, AccountingException, ConfigException, NoPermissionException
+from accounting_bot.exceptions import BotOfflineException, AccountingException, NoPermissionException
 from accounting_bot.ext.accounting_db import AccountingDB
-from accounting_bot.ext.sheet import sheet_main
 from accounting_bot.ext.members import MembersPlugin, member_only
+from accounting_bot.ext.sheet import sheet_main
 from accounting_bot.ext.sheet.sheet_main import SheetPlugin
 from accounting_bot.main_bot import BotPlugin, PluginWrapper, AccountingBot
 from accounting_bot.utils import AutoDisableView, ErrorHandledModal, parse_number, admin_only, \
@@ -108,9 +107,6 @@ class AccountingPlugin(BotPlugin):
         self.embeds = [self.bot.get_plugin("EmbedPlugin").embeds["MenuEmbedInternal"]]
         self.sheet = self.bot.get_plugin("SheetMain")
         self.member_p = self.bot.get_plugin("MembersPlugin")
-
-    async def on_enable(self):
-        return await super().on_enable()
 
     def on_unload(self):
         if self.db.con is None:
@@ -244,7 +240,7 @@ class AccountingPlugin(BotPlugin):
         has_permissions = user_id in self.admins
         user = await self.bot.get_or_fetch_user(user_id)
         user_from = self.member_p.get_user(transaction.name_from)
-        user_to = self.member_p.get_user(transaction.name_to)
+        # user_to = self.member_p.get_user(transaction.name_to)
         if not has_permissions and isinstance(transaction,
                                               Transaction) and transaction.name_from and transaction.name_to:
             # Only transactions between two players can be self-verified
@@ -430,48 +426,12 @@ class AccountingPlugin(BotPlugin):
         p = self.bot.get_plugin("MembersPlugin")
         return p.parse_player(string)
 
-
-def main_guild_only() -> Callable[[_T], _T]:
-    def decorator(func):
-        @utils.cmd_check
-        async def predicate(ctx: ApplicationContext) -> bool:
-            # noinspection PyTypeChecker
-            bot = ctx.bot  # type: AccountingBot
-            plugin = bot.get_plugin("AccountingPlugin")
-            if (ctx.guild is None or ctx.guild.id != plugin.guild) and not await bot.is_owner(ctx.user):
-                raise CheckFailure() from NoPermissionException("This command may only be executed in the main guild")
-            return True
-
-        CmdAnnotation.annotate_cmd(func, CmdAnnotation.main_guild)
-        return commands.check(predicate)(func)
-
-    return decorator
-
-
-def get_current_time() -> str:
-    """
-    Returns the current time as a string with the format dd.mm.YYYY HH:MM
-
-    :return: the formatted time
-    """
-    now = datetime.now()
-    return now.strftime("%d.%m.%Y %H:%M")
-
-
-class AccountingCommands(Cog):
-    def __init__(self, plugin: AccountingPlugin):
-        self.bot = plugin.bot
-        self.db = plugin.db
-        self.config = plugin.config
-        self.plugin = plugin
-
-    @Cog.listener()
-    async def on_ready(self) -> None:
+    async def on_enable(self):
         # Refreshing main menu
         channel = await self.bot.fetch_channel(self.config["menuChannel"])
         msg = await channel.fetch_message(self.config["menuMessage"])
-        await msg.edit(view=AccountingView(self.plugin),
-                       embeds=self.plugin.embeds, content="")
+        await msg.edit(view=AccountingView(self),
+                       embeds=self.embeds, content="")
 
         # Updating shortcut menus
         shortcuts = self.db.get_shortcuts()
@@ -482,13 +442,13 @@ class AccountingCommands(Cog):
                 chan = self.bot.fetch_channel(c)
             try:
                 msg = await chan.fetch_message(m)
-                await msg.edit(view=AccountingView(self.plugin),
+                await msg.edit(view=AccountingView(self),
                                embed=self.bot.embeds["MenuShortcut"], content="")
             except discord.errors.NotFound:
                 logger.warning(f"Message {m} in channel {c} not found, deleting it from DB")
                 self.db.delete_shortcut(m)
 
-        await self.plugin.load_wallets(force=True, validate=True)
+        await self.load_wallets(force=True, validate=True)
 
         # Updating unverified Accounting-log entries
         logger.info("Refreshing unverified accounting log entries")
@@ -528,17 +488,17 @@ class AccountingCommands(Cog):
                 # The Message was verified
                 try:
                     # Saving transaction to the Google sheet
-                    await self.plugin.save_embeds(msg, user)
+                    await self.save_embeds(msg, user)
                 except mariadb.Error:
                     pass
                 # Removing the View
                 await msg.edit(view=None)
             else:
                 # Updating the message View, so it can be used by the users
-                await msg.edit(view=TransactionView(self.plugin))
+                await msg.edit(view=TransactionView(self))
                 if len(msg.embeds) > 0:
-                    transaction = self.plugin.transaction_from_embed(msg.embeds[0])
-                    state = await transaction.get_state(self.plugin)
+                    transaction = self.transaction_from_embed(msg.embeds[0])
+                    state = await transaction.get_state(self)
                     if state == 2:
                         await msg.add_reaction("⚠️")
                     elif state == 3:
@@ -546,6 +506,41 @@ class AccountingCommands(Cog):
                 else:
                     logger.warning("Message %s is listed as transaction but does not have an embed", msg.id)
         logger.info("AccountingPlugin ready")
+
+
+def main_guild_only() -> Callable[[_T], _T]:
+    def decorator(func):
+        @utils.cmd_check
+        async def predicate(ctx: ApplicationContext) -> bool:
+            # noinspection PyTypeChecker
+            bot = ctx.bot  # type: AccountingBot
+            plugin = bot.get_plugin("AccountingPlugin")
+            if (ctx.guild is None or ctx.guild.id != plugin.guild) and not await bot.is_owner(ctx.user):
+                raise CheckFailure() from NoPermissionException("This command may only be executed in the main guild")
+            return True
+
+        CmdAnnotation.annotate_cmd(func, CmdAnnotation.main_guild)
+        return commands.check(predicate)(func)
+
+    return decorator
+
+
+def get_current_time() -> str:
+    """
+    Returns the current time as a string with the format dd.mm.YYYY HH:MM
+
+    :return: the formatted time
+    """
+    now = datetime.now()
+    return now.strftime("%d.%m.%Y %H:%M")
+
+
+class AccountingCommands(Cog):
+    def __init__(self, plugin: AccountingPlugin):
+        self.bot = plugin.bot
+        self.db = plugin.db
+        self.config = plugin.config
+        self.plugin = plugin
 
     @Cog.listener()
     async def on_raw_reaction_add(self, reaction: RawReactionActionEvent):
