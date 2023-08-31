@@ -1,11 +1,14 @@
 import logging
 import re
+from enum import Enum
+from typing import List, Dict, Tuple
 
 from gspread import Cell
 
 from accounting_bot.exceptions import GoogleSheetException
+from accounting_bot.universe.data_utils import Item
 
-logger = logging.getLogger("project.utils")
+logger = logging.getLogger("ext.sheet.project.utils")
 
 
 def process_first_column(batch_cells: [Cell], log: [str]):
@@ -141,3 +144,85 @@ def format_list(split: {str: [(str, int)]}, success: {str, bool}):
                 res += f"{' ' * spaces} (NOT INSERTED)"
             res += "\n"
     return res
+
+
+class Project(object):
+    def __init__(self, name: str):
+        self.name = name
+        self.exclude = Project.ExcludeSettings.none
+        self.pending_resources = []  # type: List[Item]
+        self.investments_range = None
+
+    def get_pending_resource(self, resource: str) -> int:
+        resource = resource.casefold()
+        for item in self.pending_resources:
+            if item.name.casefold() == resource:
+                return item.amount
+        return 0
+
+    def to_string(self) -> str:
+        exclude = ""
+        if self.exclude == Project.ExcludeSettings.all:
+            exclude = " (ausgeblendet)"
+        elif self.exclude == Project.ExcludeSettings.investments:
+            exclude = " (keine Investitionen)"
+        res = f"{self.name}{exclude}\nRessource: ausstehende Menge"
+        for r in self.pending_resources:  # type: Item
+            res += f"\n{r.name}: {r.amount}"
+        return res
+
+    @staticmethod
+    def split_contract(items,
+                       project_list: List['Project'],
+                       project_resources: List[str],
+                       priority_projects: List[str] = None,
+                       extra_res: List[int] = None) -> Dict[str, List[Tuple[str, int]]]:
+        projects_ordered = project_list[::-1]  # Reverse the list
+        item_names = project_resources
+        if priority_projects is not None:
+            for p_name in reversed(priority_projects):
+                for p in projects_ordered:  # type: Project
+                    if p.name == p_name:
+                        projects_ordered.remove(p)
+                        projects_ordered.insert(0, p)
+        split = {}  # type: {str: [(str, int)]}
+        for item in items:  # type: Item
+            left = item.amount
+            split[item.name] = []
+            for project in projects_ordered:  # type: Project
+                if project.exclude != Project.ExcludeSettings.none:
+                    continue
+                pending = project.get_pending_resource(item.name)
+                if item.name in item_names:
+                    index = item_names.index(item.name)
+                    if extra_res and len(extra_res) > index:
+                        pending -= extra_res[index]
+                amount = min(pending, left)
+                if pending > 0 and amount > 0:
+                    left -= amount
+                    split[item.name].append((project.name, amount))
+            if left > 0:
+                split[item.name].append(("overflow", left))
+        return split
+
+    @staticmethod
+    def calc_investments(split: Dict[str, List[Tuple[str, int]]], project_resources: List[str]) -> Dict[str, List[int]]:
+        log = []
+        investments = {}  # type: Dict[str, List[int]]
+        item_names = project_resources
+        for item_name in split:  # type: str
+            if item_name in item_names:
+                index = item_names.index(item_name)
+            else:
+                log.append(f"Error: {item_name} is not a project resource!")
+                continue
+            for (pr, amount) in split[item_name]:  # type: str, int
+                if pr not in investments:
+                    investments[pr] = [0] * len(item_names)
+                investments[pr][index] += amount
+        return investments
+
+    class ExcludeSettings(Enum):
+        none = 0  # Don't exclude the project
+        investments = 1  # Exclude the project from investments
+        all = 2  # Completely hides the project

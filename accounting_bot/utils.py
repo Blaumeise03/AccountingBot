@@ -1,7 +1,6 @@
 import asyncio
 import calendar
 import datetime
-import difflib
 import functools
 import io
 import json
@@ -9,38 +8,27 @@ import logging
 import math
 import re
 import traceback
-from abc import ABC, abstractmethod
 from concurrent.futures import ThreadPoolExecutor
 from enum import Enum
 from os.path import exists
-from typing import Union, Tuple, Optional, TYPE_CHECKING, Type, List, Callable, TypeVar, Dict, Coroutine
+from typing import Union, Optional, Type, List, Callable, TypeVar, Dict, Coroutine, TYPE_CHECKING
 
 import cv2
 import discord
-from discord import Interaction, ApplicationContext, InteractionResponded, ActivityType, Member, DMChannel, \
-    ApplicationCommand
+from discord import Interaction, ApplicationContext, InteractionResponded, ApplicationCommand, CheckFailure
 from discord.ext import commands
-from discord.ext.commands import Bot, Context, Command, CheckFailure, NotOwner
-from discord.ui import View, Modal, Item, Button
+from discord.ext.commands import Context, Command, NotOwner
+from discord.ui import View, Modal, Button
 from numpy import ndarray
 
 from accounting_bot import exceptions
-from accounting_bot.config import Config
-from accounting_bot.exceptions import LoggedException, NoPermissionsException, BotOfflineException, ConfigException
+from accounting_bot.exceptions import LoggedException, NoPermissionException, BotOfflineException, \
+    UnhandledCheckException
 
 if TYPE_CHECKING:
-    from bot import BotState
+    from accounting_bot.main_bot import AccountingBot
 
 logger = logging.getLogger("bot.utils")
-CONFIG = None  # type: Config | None
-BOT = None  # type: Bot | None
-STATE = None  # type: BotState | None
-
-discord_users = {}  # type: {str: int}
-ingame_twinks = {}
-ingame_chars = []
-main_chars = []
-resource_order = []  # type: List[str]
 
 if exists("discord_ids.json"):
     with open("discord_ids.json") as json_file:
@@ -50,20 +38,7 @@ executor = ThreadPoolExecutor(max_workers=5)
 loop = asyncio.get_event_loop()
 _T = TypeVar("_T")
 
-help_infos = {}  # type: Dict[Callable, str]
 cmd_annotations = {}  # type: Dict[Callable, List[CmdAnnotation]]
-BOUNTY_ADMINS = []
-
-terminate_funcs = []  # type: List[ShutdownProcedure]
-
-
-def setup(state: "BotState"):
-    global STATE, CONFIG, BOT, resource_order, BOUNTY_ADMINS
-    STATE = state
-    CONFIG = STATE.config
-    BOT = STATE.bot
-    resource_order = state.config["project_resources"]
-    BOUNTY_ADMINS = state.config["killmail_parser.admins"]
 
 
 def wrap_async(func: Callable[..., _T]):
@@ -101,7 +76,7 @@ def parse_number(string: str) -> (int, str):
         warnings += "Hinweis: Es wurden Punkte und/oder Kommas erkannt, die Zahl wird automatisch nach " \
                     "dem Format \"1,000,000.00 ISK\" geparsed.\n"
 
-    if bool(re.match(r"[0-9]+(,[0-9]+)*(\.[0-9]+)?[a-zA-Z]*", string)):
+    if bool(re.match(r"\d+(,\d+)*(\.\d+)?[a-zA-Z]*", string)):
         number = re.sub(r"[,a-zA-Z ]", "", string).split(".", 1)[0]
         return int(number), warnings
     else:
@@ -303,8 +278,7 @@ def image_to_file(img: ndarray, encoding: str, filename: str):
     is_success, im_buf_arr = cv2.imencode(encoding, img)
     if is_success:
         img_byte = io.BytesIO(im_buf_arr)
-        file = discord.File(img_byte, filename)
-        return file
+        return discord.File(img_byte, filename)
     return None
 
 
@@ -331,113 +305,11 @@ def str_to_list(text: str, sep=";") -> List[str]:
     return text_list
 
 
-def get_main_account(name: str = None, discord_id: int = None) -> Tuple[Union[str, None], Union[str, None], bool]:
-    """
-    Finds the closest playername match for a given string. And returns the main account of this player, together with
-    the parsed input name and the information, whether it was a perfect match.
-    Alternatively searches for the character name belonging to the discord account.
-
-    :param name: the string which should be looked up or
-    :param discord_id: the id to search for
-    :return:    Main Char: str or None,
-                Char name: str or None,
-                Perfect match: bool
-    """
-    if name is None and discord_id is None:
-        return None, None, False
-    if discord_id is not None:
-        for main_char, d_id in discord_users.items():
-            if d_id == discord_id:
-                return main_char, main_char, True
-        return None, None, False
-    names = difflib.get_close_matches(name, ingame_chars, 1)
-    if len(names) > 0:
-        n = str(names[0])
-        main_char = n
-        if main_char in ingame_twinks:
-            main_char = ingame_twinks[main_char]
-        if name.casefold() == n.casefold():
-            return main_char, n, True
-        return main_char, n, False
-    return None, None, False
-
-
-def parse_player(string: str, users: [str]) -> (Union[str, None], bool):
-    """
-    Finds the closest playername match for a given string. It returns the name or None if not found, as well as a
-    boolean indicating whether it was a perfect match.
-
-    :param string: the string which should be looked up
-    :param users: the available usernames
-    :return: (Playername: str or None, Perfect match: bool)
-    """
-    names = difflib.get_close_matches(string, users, 1)
-    if len(names) > 0:
-        name = str(names[0])
-        if name.casefold() == string.casefold():
-            return str(names[0]), True
-        return str(names[0]), False
-    return None, False
-
-
-async def get_or_find_discord_id(bot=None, guild=None, user_role=None, player_name="") \
-        -> Tuple[Optional[int], Optional[str], Optional[bool]]:
-    if bot is None:
-        bot = BOT
-    if guild is None:
-        guild = CONFIG["server"]
-    if user_role is None:
-        user_role = CONFIG["user_role"]
-    player_name = get_main_account(name=player_name)[0]
-
-    discord_id = get_discord_id(player_name)
-    if discord_id:
-        return discord_id, player_name, True
-    name, perfect, nicknames = await find_discord_id(bot, guild, user_role, player_name)
-    if perfect:
-        return nicknames[name], name, True
-    return None, name, False
-
-
-def get_discord_id(name: str):
-    if name in discord_users:
-        return discord_users[name]
-    else:
-        return None
-
-
-async def find_discord_id(bot, guild, user_role, player_name):
-    nicknames = dict(await bot.get_guild(guild)
-                     .fetch_members()
-                     .filter(lambda m: m.get_role(user_role) is not None)
-                     .map(lambda m: (m.nick if m.nick is not None else m.name, m.id))
-                     .flatten())
-    name, perfect = parse_player(player_name, nicknames)
-    return name, perfect, nicknames
-
-
-def save_discord_id(name: str, discord_id: int):
-    if name in discord_users and discord_users[name] == discord_id:
-        return
-    while discord_id in discord_users.values():
-        for k, v in list(discord_users.items()):
-            if v == discord_id:
-                logger.warning("Deleted discord id %s (user: %s)", v, k)
-                del discord_users[k]
-    discord_users[name] = discord_id
-    save_discord_config()
-
-
-def save_discord_config():
-    with open("discord_ids.json", "w") as outfile:
-        json.dump(discord_users, outfile, indent=4)
-
-
 class CmdAnnotation(Enum):
     admin = "Admin only"
     owner = "Owner only"
     main_guild = "Main Server only"
-    user = "Members only"
+    member = "Members only"
     guild = "Guild only"
 
     @staticmethod
@@ -457,96 +329,58 @@ class CmdAnnotation(Enum):
         return rchop(msg, ", ")
 
 
-def help_info(value: str = "", options: Dict[str, str] = None):
-    def _callback(func: Callable):
-        help_infos[func] = value
-        return func
-    return _callback
+def cmd_check(coro: Callable) -> Callable:
+    """
+    Command predicates should be annotated with this, all errors inside the predicate will get handled automatically.
+
+    :param coro:
+    :return:
+    """
+    async def _error_handled(*args, **kwargs):
+        try:
+            return await coro(*args, **kwargs)
+        except Exception as e:
+            if isinstance(e, CheckFailure):
+                raise e
+            raise UnhandledCheckException("Unhandled error during command check") from e
+    return _error_handled
 
 
 def admin_only(admin_type="global") -> Callable[[_T], _T]:
     def decorator(func):
+        @cmd_check
         async def predicate(ctx: ApplicationContext) -> bool:
-            is_admin = ctx.user.id in STATE.admins or ctx.user.id == STATE.owner
+            # noinspection PyTypeChecker
+            bot = ctx.bot  # type: AccountingBot
+            is_admin = bot.is_admin(ctx.user)
             if admin_type == "bounty" and not is_admin:
-                is_admin = ctx.user.id in BOUNTY_ADMINS
+                raise NotImplementedError("Bounty system is not yet implemented")
             if not is_admin:
                 raise CheckFailure("Can't execute command") \
-                    from NoPermissionsException("Only an administrators may execute this command")
+                    from NoPermissionException("Only an administrators may execute this command")
             return True
         CmdAnnotation.annotate_cmd(func, CmdAnnotation.admin)
         return commands.check(predicate)(func)
     return decorator
 
 
-def user_only() -> Callable[[_T], _T]:
-    def decorator(func):
-        async def predicate(ctx: ApplicationContext) -> bool:
-            is_admin = ctx.user.id in STATE.admins or ctx.user.id == STATE.owner
-            is_user = False
-            if isinstance(ctx.user, Member) and ctx.guild is not None and ctx.guild == STATE.guild:
-                is_user = STATE.user_role is None or ctx.user.get_role(STATE.user_role) is not None
-            else:
-                guild = STATE.bot.get_guild(STATE.guild)
-                if guild is None:
-                    guild = await STATE.bot.fetch_guild(STATE.guild)
-                if guild is None:
-                    raise ConfigException(f"Guild with id {STATE.guild} not found")
-                user = guild.get_member(ctx.user.id)
-                if user is None:
-                    try:
-                        user = await guild.fetch_member(ctx.user.id)
-                    except discord.errors.NotFound:
-                        pass
-                if user is not None and user.get_role(STATE.user_role) is not None:
-                    is_user = True
-            if not is_admin and not is_user:
-                if isinstance(ctx.channel, DMChannel):
-                    location = "DMChannel"
-                else:
-                    c_name = ctx.channel.name if hasattr(ctx.channel, "name") else str(ctx.channel.type)
-                    location = f"channel {ctx.channel.id}:'{c_name}' in guild "
-                    if ctx.guild is None:
-                        location += "N/A"
-                    else:
-                        location += f"{ctx.guild.name}:{ctx.guild.id}"
-                logger.warning("Unauthorized access attempt for command %s by user %s:%s in %s",
-                               get_cmd_name(ctx.command), ctx.user.name, ctx.user.id, location)
-                raise CheckFailure("Can't execute command")\
-                    from NoPermissionsException("Only users with the member role may use this command")
-            return True
-        CmdAnnotation.annotate_cmd(func, CmdAnnotation.user)
-        return commands.check(predicate)(func)
-    return decorator
-
-
 def online_only() -> Callable[[_T], _T]:
-    # noinspection PyUnusedLocal
+    @cmd_check
     async def predicate(ctx: ApplicationContext) -> bool:
-        if not STATE.is_online():
-            raise CheckFailure("Can't execute command") \
-                from BotOfflineException("Can't execute command currently")
+        # noinspection PyTypeChecker
+        bot = ctx.bot  # type: AccountingBot
+        if not bot.is_online():
+            raise CheckFailure() from BotOfflineException("Can't execute the command while the bot is offline")
         return True
     return commands.check(predicate)
 
 
-def main_guild_only() -> Callable[[_T], _T]:
-    def decorator(func):
-        async def predicate(ctx: ApplicationContext) -> bool:
-            if (ctx.guild is None or ctx.guild.id != STATE.guild) and ctx.user.id != STATE.owner:
-                raise CheckFailure() from NoPermissionsException(
-                    "This command can only be executed when the bot is fully online")
-            return True
-        CmdAnnotation.annotate_cmd(func, CmdAnnotation.main_guild)
-        return commands.check(predicate)(func)
-    return decorator
-
-
 def owner_only() -> Callable[[_T], _T]:
     def decorator(func):
+        @cmd_check
         async def predicate(ctx: Context) -> bool:
             if not await ctx.bot.is_owner(ctx.author):
-                raise NotOwner("You do not own this bot.")
+                raise NotOwner("Command may only be used by the owner")
             return True
 
         CmdAnnotation.annotate_cmd(func, CmdAnnotation.owner)
@@ -566,109 +400,6 @@ def guild_only() -> Callable:
     return inner
 
 
-class Item(object):
-    def __init__(self, name: str, amount: Union[int, float]):
-        self.name = name
-        self.amount = amount
-
-    @staticmethod
-    def sort_list(items: List[Item], order: List[str]) -> None:
-        for item in items:  # type: Item
-            if item.name not in order:
-                order.append(item.name)
-        items.sort(key=lambda x: order.index(x.name) if x.name in order else math.inf)
-
-    @staticmethod
-    def parse_ingame_list(raw: str) -> List[Item]:
-        items = []  # type: List[Item]
-        for line in raw.split("\n"):
-            if re.fullmatch("[a-zA-Z ]*", line):
-                continue
-            line = re.sub("\t", "    ", line.strip())  # Replace Tabs with spaces
-            line = re.sub("^\\d+ *", "", line.strip())  # Delete first column (numeric Index)
-            if len(re.findall("[0-9]+", line.strip())) > 1:
-                line = re.sub(" *[0-9.]+$", "", line.strip())  # Delete last column (Valuation, decimal)
-            item = re.sub(" +\\d+$", "", line)
-            quantity = line.replace(item, "").strip()
-            if len(quantity) == 0:
-                continue
-            item = item.strip()
-            found = False
-            for i in items:
-                if i.name == item:
-                    i.amount += int(quantity)
-                    found = True
-                    break
-            if not found:
-                items.append(Item(item, int(quantity)))
-        Item.sort_list(items, resource_order)
-        return items
-
-    @staticmethod
-    def parse_list(raw: str, skip_negative=False) -> List[Item]:
-        items = []  # type: List[Item]
-        for line in raw.split("\n"):
-            if re.fullmatch("[a-zA-Z ]*", line):
-                continue
-            line = re.sub("\t", "    ", line.strip())  # Replace Tabs with spaces
-            line = re.sub("^\\d+ *", "", line.strip())  # Delete first column (numeric Index)
-            item = re.sub(" +[0-9.]+$", "", line)
-            quantity = line.replace(item, "").strip()
-            if len(quantity) == 0:
-                continue
-            item = item.strip()
-            quantity = float(quantity)
-            if skip_negative and quantity < 0:
-                continue
-            items.append(Item(item, quantity))
-        Item.sort_list(items, resource_order)
-        return items
-
-    @staticmethod
-    def to_string(items):
-        res = ""
-        for item in items:
-            res += f"{item.name}: {item.amount}\n"
-        return res
-
-
-class TransactionBase(ABC):
-    @abstractmethod
-    def has_permissions(self, user_name: int) -> bool:
-        pass
-
-
-# noinspection PyMethodMayBeStatic
-class TransactionLike(TransactionBase, ABC):
-    def get_from(self) -> Optional[str]:
-        return None
-
-    def get_to(self) -> Optional[str]:
-        return None
-
-    @abstractmethod
-    def get_amount(self) -> int:
-        pass
-
-    def get_time(self) -> Optional[datetime.datetime]:
-        return None
-
-    @abstractmethod
-    def get_purpose(self) -> str:
-        pass
-
-    def get_reference(self) -> Optional[str]:
-        return None
-
-
-class OCRBaseData:
-    def __init__(self) -> None:
-        super().__init__()
-        self.bounding_box = None  # type: dict[str, int] | None
-        self.img = None  # type: ndarray | None
-        self.valid = False  # type: bool
-
-
 class ErrorHandledModal(Modal):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -679,7 +410,7 @@ class ErrorHandledModal(Modal):
 
 
 class ErrorHandledView(View):
-    def __init__(self, *items: Item,
+    def __init__(self, *items: discord.ui.Item,
                  timeout: Optional[float] = 300.0):
         super().__init__(*items, timeout=timeout)
 
@@ -703,11 +434,11 @@ class AutoDisableView(ErrorHandledView):
             except discord.errors.HTTPException as e:
                 logger.info("Can't edit view: %s", e)
                 try:
-                    c = await STATE.bot.fetch_channel(self.message.channel.id)
-                    msg = await c.fetch_message(self.message.id)
+                    # Maybe this can be removed or has to be refactored
+                    msg = await self.message.channel.fetch_message(self.message.id)
                     await msg.edit(view=None)
                 except discord.errors.HTTPException as e2:
-                    logger.info("Can't fetch message of view to edit: %s", e2)
+                    logger.error("Can't fetch message of view to edit: %s", e2)
         self.clear_items()
         self.disable_all_items()
 
@@ -737,61 +468,6 @@ class State(Enum):
     online = 4
 
 
-class ShutdownOrderType(Enum):
-    user_input = 0
-    database = 1
-    final = 2
-
-    def __eq__(self, o: object) -> bool:
-        if not isinstance(o, ShutdownOrderType):
-            return False
-        return o.value == self.value
-
-
-def shutdown_procedure(order: ShutdownOrderType):
-    def decorator(func: Callable):#
-        ShutdownProcedure(order, func)
-    return decorator
-
-
-class ShutdownProcedure(object):
-    def __init__(self, order: ShutdownOrderType, callback: Callable):
-        self.order = order
-        self.callable = callback
-        terminate_funcs.append(self)
-
-    @staticmethod
-    async def execute_phase(phase: ShutdownOrderType):
-        for procedure in filter(lambda s: s.order == phase, terminate_funcs):
-            try:
-                if asyncio.iscoroutinefunction(procedure.callable):
-                    await procedure.callable()
-                else:
-                    procedure.callable()
-            except Exception as error:
-                log_error(logger, error, location="shutdown")
-
-
-@shutdown_procedure(order=ShutdownOrderType.user_input)
 def shutdown_executor():
     logger.warning("Stopping data_utils executor")
     executor.shutdown(wait=True)
-
-
-async def terminate_bot():
-    logger.critical("Terminating bot")
-    STATE.state = State.terminated
-    activity = discord.Activity(name="Shutting down...", type=ActivityType.custom)
-    if BOT is not None:
-        await BOT.change_presence(status=discord.Status.idle, activity=activity)
-    await ShutdownProcedure.execute_phase(ShutdownOrderType.user_input)
-    # Wait for all pending interactions to complete
-    logger.warning("Waiting for interactions to complete")
-    await asyncio.sleep(15)
-    await ShutdownProcedure.execute_phase(ShutdownOrderType.database)
-    await ShutdownProcedure.execute_phase(ShutdownOrderType.final)
-    await asyncio.sleep(10)
-    # Closing the connection should end the event loop directly, causing the program to exit
-    # Should this not happen within 10 seconds, the program will be terminated anyways
-    logger.error("Force closing process")
-    exit(1)

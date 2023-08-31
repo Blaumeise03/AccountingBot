@@ -7,17 +7,17 @@ from typing import Callable, Dict, Union, Optional
 import xmltodict as xmltodict
 from discord.ext.commands import Bot, Context
 
-logger = logging.getLogger("bot.localisation")
+logger = logging.getLogger("bot.localization")
 
 
-class LocalisationHandler(object):
-    default_handler = None  # type: LocalisationHandler | None
+class LocalizationHandler(object):
+    default_handler = None  # type: LocalizationHandler | None
 
     def __init__(self) -> None:
         self.languages = {}  # type: Dict[str, Language]
         self._current_locale = contextvars.ContextVar("_current_locale")
         self.fallback = "en"
-        LocalisationHandler.default_handler = self
+        LocalizationHandler.default_handler = self
 
     def init_bot(self, bot: Bot, get_locale: Callable[[Context], str]):
         async def pre_hook_localization(ctx: Context):
@@ -40,7 +40,7 @@ class LocalisationHandler(object):
                     self._add_translation(line["key"], lan, val)
 
     def load_from_xml(self, path: Union[PathLike, str]):
-        logger.info("Loading localisation data")
+        logger.info("Adding localisation data %s", path)
         with open(path, mode="rb") as file:
             lang_dict = xmltodict.parse(file, encoding="UTF-8")
         for key, translations in lang_dict["translations"].items():
@@ -48,7 +48,7 @@ class LocalisationHandler(object):
                 if type(value) != str:
                     raise LocalizationException(f"Value for {lang}:{key} is not a string, got {type(value)}:{value}")
                 self._add_translation(key, lang, value)
-        logger.info("Localisation data loaded")
+        logger.info("Localisation data added")
 
     def set_current_locale(self, locale: str):
         self._current_locale.set(locale)
@@ -67,11 +67,13 @@ class LocalisationHandler(object):
             return self.languages[self.fallback].get_translation(key, raise_not_found)
 
     @classmethod
-    def get_translation(cls, key: str, raise_not_found=True):
+    def get_translation(cls, key: str, fallback: Optional[str] = None, raise_not_found=True):
+        if cls.default_handler is None:
+            return fallback
         return cls.default_handler.get_text(key, raise_not_found)
 
 
-t_ = LocalisationHandler.get_translation
+t_ = LocalizationHandler.get_translation
 
 
 class Language(object):
@@ -79,7 +81,7 @@ class Language(object):
         self.name = name
         self.translations = {}  # type: Dict[str, str]
 
-    def get_translation(self, key: str, raise_not_found=True) -> Optional[str]:
+    def get_translation(self, key: str, raise_not_found=False) -> Optional[str]:
         if key in self.translations:
             return self.translations[key]
         if raise_not_found:

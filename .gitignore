@@ -14,7 +14,7 @@ resources/eve_data
 
 python
 .env
-config.json
+config*.json
 resources/application_config.json
 tests/test_config.json
 user_overwrites.json

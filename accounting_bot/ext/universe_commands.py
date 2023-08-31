@@ -1,34 +1,39 @@
+# PluginConfig
+# Name: UniversePlugin
+# Author: Blaumeise03
+# Depends-On: [accounting_bot.universe.pi_planer]
+# Localization: universe_commands_lang.xml
+# End
 import io
 import logging
-from typing import TYPE_CHECKING
-import numpy as np
 
 import discord
+import numpy as np
 from discord import ApplicationContext, option, SlashCommandGroup, ChannelType, Embed, Color
 from discord.ext import commands
 
 from accounting_bot import utils
+from accounting_bot.main_bot import BotPlugin, AccountingBot, PluginWrapper
 from accounting_bot.universe import data_utils
 from accounting_bot.universe.pi_planer import PiPlanningSession, PiPlanningView
 
-if TYPE_CHECKING:
-    from bot import BotState, AccountingBot
-
-logger = logging.getLogger("bot.ext.uni")
+logger = logging.getLogger("ext.universe.commands")
 
 
-def setup(bot: "AccountingBot"):
-    logger.info("Adding UniverseCommands")
-    bot.add_cog(UniverseCommands(bot.state))
+class UniversePlugin(BotPlugin):
+    def __init__(self, bot: AccountingBot, wrapper: PluginWrapper) -> None:
+        super().__init__(bot, wrapper, logger)
 
+    def on_load(self):
+        self.register_cog((UniverseCommands(self)))
 
-def teardown(bot: "AccountingBot"):
-    bot.remove_cog("UniverseCommands")
+    def on_unload(self):
+        super().on_unload()
 
 
 class UniverseCommands(commands.Cog):
-    def __init__(self, state: "BotState"):
-        self.state = state
+    def __init__(self, plugin: UniversePlugin):
+        self.plugin = plugin
 
     cmd_pi = SlashCommandGroup(name="pi", description="Access planetary production data.")
 
@@ -82,14 +87,14 @@ class UniverseCommands(commands.Cog):
                 await ctx.followup.send(f"\"{const_sys}\" is not a system/constellation.", ephemeral=silent)
                 return
             if distance is None:
-                await ctx.followup.send(f"An distance of jumps from the selected system is required.", ephemeral=silent)
+                await ctx.followup.send("An distance of jumps from the selected system is required.", ephemeral=silent)
                 return
             result = await data_utils.get_best_pi_by_planet(sys.name, distance, resource, amount)
             title = f"{resource} near {const_sys}"
             has_sys = True
         result = sorted(result, key=lambda r: r["out"], reverse=True)
         msg = "Output in units per factory per hour\n```"
-        msg += f"{'Planet':<12}: {'Output':<6}" + (f"  Jumps\n" if has_sys else "\n")
+        msg += f"{'Planet':<12}: {'Output':<6}" + ("  Jumps\n" if has_sys else "\n")
         for res in result:
             msg += f"\n{res['p_name']:<12}: {res['out']:6.2f}" + (f"  {res['distance']}j" if has_sys else "")
             if len(msg) > 3900:
@@ -102,7 +107,7 @@ class UniverseCommands(commands.Cog):
 
     @cmd_pi.command(name="planer", description="Opens the pi planer to manage your planets")
     async def cmd_pi_plan(self, ctx: ApplicationContext):
-        plan = PiPlanningSession(ctx.user)
+        plan = self.plugin.bot.get_plugin("PiPlanerPlugin").get_session(ctx.user)  # type: PiPlanningSession
         await plan.load_plans()
         if ctx.channel.type == ChannelType.private:
             interaction = await ctx.response.send_message(
@@ -164,7 +169,7 @@ class UniverseCommands(commands.Cog):
         msg += msg_crit
         if len(msg) > 1800:
             files = [utils.string_to_file(msg.replace("```", ""), filename="route.txt")]
-            msg = f"\n**Die Route ist zu lang** für eine Nachricht, daher wurde sie in einer Textdatei gespeichert."
+            msg = "\n**Die Route ist zu lang** für eine Nachricht, daher wurde sie in einer Textdatei gespeichert."
             if len(msg_crit) < 1800:
                 msg += msg_crit
         else:

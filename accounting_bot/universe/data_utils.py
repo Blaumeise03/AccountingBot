@@ -1,35 +1,164 @@
+# PluginConfig
+# Name: DataUtilsPlugin
+# Author: Blaumeise03
+# End
 import collections
 import logging
 import math
 import re
 from datetime import datetime
-from typing import List, Tuple, Optional
+from typing import List, Tuple, Optional, Dict, Union
 
 import networkx as nx
 import numpy as np
 import plotly.graph_objects as go
 from discord import Embed
 
-from accounting_bot import sheet, utils
-from accounting_bot.config import ConfigTree
+from accounting_bot.config import Config
 from accounting_bot.exceptions import InputException
+from accounting_bot.ext.members import MembersPlugin
+from accounting_bot.main_bot import BotPlugin, AccountingBot, PluginWrapper
 from accounting_bot.universe.models import System, Celestial
 from accounting_bot.universe.universe_database import UniverseDatabase
-from accounting_bot.utils import wrap_async, shutdown_procedure, ShutdownOrderType
+from accounting_bot.utils import wrap_async
 
 AU_RATIO = 149597870700
 
-logger = logging.getLogger("data.utils")
+logger = logging.getLogger("ext.data.utils")
+data_plugin = None  # type: DataUtilsPlugin | None
+CONFIG_TREE = {
+    "db": {
+        "username": (str, "root"),
+        "password": (str, "root"),
+        "host": (str, "127.0.0.1"),
+        "port": (int, 3306),
+        "database": (str, "universe"),
+    }
+}
+CNFG_KILL_TREE = {
+        "channel": (int, -1),
+        "admins": (list, []),
+        "home_regions": (list, []),
+        "field_id": (str, "TITLE"),
+        "regex_id": (str, "Kill Report #(\\d+)"),
+        "field_final_blow": (str, "Pilot"),
+        "regex_final_blow": (str, ".*"),
+        "field_ship": (str, "Killed"),
+        "regex_ship": (str, ".*"),
+        "field_kill_value": (str, "ISK"),
+        "regex_kill_value": (str, ".*"),
+        "field_system": (str, "Location"),
+        "regex_system": (str, "([-a-zA-Z0-9 ]+) < .* < .*")
+}
 
-db = None  # type: UniverseDatabase | None
-killmail_config = None  # type: ConfigTree | None
-killmail_admins = []  # type: List[int]
+
+class DataUtilsPlugin(BotPlugin):
+    def __init__(self, bot: AccountingBot, wrapper: PluginWrapper) -> None:
+        super().__init__(bot, wrapper, logger)
+        self.db = None  # type: UniverseDatabase | None
+        global data_plugin
+        if data_plugin is not None:
+            logger.warning("Overwriting singleton DataUtilsPlugin")
+        data_plugin = self
+        self.config = bot.create_sub_config("data_utils")
+        self.config.load_tree(CONFIG_TREE)
+        self.killmail_config = self.config.create_sub_config("killmail_parser")
+        self.killmail_config.load_tree(CNFG_KILL_TREE)
+        self.resource_order = {}  # type: Dict[str, int]
+
+    def on_load(self):
+        self.info("Starting database connection")
+        self.db = UniverseDatabase(
+            username=self.config["db.username"],
+            password=self.config["db.password"],
+            host=self.config["db.host"],
+            port=self.config["db.port"],
+            database=self.config["db.database"]
+        )
+        self.info("Database connected")
+        self.resource_order.clear()
+        with open("resources/ee_resources.plain", "r") as file:
+            i = 0
+            for line in file:
+                line = line.strip("\n").strip()
+                if len(line) == 0:
+                    continue
+                self.resource_order[line] = i
+                i += 1
+        self.info("Loaded resource table")
+
+    def on_unload(self):
+        logger.info("Closing database connection")
+        self.db.engine.dispose()
 
 
-@shutdown_procedure(order=ShutdownOrderType.database)
-def shutdown_db():
-    logger.warning("Closing UniverseDatabase pool")
-    db.engine.dispose()
+class Item(object):
+    def __init__(self, name: str, amount: Union[int, float]):
+        self.name = name
+        self.amount = amount
+
+    @staticmethod
+    def sort_list(items: List["Item"], order: Union[List[str], Dict[str, int]]) -> None:
+        if type(order) == list:
+            for item in items:  # type: Item
+                if item.name not in order:
+                    order.append(item.name)
+            items.sort(key=lambda x: order.index(x.name) if x.name in order else math.inf)
+        elif type(order) == dict:
+            items.sort(key=lambda x: order[x.name] if x.name in order else math.inf)
+
+    @staticmethod
+    def parse_ingame_list(raw: str) -> List["Item"]:
+        items = []  # type: List[Item]
+        for line in raw.split("\n"):
+            if re.fullmatch("[a-zA-Z ]*", line):
+                continue
+            line = re.sub("\t", "    ", line.strip())  # Replace Tabs with spaces
+            line = re.sub("^\\d+ *", "", line.strip())  # Delete first column (numeric Index)
+            if len(re.findall(r"\d+", line.strip())) > 1:
+                line = re.sub(" *[0-9.]+$", "", line.strip())  # Delete last column (Valuation, decimal)
+            item = re.sub(" +\\d+$", "", line)
+            quantity = line.replace(item, "").strip()
+            if len(quantity) == 0:
+                continue
+            item = item.strip()
+            found = False
+            for i in items:
+                if i.name == item:
+                    i.amount += int(quantity)
+                    found = True
+                    break
+            if not found:
+                items.append(Item(item, int(quantity)))
+        Item.sort_list(items, data_plugin.resource_order)
+        return items
+
+    @staticmethod
+    def parse_list(raw: str, skip_negative=False) -> List["Item"]:
+        items = []  # type: List[Item]
+        for line in raw.split("\n"):
+            if re.fullmatch("[a-zA-Z ]*", line):
+                continue
+            line = re.sub("\t", "    ", line.strip())  # Replace Tabs with spaces
+            line = re.sub("^\\d+ *", "", line.strip())  # Delete first column (numeric Index)
+            item = re.sub(" +[0-9.]+$", "", line)
+            quantity = line.replace(item, "").strip()
+            if len(quantity) == 0:
+                continue
+            item = item.strip()
+            quantity = float(quantity)
+            if skip_negative and quantity < 0:
+                continue
+            items.append(Item(item, quantity))
+        Item.sort_list(items, data_plugin.resource_order)
+        return items
+
+    @staticmethod
+    def to_string(items):
+        res = ""
+        for item in items:
+            res += f"{item.name}: {item.amount}\n"
+        return res
 
 
 def create_pi_boxplot(constellation_name: str,
@@ -40,8 +169,8 @@ def create_pi_boxplot(constellation_name: str,
     if region_names is not None and len(region_names) == 0:
         region_names = None
     logger.info("Creating boxplot for constellation %s, resources: %s", constellation_name, resource_names)
-    res = db.fetch_resources(constellation_name, resource_names)
-    res_max = db.fetch_max_resources(region_names)
+    res = data_plugin.db.fetch_resources(constellation_name, resource_names)
+    res_max = data_plugin.db.fetch_max_resources(region_names)
     data = {}
     for r in res:
         if r["res"] in data:
@@ -49,7 +178,7 @@ def create_pi_boxplot(constellation_name: str,
         else:
             data[r["res"]] = [r["out"] / res_max[r["res"]]]
     # noinspection PyTypeChecker
-    data = collections.OrderedDict(sorted(data.items(), key=lambda x: utils.resource_order.index(x[0])))
+    data = collections.OrderedDict(sorted(data.items(), key=lambda x: data_plugin.resource_order[x[0]]))
     data_keys = list(data)
     data_values = list(data.values())
     # noinspection PyPep8Naming
@@ -117,7 +246,7 @@ def create_pi_boxplot_async(constellation_name: str,
 def get_all_pi_planets(constellation_name: str,
                        resource_names: List[str] = None,
                        amount: Optional[int] = None):
-    return db.fetch_resources(constellation_name, resource_names, amount)
+    return data_plugin.db.fetch_resources(constellation_name, resource_names, amount)
 
 
 @wrap_async
@@ -139,7 +268,7 @@ def get_best_pi_planets(constellation_name: str,
     :param amount:
     :return:
     """
-    return db.fetch_resources(constellation_name, [resource_name], amount)
+    return data_plugin.db.fetch_resources(constellation_name, [resource_name], amount)
 
 
 @wrap_async
@@ -147,32 +276,32 @@ def get_best_pi_by_planet(constellation_name: str,
                           distance: int,
                           resource_name: str,
                           amount: Optional[int] = None):
-    return db.fetch_ressource_by_planet(constellation_name, distance, resource_name, amount)
+    return data_plugin.db.fetch_ressource_by_planet(constellation_name, distance, resource_name, amount)
 
 
 @wrap_async
 def get_max_pi_planets(region_names: Optional[List[str]] = None):
-    return db.fetch_max_resources(region_names)
+    return data_plugin.db.fetch_max_resources(region_names)
 
 
 @wrap_async
 def get_constellation(const_name: str = None, planet_id: int = None):
-    return db.fetch_constellation(const_name, planet_id)
+    return data_plugin.db.fetch_constellation(const_name, planet_id)
 
 
 @wrap_async
 def get_planets(planet_ids: List[int]):
-    return db.fetch_planets(planet_ids)
+    return data_plugin.db.fetch_planets(planet_ids)
 
 
 @wrap_async
 def get_system(system_name: str):
-    return db.fetch_system(system_name)
+    return data_plugin.db.fetch_system(system_name)
 
 
 @wrap_async
 def get_gates(system_name: str):
-    return db.fetch_gates(system_name)
+    return data_plugin.db.fetch_gates(system_name)
 
 
 @wrap_async
@@ -182,26 +311,25 @@ def create_image(fig: go.Figure, *args, **kwargs):
 
 @wrap_async
 def save_pi_plan(*args, **kwargs):
-    return db.save_pi_plan(*args, **kwargs)
+    return data_plugin.db.save_pi_plan(*args, **kwargs)
 
 
 @wrap_async
 def delete_pi_plan(*args, **kwargs):
-    return db.delete_pi_plan(*args, **kwargs)
+    return data_plugin.db.delete_pi_plan(*args, **kwargs)
 
 
 @wrap_async
 def get_pi_plan(*args, **kwargs):
-    return db.get_pi_plan(*args, **kwargs)
+    return data_plugin.db.get_pi_plan(*args, **kwargs)
 
 
 @wrap_async
 def save_market_data(items):
-    db.save_market_data(items)
+    data_plugin.db.save_market_data(items)
 
 
-async def init_market_data():
-    items = await sheet.get_market_data()
+async def init_market_data(items: Dict[str, Dict[str, int]]):
     await save_market_data(items)
 
 
@@ -209,20 +337,20 @@ async def init_market_data():
 def get_market_data(
         item_names: Optional[List[str]] = None,
         item_type: Optional[str] = None):
-    return db.get_market_data(item_names, item_type)
+    return data_plugin.db.get_market_data(item_names, item_type)
 
 
 @wrap_async
 def get_available_market_data(item_type: str):
-    return db.get_available_market_data(item_type)
+    return data_plugin.db.get_available_market_data(item_type)
 
 
 @wrap_async
 def get_items_by_type(item_type: str):
-    return db.fetch_items(item_type)
+    return data_plugin.db.fetch_items(item_type)
 
 
-def graph_map_to_figure(graph: nx.Graph, include_highsec=True, node_size=3.5) -> go.Figure:
+def graph_map_to_figure(graph: nx.Graph, include_highsec=True, node_size=3.5, show_info=False) -> go.Figure:
     edge_x = {"n": [], "l": [], "m": [], "h": []}
     edge_y = {"n": [], "l": [], "m": [], "h": []}
     edge_traces = []
@@ -237,9 +365,9 @@ def graph_map_to_figure(graph: nx.Graph, include_highsec=True, node_size=3.5) ->
         edge_type = "n"
         if data["routes"] > 25:
             edge_type = "h"
-        elif data["routes"] > 15:
+        elif data["routes"] > 10:
             edge_type = "m"
-        elif data["routes"] > 0:
+        elif data["routes"] > 1:
             edge_type = "l"
         edge_x[edge_type].append(x0)
         edge_x[edge_type].append(x1)
@@ -250,22 +378,22 @@ def graph_map_to_figure(graph: nx.Graph, include_highsec=True, node_size=3.5) ->
 
     edge_traces.append(go.Scatter(
         x=edge_x["n"], y=edge_y["n"],
-        line=dict(width=0.5, color="#e8a623"),
+        line=dict(width=0.5, color="#828282"),
         hoverinfo='none',
         mode='lines'))
     edge_traces.append(go.Scatter(
         x=edge_x["l"], y=edge_y["l"],
-        line=dict(width=0.75, color="#ba4907"),
+        line=dict(width=0.75, color="#e8a623"),
         hoverinfo='none',
         mode='lines'))
     edge_traces.append(go.Scatter(
         x=edge_x["m"], y=edge_y["m"],
-        line=dict(width=1, color="#d90000"),
+        line=dict(width=1, color="#ba4907"),
         hoverinfo='none',
         mode='lines'))
     edge_traces.append(go.Scatter(
         x=edge_x["h"], y=edge_y["h"],
-        line=dict(width=1.5, color="#ff0303"),
+        line=dict(width=1.5, color="#d90000"),
         hoverinfo='none',
         mode='lines'))
 
@@ -326,25 +454,25 @@ def graph_map_to_figure(graph: nx.Graph, include_highsec=True, node_size=3.5) ->
     colorscale = [[0.00, "rgb(36, 36, 36)"],  # 0
                   [0.01, "rgb(36, 36, 36)"],  # < 1
                   [0.15, "rgb(88, 145, 22)"],  # 6
-                  [0.30, "rgb(166, 161, 31)"],  # 12
-                  [0.50, "rgb(173, 99, 14)"],  # 20
-                  [0.90, "rgb(158, 52, 6)"],  # 36
+                  [0.3, "rgb(166, 161, 31)"],  # 12
+                  [0.45, "rgb(173, 99, 14)"],  # 20
+                  [0.60, "rgb(158, 52, 6)"],  # 36
                   [1.00, "rgb(232, 0, 0)"],  # 40
                   ]
     node_trace_normal = go.Scatter(
         x=node_x_normal, y=node_y_normal,
-        mode="markers",
+        mode="markers" if not show_info else "markers+text",
         hoverinfo="text",
         marker=dict(
             showscale=True,
             cmin=0,
-            cmax=max_mark,
+            cmax=200,
             colorscale=colorscale,
             reversescale=False,
             color=[],
             size=node_size,
             colorbar=dict(
-                tickvals=[0, 5, 10, 20, 30, 40],
+                tickvals=[0, 10, 25, 50, 100, 200],
                 thickness=15,
                 title="Systems covered",
                 xanchor="left",
@@ -379,8 +507,8 @@ def graph_map_to_figure(graph: nx.Graph, include_highsec=True, node_size=3.5) ->
     # noinspection PyTypeChecker
     fig = go.Figure(data=edge_traces + [node_trace_normal] + [node_trace_low_entry],
                     layout=go.Layout(
-                        title=f"Lowsec Autopilot Routes</b> <br><sup><i>Shortest route from every nullsec system to "
-                              f"the nearest lowsec system</i></sup>",
+                        title="Lowsec Autopilot Routes</b> <br><sup><i>Shortest route from every nullsec system to "
+                              "the nearest lowsec system</i></sup>",
                         titlefont_size=16,
                         showlegend=False,
                         hovermode="closest",
@@ -400,7 +528,7 @@ def create_map_graph(inc_low_entries=False):
         return 10
 
     logger.debug("Loading map")
-    systems = db.fetch_map()
+    systems = data_plugin.db.fetch_map()
     logger.debug("Map loaded")
     graph = nx.Graph()
     # max: x=319045588875206976, y=145615391401048000, z=472860102256057024
@@ -472,16 +600,25 @@ def lowsec_pipe_analysis(graph: nx.Graph, lowsec_entries: List[str]):
     current_nodes = end_notes
     next_nodes = []
     logger.info("Found %s end systems", len(current_nodes))
+
+    def incr_path(c_n):
+        all_nodes[c_n]["sucs"] += 1
+        if all_nodes[c_n]["suc"] is not None:
+            edge = graph[c_n][all_nodes[c_n]["suc"]]
+            edge["routes"] += 1
+            incr_path(all_nodes[c_n]["suc"])
+
+    visited = []
     while True:
         while len(current_nodes) > 0:
             node = current_nodes.pop(0)
             if all_nodes[node]["suc"] is None:
                 continue
             n = all_nodes[node]["suc"]
-            next_nodes.append(n)
-            all_nodes[n]["sucs"] = all_nodes[node]["sucs"] + 1
-            data = graph[node][n]
-            data["routes"] += 1
+            if n not in visited:
+                next_nodes.append(n)
+                visited.append(n)
+            incr_path(node)
         if len(next_nodes) == 0:
             logger.info("Processed all systems")
             break
@@ -492,12 +629,10 @@ def lowsec_pipe_analysis(graph: nx.Graph, lowsec_entries: List[str]):
 @wrap_async
 def find_path(start_name: str, end_name: str, sec_min: float = None, sec_max: float = None):
     def filter_edges(o, d, edge):
-        if sec_min is not None:
-            if edge["sec_dest"] <= sec_min:
-                return None
-        if sec_max is not None:
-            if edge["sec_dest"] > sec_max:
-                return None
+        if sec_min is not None and edge["sec_dest"] <= sec_min:
+            return None
+        if sec_max is not None and edge["sec_dest"] > sec_max:
+            return None
         return 1
 
     graph = create_map_graph()
@@ -520,7 +655,7 @@ def find_path(start_name: str, end_name: str, sec_min: float = None, sec_max: fl
         raise InputException(
             f"No available route between {start_name} and {end_name} with security between {sec_min} and {sec_max}"
         ) from e
-    systems = db.fetch_systems(path)
+    systems = data_plugin.db.fetch_systems(path)
     result = []  # type: List[Tuple[str, str, str, float]]
     for prev, current, dest in zip(path, path[1:], path[2:]):
         system = None
@@ -578,7 +713,7 @@ def find_lowsec_entries(start_name: str, max_distance: int = 35):
 
 @wrap_async
 def get_item(item_name: str):
-    return db.fetch_item(item_name)
+    return data_plugin.db.fetch_item(item_name)
 
 
 def extract_value(embed: Embed, field_name: str, field_regex: str):
@@ -601,28 +736,29 @@ def extract_value(embed: Embed, field_name: str, field_regex: str):
 
 
 @wrap_async
-def save_killmail(embed: Embed):
-    if killmail_config["field_id"] == "":
+def save_killmail(embed: Embed, member_plugin: MembersPlugin):
+    config = data_plugin.killmail_config
+    if config["field_id"] == "":
         return 0
     kill_data = {}
     for key in ["id", "final_blow", "ship", "kill_value", "system"]:
-        kill_data[key] = extract_value(embed, killmail_config[f"field_{key}"], killmail_config[f"regex_{key}"])
+        kill_data[key] = extract_value(embed, config[f"field_{key}"], config[f"regex_{key}"])
     if None in kill_data.values():
         logger.warning("Embed with title '%s' doesn't contains a valid killmail: %s", embed.title, kill_data)
         return 0
-    db.save_killmail(kill_data)
+    data_plugin.db.save_killmail(kill_data)
     m = re.fullmatch(r"\[[a-zA-Z0-9]+] (.*)", kill_data["final_blow"])
     if len(m.groups()) == 0:
         return 1
-    player, char, _ = utils.get_main_account(name=m.group(1))
+    player, _, _ = member_plugin.find_main_name(name=m.group(1))
     if player is None:
         return 1
-    db.save_bounty(int(kill_data["id"]), player, "M")
+    data_plugin.db.save_bounty(int(kill_data["id"]), player, "M")
     return 2
 
 
 def get_kill_id(embed: Embed):
-    kill_id = extract_value(embed, killmail_config["field_id"], killmail_config["regex_id"])
+    kill_id = extract_value(embed, data_plugin.killmail_config["field_id"], data_plugin.killmail_config["regex_id"])
     if kill_id is None or not kill_id.isnumeric():
         raise InputException(f"Embed doesn't contain a valid kill id: '{kill_id}'")
     return int(kill_id)
@@ -630,35 +766,34 @@ def get_kill_id(embed: Embed):
 
 @wrap_async
 def add_bounty(kill_id: int, player: str, bounty_type: str):
-    utils.get_main_account(name=player)
-    db.save_bounty(kill_id, player, bounty_type)
+    data_plugin.db.save_bounty(kill_id, player, bounty_type)
 
 
 @wrap_async
 def get_killmail(kill_id: int):
-    return db.get_killmail(kill_id)
+    return data_plugin.db.get_killmail(kill_id)
 
 
 @wrap_async
 def get_bounties(kill_id: int):
-    return db.get_bounty_by_killmail(kill_id)
+    return data_plugin.db.get_bounty_by_killmail(kill_id)
 
 
 @wrap_async
 def get_all_bounties(start: int, end: int):
-    return db.get_all_bounties(start, end)
+    return data_plugin.db.get_all_bounties(start, end)
 
 
 @wrap_async
 def get_bounties_by_player(start: datetime, end: datetime, user: str):
-    return db.get_bounties_by_player(start, end, user)
+    return data_plugin.db.get_bounties_by_player(start, end, user)
 
 
 @wrap_async
 def clear_bounties(kill_id: int):
-    return db.clear_bounties(kill_id)
+    return data_plugin.db.clear_bounties(kill_id)
 
 
 @wrap_async
-def verify_bounties(first: int, last: int, time: datetime = None):
-    return db.verify_bounties(first, last, time)
+def verify_bounties(members_plugin: MembersPlugin, first: int, last: int, time: datetime = None):
+    return data_plugin.db.verify_bounties(members_plugin, first, last, time)

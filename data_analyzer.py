@@ -103,8 +103,12 @@ def main_generate_map():
     lowsec_names = list(map(lambda s: s.name, lowsec_entries))
     data_utils.lowsec_pipe_analysis(graph, lowsec_names)
     inp = input("Please enter the node size (float): ")
-    inp = float(inp)
-    fig = data_utils.graph_map_to_figure(graph, False, node_size=inp)
+    size = float(inp)
+    inp = input("Show labels [y/n]? ")
+    show_info = False
+    if inp.casefold() == "y".casefold():
+        show_info = True
+    fig = data_utils.graph_map_to_figure(graph, False, node_size=size, show_info=show_info)
     logger.info("Saving map")
     fig.write_html("images/map.html")
     logger.info("Saved map to images/map.html")

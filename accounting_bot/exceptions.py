@@ -1,12 +1,6 @@
 from abc import ABC, abstractmethod
-from typing import TYPE_CHECKING
 
-from discord.ext.commands import CommandError
-
-if TYPE_CHECKING:
-    from bot import BotState
-
-STATE = None  # type: BotState | None
+from discord.ext.commands import CommandError, CheckFailure
 
 
 class InputException(CommandError):
@@ -21,6 +15,7 @@ class LoggedException(ABC, Exception):
     """
     An abstract exception that contains an error log that may be made public to the end user.
     """
+
     def __init__(self, *args: object) -> None:
         super().__init__(*args)
 
@@ -41,7 +36,8 @@ class GoogleSheetException(LoggedException):
     An exception that got caused during the interaction with a Google Sheet, containing a dedicated log with more
     details on what happened and the progress of.
     """
-    def __init__(self, log=None, *args: object, progress=None,) -> None:
+
+    def __init__(self, log=None, *args: object, progress=None, ) -> None:
         super().__init__(*args)
         if log is None:
             log = []
@@ -64,7 +60,7 @@ class ConfigDataTypeException(ConfigException):
 
 class BotOfflineException(Exception):
     def __init__(self, message="Action can't be executed", *args: object) -> None:
-        super().__init__(str(STATE.state) + ": " + str(message), *args)
+        super().__init__(str(message), *args)
 
 
 class PlanetaryProductionException(InputException):
@@ -83,9 +79,33 @@ class KillmailException(Exception):
     pass
 
 
-class NoPermissionsException(InputException):
+class NoPermissionException(InputException):
     pass
 
 
 class SingletonException(Exception):
+    pass
+
+
+class PluginException(Exception):
+    pass
+
+
+class PluginLoadException(PluginException):
+    pass
+
+
+class PluginDependencyException(PluginLoadException):
+    pass
+
+
+class PluginNotFoundException(PluginLoadException):
+    pass
+
+
+class UnhandledCheckException(CheckFailure):
+    pass
+
+
+class UsernameNotFoundException(Exception):
     pass

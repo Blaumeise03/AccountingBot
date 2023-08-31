@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<translations>
+    <help_setup>
+        <en>Creates the main menu for the bot and sets all required settings.</en>
+        <de>Erstellt das Hauptmenü für den Bot und setzt alle nötigen Einstellungen</de>
+    </help_setup>
+    <help_setup_long>
+        <en>Posts the main menu for the accounting and sets automatically all necessary settings. Requires a restart of the bot.</en>
+        <de>Postet das Hauptmenü für das Accounting und setzt dabei weitere Einstellungen automatisch. Erfordert einen anschließenden Neustart des Bots.</de>
+    </help_setup_long>
+    <help_setlogchannel>
+        <en>Sets the current channel as the accounting log, requires a restart</en>
+        <de>Setzt den aktuellen Channel als accounting log, erfordert einen Neustart</de>
+    </help_setlogchannel>
+    <help_createshortcut>
+        <en>Creates a compact menu for the accounting features</en>
+        <de>Erstellt ein kompaktes Menü für die Accountingfunktionen</de>
+    </help_createshortcut>
+    <help_balance>
+        <en>Get the balance of a user</en>
+        <de>Zeigt den eigenen Kontostand eines Nutzers</de>
+    </help_balance>
+    <help_balance_force>
+        <en>Enforce data reload from sheet</en>
+        <de>Erzwingt das Neuladen aus dem Sheet</de>
+    </help_balance_force>
+    <help_balance_user>
+        <en>The user to lookup (if not specified, your balance will be shown)</en>
+        <de>Der Nutzer dessen Kontostand abgefragt werden soll (oder weglassen um den eigenen zu sehen)</de>
+    </help_balance_user>
+</translations>

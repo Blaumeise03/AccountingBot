@@ -5,16 +5,13 @@ from typing import Union, Optional, Tuple, List, Sequence
 import mariadb
 from mariadb import Cursor, Connection
 
-from accounting_bot.utils import shutdown_procedure, ShutdownOrderType
+from accounting_bot.exceptions import DatabaseException
 
-logger = logging.getLogger("database")
-connector = None  # type: DatabaseConnector | None
+logger = logging.getLogger("ext.accounting.db")
 
 
-class DatabaseConnector:
+class AccountingDB:
     def __init__(self, username: str, password: str, host: str, port: str, database: str) -> None:
-        global connector
-        connector = self
         self.cursor = None  # type: Cursor | None
         self.con = None  # type: Connection | None
         self.username = username
@@ -33,6 +30,8 @@ class DatabaseConnector:
                 counter += 1
                 logger.warning(f"Retrying connection in {counter * 2} seconds")
                 sleep(counter * 2)
+        if not connected:
+            raise DatabaseException(f"Couldn't connect to MariaDB database on {self.host}:{self.port}")
 
     def try_connect(self) -> None:
         logger.info("Connecting to database...")
@@ -282,11 +281,3 @@ class DatabaseConnector:
         except mariadb.Error as e:
             logger.error(f"Error while trying to delete a shortcut message: {e}")
             raise e
-
-
-@shutdown_procedure(order=ShutdownOrderType.database)
-def shutdown_db_connector():
-    if connector is None:
-        return
-    logger.warning("Closing SQL connection")
-    connector.con.close()
