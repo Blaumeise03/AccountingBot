@@ -59,15 +59,5 @@ intents.reactions = True
 intents.members = True
 
 bot = AccountingBot(intents=intents, help_command=None, config_path=CNFG_PATH)
-bot.load_plugins()
 
-
-def handle_asyncio_exception(error_loop: AbstractEventLoop, context: dict[str, Any]):
-    logger.error("Unhandled exception in event_loop: %s", context["message"])
-    if "exception" in context:
-        utils.log_error(logger, error=context["exception"], location="event_loop")
-
-
-loop.set_exception_handler(handle_asyncio_exception)
-
-loop.run_until_complete(bot.start(TOKEN))
+bot.run(TOKEN)

@@ -1,3 +1,4 @@
+import asyncio
 import functools
 import importlib
 import inspect
@@ -6,12 +7,14 @@ import logging
 import os
 import pkgutil
 import re
+import signal
 import sys
 from abc import ABC
+from asyncio import AbstractEventLoop
 from enum import Enum
 from os import PathLike
 from types import ModuleType
-from typing import Dict, Union, List, Optional, Tuple
+from typing import Dict, Union, List, Optional, Tuple, Any
 
 import discord
 from discord import ApplicationContext, ApplicationCommandError, User, Member, Embed, Color, option, Thread
@@ -23,7 +26,7 @@ from accounting_bot.config import Config
 from accounting_bot.exceptions import PluginLoadException, PluginNotFoundException, PluginDependencyException, \
     InputException
 from accounting_bot.localization import LocalizationHandler
-from accounting_bot.utils import State, log_error, send_exception
+from accounting_bot.utils import State, log_error, send_exception, owner_only
 
 logger = logging.getLogger("bot.main")
 
@@ -40,6 +43,13 @@ base_config = {
     "test_server": (int, -1),
     "main_server": (int, -1)
 }
+
+
+# noinspection PyUnusedLocal
+def _handle_asyncio_exception(error_loop: AbstractEventLoop, context: dict[str, Any]):
+    logger.error("Unhandled exception in event_loop: %s", context["message"])
+    if "exception" in context:
+        utils.log_error(logger, error=context["exception"], location="event_loop")
 
 
 @functools.total_ordering
@@ -77,6 +87,8 @@ class AccountingBot(commands.Bot):
         # It is correct, trust me ;-)
         # noinspection PyTypeChecker
         self.add_application_command(cmd_status)
+        # noinspection PyTypeChecker
+        self.add_application_command(cmd_stop)
 
         def _get_locale(ctx: commands.Context):
             if isinstance(ctx, ApplicationContext) and ctx.locale is not None:
@@ -164,7 +176,8 @@ class AccountingBot(commands.Bot):
                 logger.error("Error while enabling plugin %s:%s", plugin.module_name, plugin.name)
                 utils.log_error(logger, e)
 
-    async def shutdown(self):
+    async def stop(self):
+        self.state = State.terminated
         for plugin in reversed(self.plugins):
             if plugin.state == PluginState.ENABLED:
                 try:
@@ -172,14 +185,7 @@ class AccountingBot(commands.Bot):
                 except PluginLoadException as e:
                     logger.error("Error while disabling plugin %s:%s", plugin.module_name, plugin.name)
                     utils.log_error(logger, e)
-
-        for plugin in reversed(self.plugins):
-            if plugin.state == PluginState.LOADED:
-                try:
-                    plugin.unload_plugin()
-                except PluginLoadException as e:
-                    logger.error("Error while unloading plugin %s:%s", plugin.module_name, plugin.name)
-                    utils.log_error(logger, e)
+        await self.close()
 
     async def on_error(self, event_name, *args, **kwargs):
         info = sys.exc_info()
@@ -271,6 +277,20 @@ class AccountingBot(commands.Bot):
                 return None
         return channel
 
+    def run(self, *args: Any, **kwargs: Any) -> None:
+        self.loop.set_exception_handler(_handle_asyncio_exception)
+        self.load_plugins()
+        super().run(*args, **kwargs)
+        logger.info("Unloading plugins")
+        for plugin in reversed(self.plugins):
+            if plugin.state == PluginState.LOADED:
+                try:
+                    plugin.unload_plugin()
+                except PluginLoadException as e:
+                    logger.error("Error while unloading plugin %s:%s", plugin.module_name, plugin.name)
+                    utils.log_error(logger, e)
+        logger.info("Clean shutdown completed")
+
 
 @commands.slash_command(name="status")
 @option(name="silent", description="Execute the command silently", type=bool, required=False, default=True)
@@ -278,6 +298,16 @@ async def cmd_status(ctx: ApplicationContext, silent: bool):
     await ctx.response.defer(ephemeral=silent)
     embed = await build_status_embed(ctx.bot)
     await ctx.followup.send(embed=embed)
+
+
+@commands.slash_command(name="stop", description="Shuts down the discord bot, if set up properly, it will restart")
+@owner_only()
+async def cmd_stop(ctx: ApplicationContext):
+    logger.critical("Shutdown Command received, shutting down bot in 10 seconds")
+    await ctx.respond("Bot wird gestoppt...")
+    # noinspection PyTypeChecker
+    bot = ctx.bot  # type: AccountingBot
+    await bot.stop()
 
 
 class BotPlugin(ABC):
