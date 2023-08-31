@@ -18,7 +18,7 @@ from accounting_bot.localization import t_
 from accounting_bot.main_bot import BotPlugin, AccountingBot, PluginWrapper
 from accounting_bot.utils import CmdAnnotation
 
-logger = logging.getLogger("test.plugin_test")
+logger = logging.getLogger("ext.help")
 
 
 class HelpPlugin(BotPlugin):

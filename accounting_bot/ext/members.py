@@ -16,7 +16,7 @@ from accounting_bot.exceptions import UsernameNotFoundException, NoPermissionExc
 from accounting_bot.main_bot import BotPlugin, AccountingBot, PluginWrapper, PluginState
 from accounting_bot.utils import admin_only, guild_only, cmd_check, CmdAnnotation
 
-logger = logging.getLogger("sheet.member")
+logger = logging.getLogger("ext.members")
 _T = TypeVar("_T")
 CONFIG_TREE = {
     "user_role": (int, None),

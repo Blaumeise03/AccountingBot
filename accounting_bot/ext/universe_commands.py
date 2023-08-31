@@ -17,7 +17,7 @@ from accounting_bot.main_bot import BotPlugin, AccountingBot, PluginWrapper
 from accounting_bot.universe import data_utils
 from accounting_bot.universe.pi_planer import PiPlanningSession, PiPlanningView
 
-logger = logging.getLogger("ext.universe")
+logger = logging.getLogger("ext.universe.commands")
 
 
 class UniversePlugin(BotPlugin):

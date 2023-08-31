@@ -19,7 +19,7 @@ from accounting_bot.exceptions import GoogleSheetException
 from accounting_bot.ext.members import Player, MembersPlugin
 from accounting_bot.main_bot import BotPlugin, AccountingBot, PluginWrapper
 
-logger = logging.getLogger("bot.sheet")
+logger = logging.getLogger("ext.sheet")
 logger.setLevel(logging.DEBUG)
 
 # Google Sheets API settings

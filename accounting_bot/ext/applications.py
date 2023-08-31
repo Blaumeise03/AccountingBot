@@ -22,7 +22,7 @@ from accounting_bot.exceptions import ConfigException
 from accounting_bot.main_bot import BotPlugin, AccountingBot, PluginWrapper
 from accounting_bot.utils import admin_only, online_only, AutoDisableView, ErrorHandledModal
 
-logger = logging.getLogger("bot.ext.apl")
+logger = logging.getLogger("ext.apl")
 
 CONFIG_TREE = {
     "questions": (list, []),

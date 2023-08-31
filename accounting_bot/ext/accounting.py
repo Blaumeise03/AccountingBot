@@ -38,7 +38,7 @@ from accounting_bot.utils import AutoDisableView, ErrorHandledModal, parse_numbe
 INVESTMENT_RATIO = 0.3  # percentage of investment that may be used for transactions
 _T = TypeVar("_T")
 
-logger = logging.getLogger("bot.ext.accounting")
+logger = logging.getLogger("ext.accounting")
 
 
 NAME_SHIPYARD = "Buyback Program"

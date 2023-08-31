@@ -7,7 +7,7 @@ from mariadb import Cursor, Connection
 
 from accounting_bot.exceptions import DatabaseException
 
-logger = logging.getLogger("acc_db")
+logger = logging.getLogger("ext.accounting.db")
 
 
 class AccountingDB:

@@ -18,7 +18,7 @@ from accounting_bot.universe.data_utils import Item
 if TYPE_CHECKING:
     from accounting_bot.ext.sheet.projects import ProjectPlugin
 
-logger = logging.getLogger("bot.sheet.projects")
+logger = logging.getLogger("ext.sheet.project.tools")
 
 
 async def load_pending_resources(sheet: gspread_asyncio.AsyncioGspreadSpreadsheet, config: Config):

@@ -19,7 +19,7 @@ from accounting_bot.universe.models import *
 if TYPE_CHECKING:
     from pi_planer import PiPlaner
 
-logger = logging.getLogger("data.db")
+logger = logging.getLogger("ext.data.db")
 
 
 # logger.setLevel(logging.DEBUG)

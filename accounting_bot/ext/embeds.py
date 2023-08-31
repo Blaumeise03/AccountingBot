@@ -11,7 +11,7 @@ from discord import Embed
 
 from accounting_bot.main_bot import BotPlugin, AccountingBot, PluginWrapper
 
-logger = logging.getLogger("bot.embeds")
+logger = logging.getLogger("ext.embeds")
 
 
 class EmbedPlugin(BotPlugin):

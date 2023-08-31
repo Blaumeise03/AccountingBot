@@ -26,7 +26,7 @@ from accounting_bot.utils import admin_only, online_only, ErrorHandledModal
 if TYPE_CHECKING:
     from bot import AccountingBot
 
-logger = logging.getLogger("bot.ext.sheet.bounty")
+logger = logging.getLogger("ext.sheet.bounty")
 CONFIG_TREE = {
     "worksheet_name": (str, "Bounty Log"),
     "bounty_col_range": (str, "A:E"),

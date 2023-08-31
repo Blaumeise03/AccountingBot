@@ -173,6 +173,9 @@ class AccountingBot(commands.Bot):
         for plugin in self.plugins:
             if plugin.state == PluginState.ENABLED:
                 continue
+            if self.state == State.terminated:
+                logger.warning("Bot is terminated, aborting loading of plugins")
+                return
             try:
                 await plugin.enable_plugin()
             except PluginLoadException as e:
@@ -302,7 +305,43 @@ class AccountingBot(commands.Bot):
     def run(self, *args: Any, **kwargs: Any) -> None:
         self.loop.set_exception_handler(_handle_asyncio_exception)
         self.load_plugins()
-        super().run(*args, **kwargs)
+        loop = self.loop
+
+        try:
+            loop.add_signal_handler(signal.SIGINT, loop.stop)
+            loop.add_signal_handler(signal.SIGTERM, loop.stop)
+        except RuntimeError:
+            pass
+
+        async def runner():
+            try:
+                await self.start(*args, **kwargs)
+            finally:
+                if not self.is_closed():
+                    await self.stop()
+
+        def stop_loop_on_completion(f):
+            loop.stop()
+
+        future = asyncio.ensure_future(runner(), loop=loop)
+        future.add_done_callback(stop_loop_on_completion)
+        try:
+            loop.run_forever()
+        except KeyboardInterrupt:
+            logger.info("Received signal to terminate bot and event loop")
+        finally:
+            future.remove_done_callback(stop_loop_on_completion)
+            logger.info("Cleaning up tasks")
+            # noinspection PyProtectedMember
+            discord.client._cleanup_loop(loop)
+
+        if not future.cancelled():
+            try:
+                return future.result()
+            except KeyboardInterrupt:
+                # I am unsure why this gets raised here but suppress it anyway
+                return None
+
         logger.info("Unloading plugins")
         for plugin in reversed(self.plugins):
             if plugin.state == PluginState.LOADED:
@@ -460,7 +499,7 @@ class PluginWrapper(object):
                 return False
             return inspect.getmodule(o).__name__ == self.module_name and issubclass(o, BotPlugin)
 
-        logger.debug("Loading %s:%s", self.module_name, self.name)
+        logger.debug("Loading plugin %s", self.name)
         if self.state == PluginState.MISSING_DEPENDENCIES:
             raise PluginLoadException(f"Can't load plugin {self.module_name}: Missing dependencies")
         for p in self.dependencies:
@@ -498,7 +537,7 @@ class PluginWrapper(object):
         except Exception as e:
             self.state = PluginState.CRASHED
             raise PluginLoadException(f"Plugin {self.module_name} crashed during loading") from e
-        logger.debug("Loaded %s:%s", self.module_name, self.name)
+        logger.debug("Loaded plugin %s", self.name)
         self.state = PluginState.LOADED
 
     async def enable_plugin(self):
@@ -510,19 +549,20 @@ class PluginWrapper(object):
             if p.state < PluginState.ENABLED:
                 raise PluginLoadException(
                     f"Can't load plugin {self.module_name}: Requirement {p.module_name} is not enabled: {p.state}")
-        logger.info("Enabling plugin %s:%s", self.module_name, self.name)
+        logger.info("Enabling plugin %s", self.name)
         try:
             await self.plugin.on_enable()
         except Exception as e:
             self.state = PluginState.CRASHED
             raise PluginLoadException(f"Loading of plugin {self.module_name} failed") from e
         self.state = PluginState.ENABLED
-        logger.info("Enabled plugin %s:%s", self.module_name, self.name)
+        logger.info("Enabled plugin %s", self.name)
 
     async def disable_plugin(self):
         if self.state != PluginState.ENABLED:
             raise PluginLoadException(f"Disabling of plugin {self.module_name} is not possible, as it's not enabled")
         try:
+            logger.info("Disabling plugin %s", self.name)
             for cog in self.plugin.cogs:
                 self.plugin.bot.remove_cog(cog.__cog_name__)
             await self.plugin.on_disable()
@@ -530,6 +570,7 @@ class PluginWrapper(object):
             self.state = PluginState.CRASHED
             raise PluginLoadException(f"Disabling of plugin {self.module_name} failed") from e
         self.state = PluginState.LOADED
+        logger.info("Disabled plugin %s", self.name)
 
     def unload_plugin(self):
         if self.state != PluginState.LOADED:

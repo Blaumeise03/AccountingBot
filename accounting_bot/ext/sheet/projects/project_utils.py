@@ -8,7 +8,7 @@ from gspread import Cell
 from accounting_bot.exceptions import GoogleSheetException
 from accounting_bot.universe.data_utils import Item
 
-logger = logging.getLogger("project.utils")
+logger = logging.getLogger("ext.sheet.project.utils")
 
 
 def process_first_column(batch_cells: [Cell], log: [str]):

@@ -28,7 +28,7 @@ from accounting_bot.universe.data_utils import Item
 from accounting_bot.utils import string_to_file, list_to_string, AutoDisableView, ErrorHandledModal, admin_only, \
     online_only
 
-logger = logging.getLogger("bot.projects")
+logger = logging.getLogger("ext.project")
 # logger.setLevel(logging.DEBUG)
 CONFIG_TREE = {
     "sheet_overview_name": (str, "Ressourcenbedarf Projekte"),

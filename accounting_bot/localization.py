@@ -7,7 +7,7 @@ from typing import Callable, Dict, Union, Optional
 import xmltodict as xmltodict
 from discord.ext.commands import Bot, Context
 
-logger = logging.getLogger("bot.localisation")
+logger = logging.getLogger("bot.localization")
 
 
 class LocalizationHandler(object):

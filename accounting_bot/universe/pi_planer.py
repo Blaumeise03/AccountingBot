@@ -25,7 +25,7 @@ from accounting_bot.universe.data_utils import Item
 from accounting_bot.universe.models import PiPlanSettings, PiPlanResource
 from accounting_bot.utils import ErrorHandledModal, AutoDisableView, ConfirmView
 
-logger = logging.getLogger("data.pi")
+logger = logging.getLogger("ext.data.pi")
 item_prices = {}  # type: Dict[str,Dict[str, Union[int, float]]]
 available_prices = []
 pending_resources = {}  # type: Dict[str, float]

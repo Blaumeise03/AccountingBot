@@ -24,7 +24,7 @@ from accounting_bot.utils import wrap_async
 
 AU_RATIO = 149597870700
 
-logger = logging.getLogger("data.utils")
+logger = logging.getLogger("ext.data.utils")
 data_plugin = None  # type: DataUtilsPlugin | None
 CONFIG_TREE = {
     "db": {
@@ -88,9 +88,8 @@ class DataUtilsPlugin(BotPlugin):
         self.info("Loaded resource table")
 
     def on_unload(self):
+        logger.info("Closing database connection")
         self.db.engine.dispose()
-        global data_plugin
-        data_plugin = None
 
 
 class Item(object):
