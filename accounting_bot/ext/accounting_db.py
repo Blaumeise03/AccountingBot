@@ -8,13 +8,10 @@ from mariadb import Cursor, Connection
 from accounting_bot.exceptions import DatabaseException
 
 logger = logging.getLogger("acc_db")
-connector = None  # type: AccountingDB | None
 
 
 class AccountingDB:
     def __init__(self, username: str, password: str, host: str, port: str, database: str) -> None:
-        global connector
-        connector = self
         self.cursor = None  # type: Cursor | None
         self.con = None  # type: Connection | None
         self.username = username

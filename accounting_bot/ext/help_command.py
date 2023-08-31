@@ -28,9 +28,6 @@ class HelpPlugin(BotPlugin):
     def on_load(self):
         self.register_cog(HelpCommand(self.bot))
 
-    async def on_disable(self):
-        self.remove_cog("HelpCommand")
-
 
 def get_cmd_help(cmd: Union[Callable, Command], opt: str = None, long=False, fallback=None):
     if isinstance(cmd, (Command, SlashCommand, ContextMenuCommand)):

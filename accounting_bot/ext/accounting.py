@@ -112,7 +112,7 @@ class AccountingPlugin(BotPlugin):
     async def on_enable(self):
         return await super().on_enable()
 
-    async def on_unload(self):
+    def on_unload(self):
         if self.db.con is None:
             return
         logger.warning("Closing SQL connection")
