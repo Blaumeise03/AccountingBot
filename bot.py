@@ -2,17 +2,12 @@ import asyncio
 import logging
 import os
 import sys
-from asyncio import AbstractEventLoop
 from datetime import datetime
-from typing import Any
 
 import discord
-from discord.ext import commands
-from discord.ext.commands import CommandOnCooldown, CheckFailure
 from dotenv import load_dotenv
 
-from accounting_bot import utils
-from accounting_bot.exceptions import InputException
+from accounting_bot.discordLogger import PycordHandler
 from accounting_bot.main_bot import AccountingBot
 
 logger = logging.getLogger()
@@ -32,10 +27,10 @@ console = logging.StreamHandler(sys.stdout)
 console.setLevel(logging.DEBUG)
 console.setFormatter(formatter)
 logger.addHandler(console)
-# Discord channel log handler ToDo: Add Discord log handler
-# discord_handler = PycordHandler(level=logging.WARNING)
-# discord_handler.setFormatter(formatter)
-# logger.addHandler(discord_handler)
+# Discord channel log handler
+discord_handler = PycordHandler(level=logging.WARNING)
+discord_handler.setFormatter(formatter)
+logger.addHandler(discord_handler)
 # Root logger
 logger.setLevel(logging.INFO)
 # interaction_logger = logging.getLogger("bot.access") ToDo: Add interaction logger
@@ -58,6 +53,6 @@ intents.reactions = True
 # noinspection PyUnresolvedReferences,PyDunderSlots
 intents.members = True
 
-bot = AccountingBot(intents=intents, help_command=None, config_path=CNFG_PATH)
+bot = AccountingBot(intents=intents, help_command=None, config_path=CNFG_PATH, pycord_handler=discord_handler)
 
 bot.run(TOKEN)

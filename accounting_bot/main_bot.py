@@ -19,10 +19,11 @@ from typing import Dict, Union, List, Optional, Tuple, Any
 import discord
 from discord import ApplicationContext, ApplicationCommandError, User, Member, Embed, Color, option, Thread
 from discord.abc import GuildChannel, PrivateChannel
-from discord.ext import commands
+from discord.ext import commands, tasks
 
 from accounting_bot import utils, exceptions
 from accounting_bot.config import Config
+from accounting_bot.discordLogger import PycordHandler
 from accounting_bot.exceptions import PluginLoadException, PluginNotFoundException, PluginDependencyException, \
     InputException
 from accounting_bot.localization import LocalizationHandler
@@ -38,7 +39,7 @@ LOUD_EXCEPTIONS = [
 ]
 base_config = {
     "plugins": (list, []),
-    "error_log_channel": (int, -1),
+    "error_log_channel": (int, None),
     "admins": (list, []),
     "test_server": (int, -1),
     "main_server": (int, -1)
@@ -74,7 +75,7 @@ class PluginState(Enum):
 
 # noinspection PyMethodMayBeStatic
 class AccountingBot(commands.Bot):
-    def __init__(self, config_path: str, *args, **kwargs):
+    def __init__(self, config_path: str, pycord_handler: Optional[PycordHandler] = None, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.state = State.offline
         self.embeds = {}
@@ -89,6 +90,8 @@ class AccountingBot(commands.Bot):
         self.add_application_command(cmd_status)
         # noinspection PyTypeChecker
         self.add_application_command(cmd_stop)
+        self.pycord_handler = pycord_handler
+        self.log_loop.start()
 
         def _get_locale(ctx: commands.Context):
             if isinstance(ctx, ApplicationContext) and ctx.locale is not None:
@@ -185,6 +188,7 @@ class AccountingBot(commands.Bot):
                 except PluginLoadException as e:
                     logger.error("Error while disabling plugin %s:%s", plugin.module_name, plugin.name)
                     utils.log_error(logger, e)
+        await asyncio.sleep(5)
         await self.close()
 
     async def on_error(self, event_name, *args, **kwargs):
@@ -217,7 +221,8 @@ class AccountingBot(commands.Bot):
     def get_plugins(self, require_state: Optional[PluginState] = None, exact=True) -> List["PluginWrapper"]:
         res = []
         for wrapper in self.plugins:
-            if require_state is None or (wrapper.state == require_state) or not exact and (wrapper.state > require_state):
+            if require_state is None or (wrapper.state == require_state) or not exact and (
+                    wrapper.state > require_state):
                 res.append(wrapper)
         return res
 
@@ -263,8 +268,25 @@ class AccountingBot(commands.Bot):
         log_error(logging.getLogger(), err, minimal=silent)
         await send_exception(err, ctx)
 
+    @tasks.loop(seconds=30)
+    async def log_loop(self):
+        try:
+            await self.pycord_handler.process_logs()
+        except Exception as e:
+            utils.log_error(logger, e, location="log_loop")
+
     async def on_ready(self):
         logger.info("Bot has logged in")
+        error_log = self.config["error_log_channel"]
+        if error_log is not None and error_log != -1:
+            channel = await self.get_or_fetch_channel(error_log)
+            if channel is None:
+                logger.error("Error log channel with id %s was not found", error_log)
+            self.pycord_handler.set_channel(channel)
+            logger.warning("Pycord log handler set to channel %s:%s in guild %s:%s",
+                           channel.name, channel.id, channel.guild.name, channel.guild.id)
+        else:
+            logger.info("Not error log channel defined in config")
         await self.enable_plugins()
         self.state = State.online
 
@@ -398,10 +420,12 @@ class PluginWrapper(object):
         return f"PluginWrapper(module={self.module_name})"
 
     def get_dep_names(self, dependencies: str):
-        self.dep_names = list(filter(lambda s: len(s) > 0, map(str.strip, dependencies.lstrip("[").rstrip("]").split(","))))
+        self.dep_names = list(
+            filter(lambda s: len(s) > 0, map(str.strip, dependencies.lstrip("[").rstrip("]").split(","))))
 
     def get_opt_dep_names(self, dependencies: str):
-        self.opt_dep_names = list(filter(lambda s: len(s) > 0, map(str.strip, dependencies.lstrip("[").rstrip("]").split(","))))
+        self.opt_dep_names = list(
+            filter(lambda s: len(s) > 0, map(str.strip, dependencies.lstrip("[").rstrip("]").split(","))))
 
     def find_dependencies(self, plugins: List["PluginWrapper"]) -> Tuple[List["PluginWrapper"], List["PluginWrapper"]]:
         """
@@ -441,10 +465,12 @@ class PluginWrapper(object):
             raise PluginLoadException(f"Can't load plugin {self.module_name}: Missing dependencies")
         for p in self.dependencies:
             if p.state < PluginState.LOADED:
-                raise PluginLoadException(f"Can't load plugin {self.module_name}: Requirement {p.module_name} is not loaded: {p.state}")
+                raise PluginLoadException(
+                    f"Can't load plugin {self.module_name}: Requirement {p.module_name} is not loaded: {p.state}")
         if not reload:
             if self.state > PluginState.UNLOADED:
-                raise PluginLoadException(f"Can't load plugin {self.module_name}: Plugin is already loaded with status " + self.state.name)
+                raise PluginLoadException(
+                    f"Can't load plugin {self.module_name}: Plugin is already loaded with status " + self.state.name)
             self.module = importlib.import_module(self.module_name)
         else:
             self.module = importlib.reload(self.module)
