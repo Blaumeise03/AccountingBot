@@ -15,9 +15,9 @@ from typing import Union, Optional, Type, List, Callable, TypeVar, Dict, Corouti
 
 import cv2
 import discord
-from discord import Interaction, ApplicationContext, InteractionResponded, ApplicationCommand
+from discord import Interaction, ApplicationContext, InteractionResponded, ApplicationCommand, CheckFailure
 from discord.ext import commands
-from discord.ext.commands import Context, Command, CheckFailure, NotOwner
+from discord.ext.commands import Context, Command, NotOwner
 from discord.ui import View, Modal, Button
 from numpy import ndarray
 
@@ -309,7 +309,7 @@ class CmdAnnotation(Enum):
     admin = "Admin only"
     owner = "Owner only"
     main_guild = "Main Server only"
-    user = "Members only"
+    member = "Members only"
     guild = "Guild only"
 
     @staticmethod

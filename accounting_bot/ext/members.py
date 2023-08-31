@@ -5,20 +5,30 @@
 import asyncio
 import difflib
 import logging
-from typing import Optional, List, Dict, Callable, Union, Tuple, Set
+from typing import Optional, List, Dict, Callable, Union, Tuple, Set, TypeVar, Awaitable
 
 import discord
-from discord import option, AutocompleteContext, ApplicationContext, User, Role
+from discord import option, AutocompleteContext, ApplicationContext, User, Role, CheckFailure, DMChannel
 from discord.ext import commands
 
+from accounting_bot import utils
 from accounting_bot.exceptions import UsernameNotFoundException, NoPermissionException
-from accounting_bot.main_bot import BotPlugin, AccountingBot, PluginWrapper
-from accounting_bot.utils import admin_only, guild_only
+from accounting_bot.main_bot import BotPlugin, AccountingBot, PluginWrapper, PluginState
+from accounting_bot.utils import admin_only, guild_only, cmd_check, CmdAnnotation
 
 logger = logging.getLogger("sheet.member")
+_T = TypeVar("_T")
+CONFIG_TREE = {
+    "user_role": (int, None),
+    "main_guild": (int, None)
+}
 
 
 class UserDataProviderException(Exception):
+    pass
+
+
+class MemberVerificationException(Exception):
     pass
 
 
@@ -53,11 +63,39 @@ class DataChain:
 class MembersPlugin(BotPlugin):
     def __init__(self, bot: AccountingBot, wrapper: PluginWrapper) -> None:
         super().__init__(bot, wrapper, logger)
+        self.config = bot.create_sub_config("members")
+        self.config.load_tree(CONFIG_TREE)
         self.players = set()  # type: Set[Player]
         self.main_chars = set()  # type: Set[str]
         self._name_lookup_table = {}  # type: Dict[str, Player]
         self._data_provider = None  # type: DataChain | None
         self._save_data_provider = None  # type: DataChain | None
+        self._is_member_func = None  # type: Callable[[Union[User, discord.Member]], Awaitable[bool]] | None
+
+    async def _default_member_func(self, user: Union[User, discord.Member]) -> bool:
+        if self.config["user_role"] is None:
+            return False
+        if isinstance(user, discord.Member):
+            # user = user  # type: discord.Member
+            return user.get_role(self.config["user_role"]) is not None
+        elif isinstance(user, User):
+            # user = user  # type: User
+            if self.config["main_guild"] is None:
+                logger.error("main_guild is not set inside the config members.main_guild")
+                return False
+            guild = self.bot.get_guild(self.config["main_guild"])
+            if guild is None:
+                guild = await self.bot.fetch_guild(self.config["main_guild"])
+            if guild is None:
+                logger.error("Guild with id %s not found", self.config["main_guild"])
+                return False
+            member = guild.get_member(user.id)
+            if member is None:
+                member = guild.fetch_member(user.id)
+            if member is None:
+                return False
+            return member.get_role(self.config["user_role"]) is not None
+        return False
 
     async def _execute_chain(self):
         players = {}
@@ -86,6 +124,10 @@ class MembersPlugin(BotPlugin):
 
     def on_load(self):
         self.register_cog(MembersCommands(self))
+        if self.config["user_role"] is not None:
+            self._is_member_func = self._default_member_func
+            logger.info("Using config with user_role for member verification, guild %s, role %s",
+                        self.config["main_guild"], self.config["user_role"])
 
     async def on_enable(self):
         await self._execute_chain()
@@ -102,6 +144,17 @@ class MembersPlugin(BotPlugin):
     def set_save_data_chain(self):
         self._save_data_provider = DataChain()
         return self._save_data_provider
+
+    def set_is_user_function(self, func: Callable[[Union[User, discord.Member]], bool]):
+        self._is_member_func = func
+
+    async def is_member(self, user: Union[User, discord.Member]):
+        if self._is_member_func is None:
+            raise MemberVerificationException("No _is_member_func defined")
+        try:
+            return await self._is_member_func(user)
+        except Exception as e:
+            raise MemberVerificationException("_is_member_func threw an error during execution") from e
 
     def get_user(self, name: Optional[str] = None, discord_id: Optional[int] = None) -> Optional[Player]:
         if name is not None and name in self._name_lookup_table:
@@ -197,6 +250,33 @@ def main_char_autocomplete(self: AutocompleteContext):
     return filter(lambda n: self.value is None or n.startswith(self.value.strip()), member_p.main_chars)
 
 
+def member_only() -> Callable[[_T], _T]:
+    def decorator(func):
+        @cmd_check
+        async def predicate(ctx: ApplicationContext) -> bool:
+            # noinspection PyTypeChecker
+            bot = ctx.bot  # type: AccountingBot
+            member_p = bot.get_plugin("MembersPlugin", require_state=PluginState.ENABLED)  # type: MembersPlugin
+            if not await member_p.is_member(ctx.user):
+                if isinstance(ctx.channel, DMChannel):
+                    location = "DMChannel"
+                else:
+                    c_name = ctx.channel.name if hasattr(ctx.channel, "name") else str(ctx.channel.type)
+                    location = f"channel {ctx.channel.id}:'{c_name}' in guild "
+                    if ctx.guild is None:
+                        location += "N/A"
+                    else:
+                        location += f"{ctx.guild.name}:{ctx.guild.id}"
+                logger.warning("Unauthorized access attempt for command %s by user %s:%s in %s",
+                               utils.get_cmd_name(ctx.command), ctx.user.name, ctx.user.id, location)
+                raise CheckFailure("Can't execute command") \
+                    from NoPermissionException("Only members may execute this command")
+            return True
+        CmdAnnotation.annotate_cmd(func, CmdAnnotation.member)
+        return commands.check(predicate)(func)
+    return decorator
+
+
 class MembersCommands(commands.Cog):
     def __init__(self, plugin: MembersPlugin) -> None:
         super().__init__()
@@ -232,10 +312,12 @@ class MembersCommands(commands.Cog):
         else:
             await ctx.response.send_message(f"Fehler, Spieler {ingame_name} nicht gefunden!", ephemeral=True)
 
+    # noinspection DuplicatedCode
     @commands.slash_command(name="grant_permissions", description="Grants owner permissions to a discord account")
     @option("ingame_name", description="The main character name of the user", required=True,
             autocomplete=main_char_autocomplete)
     @option("user", description="The discord user to grant permissions to", required=True)
+    @member_only()
     async def grant_permissions(self, ctx: ApplicationContext, ingame_name: str, user: User):
         if user is None:
             await ctx.respond("A user is required.", ephemeral=True)
@@ -250,7 +332,7 @@ class MembersCommands(commands.Cog):
         if player is None:
             raise UsernameNotFoundException(f"User {matched_name} not found")
         if player.discord_id != ctx.user.id and not self.plugin.bot.is_admin(ctx.user.id):
-            raise NoPermissionException(f"Disord user {ctx.user.name}:{ctx.user.id} is not owner of player {player}")
+            raise NoPermissionException(f"Discord user {ctx.user.name}:{ctx.user.id} is not owner of player {player}")
         player.authorized_discord_ids.append(user.id)
         await self.plugin.save_user_list()
         logger.info("User %s:%s granted owner permissions for %s to %s:%s",
@@ -263,6 +345,7 @@ class MembersCommands(commands.Cog):
     @option("ingame_name", description="The main character name of the user", required=True,
             autocomplete=main_char_autocomplete)
     @option("user", description="The discord user to grant permissions to", required=True)
+    @member_only()
     async def revoke_permissions(self, ctx: ApplicationContext, ingame_name: str, user: User):
         if user is None:
             await ctx.respond("A user is required.", ephemeral=True)
@@ -293,7 +376,8 @@ class MembersCommands(commands.Cog):
     @commands.slash_command(name="show_permissions", description="Shows all users with permissions for a player")
     @option("ingame_name", description="The main character name of the player", required=True,
             autocomplete=main_char_autocomplete)
-    async def revoke_permissions(self, ctx: ApplicationContext, ingame_name: str):
+    @member_only()
+    async def show_permissions(self, ctx: ApplicationContext, ingame_name: str):
         if ingame_name is None:
             await ctx.respond("Ingame name is required.", ephemeral=True)
             return

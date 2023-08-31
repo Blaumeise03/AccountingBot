@@ -27,8 +27,7 @@ from accounting_bot.utils import State, log_error, send_exception
 logger = logging.getLogger("bot.main")
 
 SILENT_EXCEPTIONS = [
-    commands.CommandOnCooldown, InputException, commands.NoPrivateMessage, commands.NotOwner, commands.PrivateMessageOnly,
-    commands.CheckFailure
+    commands.CommandOnCooldown, InputException, discord.CheckFailure, commands.CheckFailure
 ]
 LOUD_EXCEPTIONS = [
     exceptions.UnhandledCheckException

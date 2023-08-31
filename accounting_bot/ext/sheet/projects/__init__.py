@@ -18,8 +18,7 @@ from gspread import Cell
 
 from accounting_bot import utils
 from accounting_bot.exceptions import GoogleSheetException, BotOfflineException
-from accounting_bot.ext.accounting import user_only
-from accounting_bot.ext.members import MembersPlugin
+from accounting_bot.ext.members import MembersPlugin, member_only
 from accounting_bot.ext.sheet.projects import project_utils, _project_tools
 from accounting_bot.ext.sheet import sheet_main
 from accounting_bot.ext.sheet.projects.project_utils import format_list, Project
@@ -132,7 +131,7 @@ class ProjectCommands(commands.Cog):
             string_to_file(res, "project_list.txt")], ephemeral=silent)
 
     @commands.slash_command(name="listprojects", description="Lists all projects")
-    @user_only()
+    @member_only()
     async def list_projects(self, ctx: ApplicationContext,
                             silent: Option(bool, "Execute command silently", required=False, default=True)):
         res = "Projectlist version: N/A\n"

@@ -29,7 +29,7 @@ from accounting_bot import utils
 from accounting_bot.exceptions import BotOfflineException, AccountingException, ConfigException, NoPermissionException
 from accounting_bot.ext.accounting_db import AccountingDB
 from accounting_bot.ext.sheet import sheet_main
-from accounting_bot.ext.members import MembersPlugin
+from accounting_bot.ext.members import MembersPlugin, member_only
 from accounting_bot.ext.sheet.sheet_main import SheetPlugin
 from accounting_bot.main_bot import BotPlugin, PluginWrapper, AccountingBot
 from accounting_bot.utils import AutoDisableView, ErrorHandledModal, parse_number, admin_only, \
@@ -54,7 +54,6 @@ CONFIG_TREE = {
     "menuMessage": (int, -1),
     "menuChannel": (int, -1),
     "main_guild": (int, -1),
-    "user_role": (int, -1),
     "timezone": (str, "Europe/Berlin"),
     "db": {
         "user": (str, "N/A"),
@@ -102,12 +101,9 @@ class AccountingPlugin(BotPlugin):
             database=self.config["db.name"]
         )
         self.guild = self.config["main_guild"]
-        self.user_role = self.config["user_role"]
         self.timezone = self.config["timezone"]
         if self.guild == -1:
             self.guild = None
-        if self.user_role == -1:
-            self.user_role = None
         self.register_cog(AccountingCommands(self))
         self.embeds = [self.bot.get_plugin("EmbedPlugin").embeds["MenuEmbedInternal"]]
         self.sheet = self.bot.get_plugin("SheetMain")
@@ -435,53 +431,6 @@ class AccountingPlugin(BotPlugin):
         return p.parse_player(string)
 
 
-def user_only() -> Callable[[_T], _T]:
-    def decorator(func):
-        @utils.cmd_check
-        async def predicate(ctx: ApplicationContext) -> bool:
-            # noinspection PyTypeChecker
-            bot = ctx.bot  # type: AccountingBot
-            plugin = bot.get_plugin("AccountingPlugin")
-            is_admin = bot.is_admin(ctx.user)
-            is_user = False
-            if isinstance(ctx.user, Member) and ctx.guild is not None and ctx.guild.id == plugin.guild:
-                is_user = plugin.user_role is None or ctx.user.get_role(plugin.user_role) is not None
-            else:
-                guild = plugin.bot.get_guild(plugin.guild)
-                if guild is None:
-                    guild = await plugin.bot.fetch_guild(plugin.guild)
-                if guild is None:
-                    raise ConfigException(f"Guild with id {plugin.guild} not found")
-                user = guild.get_member(ctx.user.id)
-                if user is None:
-                    try:
-                        user = await guild.fetch_member(ctx.user.id)
-                    except discord.errors.NotFound:
-                        pass
-                if user is not None and user.get_role(plugin.user_role) is not None:
-                    is_user = True
-            if not is_admin and not is_user:
-                if isinstance(ctx.channel, DMChannel):
-                    location = "DMChannel"
-                else:
-                    c_name = ctx.channel.name if hasattr(ctx.channel, "name") else str(ctx.channel.type)
-                    location = f"channel {ctx.channel.id}:'{c_name}' in guild "
-                    if ctx.guild is None:
-                        location += "N/A"
-                    else:
-                        location += f"{ctx.guild.name}:{ctx.guild.id}"
-                logger.warning("Unauthorized access attempt for command %s by user %s:%s in %s",
-                               utils.get_cmd_name(ctx.command), ctx.user.name, ctx.user.id, location)
-                raise CheckFailure("Can't execute command") \
-                    from NoPermissionException("Only users with the member role may use this command")
-            return True
-
-        CmdAnnotation.annotate_cmd(func, CmdAnnotation.user)
-        return commands.check(predicate)(func)
-
-    return decorator
-
-
 def main_guild_only() -> Callable[[_T], _T]:
     def decorator(func):
         @utils.cmd_check
@@ -661,7 +610,7 @@ class AccountingCommands(Cog):
     @commands.slash_command(name="balance", description="Get the balance of a user")
     @option("force", description="Enforce data reload from sheet", required=False, default=False)
     @option("user", description="The user to lookup", required=False, default=None)
-    @user_only()
+    @member_only()
     @online_only()
     async def get_balance(self, ctx: ApplicationContext, force: bool = False, user: User = None):
         await ctx.defer(ephemeral=True)

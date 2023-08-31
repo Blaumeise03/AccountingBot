@@ -1,7 +1,7 @@
 # PluginConfig
 # Name: BountyPlugin
 # Author: Blaumeise03
-# Depends-On: [accounting_bot.ext.sheet.sheet_main, accounting_bot.ext.members, accounting_bot.ext.accounting, accounting_bot.universe.data_utils]
+# Depends-On: [accounting_bot.ext.sheet.sheet_main, accounting_bot.ext.members, accounting_bot.universe.data_utils]
 # End
 import datetime
 import functools
@@ -16,8 +16,7 @@ from discord.ui import InputText
 
 from accounting_bot import utils
 from accounting_bot.exceptions import InputException
-from accounting_bot.ext.accounting import user_only
-from accounting_bot.ext.members import MembersPlugin
+from accounting_bot.ext.members import MembersPlugin, member_only
 from accounting_bot.ext.sheet.sheet_main import SheetPlugin
 from accounting_bot.ext.sheet.sheet_utils import map_cells
 from accounting_bot.main_bot import BotPlugin, PluginWrapper
@@ -296,7 +295,7 @@ class BountyCommands(Cog):
         await ctx.response.send_modal(AddBountyModal(self.plugin, message))
 
     @commands.message_command(name="Show Bounties")
-    @user_only()
+    @member_only()
     async def ctx_cmd_show_bounties(self, ctx: ApplicationContext, message: discord.Message):
         if len(message.embeds) == 0:
             await ctx.response.send_message(f"Nachricht enthält kein Embed:\n{message.jump_url}", ephemeral=True)
