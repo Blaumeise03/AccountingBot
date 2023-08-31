@@ -29,6 +29,7 @@ class ConfigTest(unittest.TestCase):
         self.assertEqual("DefA", config["keyA"])
         self.assertListEqual(["DefB"], config["keyB"])
         self.assertEqual(42, config["keyC.keyC2"])
+        config.create_sub_config("keyC.keyC3.keyC4")
         config.load_tree({
             "keyF": (str, "DefF"),
             "keyG": (float, 0.5)
