@@ -44,7 +44,14 @@ class PiPlanerPlugin(BotPlugin):
         super().__init__(bot, wrapper, logger)
 
     def on_load(self):
-        super().on_load()
+        pass
+
+    async def on_enable(self):
+        global pi_ids, pi_resources
+        logger.info("Loading item data")
+        res = await data_utils.get_items_by_type("pi")
+        pi_resources = list(map(lambda i: i.name, res))
+        pi_ids = dict(map(lambda i: (i.name, i.id), res))
 
     def get_session(self, user: User):
         return PiPlanningSession(self, user)
@@ -58,9 +65,6 @@ async def reload_pending_resources(project: "ProjectPlugin"):
     logger.info("Reloading pending resources")
     items = await project.load_pending_resources()
     pending_resources = items
-    res = await data_utils.get_items_by_type("pi")
-    pi_resources = list(map(lambda i: i.name, res))
-    pi_ids = dict(map(lambda i: (i.name, i.id), res))
     last_reload = datetime.now()
     logger.info("Pending resources loaded")
 
@@ -97,6 +101,33 @@ def build_debug_table(debug_data: Dict):
             break
     d_msg += "\n```"
     return d_msg
+
+
+def _encode_item_id(full_item_id: int):
+    item_id = full_item_id - 42001000000
+    # Pi have IDs 420010000xx with xx being between (inclusive) 00-11, 18-33
+    if 1000000 > item_id >= 18:
+        # Handle pi between 18 and 33, 18 should become 12 and so on
+        item_id -= 6
+    if item_id >= 1000000:
+        # Fuels have IDs with 420020000xx with xx being between (inclusive) 12-18
+        # There are 31 normal pi, so the fuels have to start with id 38
+        item_id -= 1000012 - 28
+    return item_id
+
+
+def _decode_item_id(short_item_id: int):
+    """
+    First pi group: 0-11, second: 12-27, fuel: 28-33
+    :param short_item_id:
+    :return:
+    """
+    item_id = short_item_id
+    if 28 > item_id > 11:
+        item_id += 6
+    elif item_id >= 28:
+        item_id += 1000012 - 28
+    return item_id + 42001000000
 
 
 class Array:
@@ -439,16 +470,13 @@ class PiPlaner:
 
     def encode_base64(self) -> str:
         """
-        V1 binary data format (Number bits:value):
+        V2 binary data format (Number bits:value):
 
-        [2:Version][5:num planets][5:num arrays] [19:planet index][5:resource index]... (for all arrays)
+        [2:Version][5:num planets][5:num arrays] [19:planet index][6:resource index][1:locked?]... (For all arrays)
 
         The last byte gets filled up with zeros
 
-        Note:
-            planet index = planet id - 40000000
-            resource index = item id - 42001000000 ( - 1000000 if it's a fuel)
-        :return: the encoded data in base64
+        :return: The encoded data in base64
         """
         def to_bits(num: int, length: int):
             # noinspection PyStringFormat
@@ -477,7 +505,7 @@ class PiPlaner:
                     byte = (byte << 1) | bit
                 yield byte
 
-        data = "01"
+        data = "0010"  # Encoding version in binary
         if self.num_planets > 31:
             raise PiPlanerException(f"Number of planets {self.num_planets} is to high, max is 31")
         if self.num_arrays > 31:
@@ -489,14 +517,11 @@ class PiPlaner:
             if p_id < 0 or p_id > 524287:
                 raise PiPlanerException(f"Planet id {p_id} is out of bounds")
             data += to_bits(p_id, 19)
-            p_type = pi_ids[array.resource] - 42001000000
-            # Pi have IDs 420010000xx
-            if p_type >= 1000000:
-                # Fuels have IDs with 420020000xx
-                p_type -= 1000000
-            if p_type > 32:
+            p_type = _encode_item_id(pi_ids[array.resource])
+            if p_type > 63:
                 raise PiPlanerException(f"Resource id {p_type} is to high")
-            data += to_bits(p_type, 5)
+            data += to_bits(p_type, 6)
+            data += "1" if array.locked else "0"
         data_bytes = bytes(to_bytes(iter(data)))
         result = base64.b64encode(data_bytes)
         return result.decode("utf-8")
@@ -510,23 +535,26 @@ class PiPlaner:
 
         data_bytes = base64.b64decode(data)
         bits = "".join(["{:08b}".format(x) for x in data_bytes])
-        version, bits = int(bits[:2], 2), bits[2:]
-        if version != 1:
+        version, bits = int(bits[:4], 2), bits[4:]
+        if version != 2:
             raise PiPlanerException(f"Data format V{version} is not supported by this version")
         num_arrays, bits = int(bits[:5], 2), bits[5:]
         num_planets, bits = int(bits[:5], 2), bits[5:]
-        lookup_table = dict(map(lambda t: (t[1] % 1000000, t[0]), pi_ids.items()))
+        lookup_table = dict(map(lambda t: (_encode_item_id(full_item_id=t[1]), t[0]), pi_ids.items()))
         plan = PiPlaner(arrays=num_arrays, planets=num_planets)
-        for raw in groups_of_n(24, bits):
+        for raw in groups_of_n(26, bits):
             raw = "".join(raw)
             if len(raw) < 24:
                 break
             p_id = int(raw[:19], 2) + 40000000
-            p_res = int(raw[19:], 2)
+            p_res = int(raw[19:-1], 2)
+            locked = "1" == raw[-1:]
             if p_res not in lookup_table:
                 raise PiPlanerException(f"Resource ID {p_res} not found in lookup table")
             res_name = lookup_table[p_res]
             array = Array(res_name, amount=num_arrays)
+            array.resource_id = _decode_item_id(p_res)
+            array.locked = locked
             array.auto_init_planet(plan.arrays, p_name="N/A", p_id=p_id)
             plan.arrays.append(array)
         return plan
