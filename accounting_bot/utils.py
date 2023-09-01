@@ -59,7 +59,7 @@ def parse_number(string: str) -> (int, str):
     Converts a string into an integer. It ignores all letters, spaces and commas. A dot will be interpreted as a
     decimal seperator. Everything after the first dot will be discarded.
 
-    :param string: the string to convert
+    :param string: The string to convert
     :return: the number or None if it had an invalid format
     """
     warnings = ""

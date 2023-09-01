@@ -289,7 +289,7 @@ class AccountingBot(commands.Bot):
             logger.warning("Pycord log handler set to channel %s:%s in guild %s:%s",
                            channel.name, channel.id, channel.guild.name, channel.guild.id)
         else:
-            logger.info("Not error log channel defined in config")
+            logger.info("No error log channel defined in config")
         await self.enable_plugins()
         self.state = State.online
 

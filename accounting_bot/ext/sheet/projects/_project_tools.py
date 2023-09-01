@@ -33,7 +33,7 @@ async def load_pending_resources(sheet: gspread_asyncio.AsyncioGspreadSpreadshee
             continue
         if len(row) < max(config["overview_item_index"], config["overview_item_index"]):
             continue
-        items[row[config["overview_item_index"]]] = float(row[config["overview_item_index"]])
+        items[row[config["overview_item_index"]]] = float(row[config["overview_quantity_index"]])
     return items
 
 

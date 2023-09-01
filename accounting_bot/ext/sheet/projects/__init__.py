@@ -69,6 +69,9 @@ class ProjectPlugin(BotPlugin):
                                    changes: List[Tuple[Cell, int]]):
         return await _project_tools.apply_overflow_split(self, investments, changes)
 
+    async def load_pending_resources(self):
+        return await _project_tools.load_pending_resources(await self.sheet.get_sheet(), self.config)
+
     def on_load(self):
         self.sheet = self.bot.get_plugin("SheetMain")
         self.member_p = self.bot.get_plugin("MembersPlugin")
@@ -111,7 +114,6 @@ def modal_admin_check(func: Callable):
 class ProjectCommands(commands.Cog):
     def __init__(self, plugin: ProjectPlugin):
         self.plugin = plugin
-
 
     @commands.slash_command(name="loadprojects", description="Loads and list all projects")
     @cooldown(1, 5, commands.BucketType.default)

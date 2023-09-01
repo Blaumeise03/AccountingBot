@@ -1,7 +1,7 @@
 # PluginConfig
 # Name: PiPlanerPlugin
 # Author: Blaumeise03
-# Depends-On: [accounting_bot.universe.data_utils]
+# Depends-On: [accounting_bot.universe.data_utils, accounting_bot.ext.embeds]
 # Load-After: [accounting_bot.ext.projects]
 # End
 import base64
@@ -11,13 +11,12 @@ import logging
 import math
 import re
 from datetime import datetime, timedelta
-from typing import List, Dict, Optional, Callable, Coroutine, Any, Union
+from typing import List, Dict, Optional, Callable, Coroutine, Any, Union, TYPE_CHECKING
 
 import discord
 from discord import User, Embed, Color, ApplicationContext, Message, InputTextStyle
 from discord.ui import InputText, Button
 
-from accounting_bot import utils
 from accounting_bot.exceptions import PlanetaryProductionException, PiPlanerException
 from accounting_bot.main_bot import BotPlugin, AccountingBot, PluginWrapper
 from accounting_bot.universe import data_utils
@@ -25,8 +24,11 @@ from accounting_bot.universe.data_utils import Item
 from accounting_bot.universe.models import PiPlanSettings, PiPlanResource
 from accounting_bot.utils import ErrorHandledModal, AutoDisableView, ConfirmView
 
+if TYPE_CHECKING:
+    from accounting_bot.ext.sheet.projects import ProjectPlugin
+
 logger = logging.getLogger("ext.data.pi")
-item_prices = {}  # type: Dict[str,Dict[str, Union[int, float]]]
+item_prices = {}  # type: Dict[str, Dict[str, Union[int, float]]]
 available_prices = []
 pending_resources = {}  # type: Dict[str, float]
 last_reload = datetime(1907, 1, 1)
@@ -48,7 +50,7 @@ class PiPlanerPlugin(BotPlugin):
         return PiPlanningSession(self, user)
 
 
-async def reload_pending_resources(project):
+async def reload_pending_resources(project: "ProjectPlugin"):
     global pending_resources, pi_resources, last_reload, pi_ids
     difference = datetime.now() - last_reload
     if difference < timedelta(minutes=15):
@@ -137,7 +139,7 @@ class Array:
                 case "R":
                     msg += "Resource             "
                 case "P":
-                    msg += f"Planet     "
+                    msg += "Planet     "
                 case "b":
                     msg += "  Base"
                 case "h":
@@ -284,7 +286,7 @@ class PiPlaner:
             self.constellation_name = const.name
 
     def sort_arrays(self):
-        self.arrays = sorted(self.arrays, key=lambda a: (not a.locked, utils.resource_order.index(a.resource)))
+        self.arrays = sorted(self.arrays, key=lambda a: (not a.locked, data_utils.data_plugin.resource_order[a.resource]))
 
     def get_next_best_array(self, all_planets: List[Dict[str, Any]], arrays: List[Array]):
         best_array = None
@@ -418,9 +420,9 @@ class PiPlaner:
             else:
                 resources[array.resource] = array.base_output * array.amount
         val = Array.build_table(self.arrays, mode="L n R P b h", price_types=self.preferred_prices)
-        emb.add_field(name=f"Aktive Arrays", value=f"```\n{val}\n```", inline=False)
+        emb.add_field(name="Aktive Arrays", value=f"```\n{val}\n```", inline=False)
         val = f"{'Resource':<21}: items/h  items/d          ISK/d"
-        resources = sorted(resources.items(), key=lambda res: utils.resource_order.index(res[0]))
+        resources = sorted(resources.items(), key=lambda res: data_utils.data_plugin.resource_order[res[0]])
         income_sum = 0
         for name, output in resources:
             income = 0
@@ -565,7 +567,6 @@ class PiPlanningSession:
         if plan == "next":
             self._active = min(map(lambda p: p.plan_num, filter(lambda p: p.plan_num > self._active, self.plans)),
                                default=self._active)
-            return
 
     def get_active_plan(self):
         if self._active is None:
@@ -679,7 +680,9 @@ class PiPlanningView(AutoDisableView):
 
     @discord.ui.button(emoji="❓", style=discord.ButtonStyle.grey, row=0)
     async def btn_help(self, button: Button, ctx: ApplicationContext):
-        await ctx.response.send_message(embed=STATE.bot.embeds["PiPlanerHelp"], ephemeral=True)
+        # noinspection PyUnresolvedReferences
+        embed = ctx.bot.get_plugin("EmbedPlugin").get_embed("PiPlanerHelp")  # type: Embed
+        await ctx.response.send_message(embed=embed, ephemeral=True)
 
     @discord.ui.button(emoji="🗑️", style=discord.ButtonStyle.red, row=1)
     async def btn_delete(self, button: Button, ctx: ApplicationContext):
@@ -877,7 +880,7 @@ class AutoSelectArrayModal(ErrorHandledModal):
         if inp.strip().casefold() == "ISK".casefold():
             arrays = await self.plan.auto_select()
         elif difflib.SequenceMatcher(None, "Projekt".casefold(), inp.strip().casefold()).ratio() > 0.75:
-            await reload_pending_resources()
+            await reload_pending_resources(self.session.plugin.bot.get_plugin("ProjectPlugin"))
             weights = {k: v for k, v in pending_resources.items() if k in pi_resources}
             if len(weights) == 0:
                 await ctx.followup.send("Ressourcenbedarf nicht gefunden.")
@@ -1002,12 +1005,11 @@ class EditPlanModal(ErrorHandledModal):
                     f"Die Einstellungen wurden verändert. Maximale Planeten: {self.plan.num_planets}, maximale "
                     f"Fabriken: {self.plan.num_arrays}.", ephemeral=True)
                 await self.session.refresh_msg()
-                return
             case "const":
                 if in1 is None or in1.strip() == "":
                     self.plan.constellation_id = None
                     self.plan.constellation_name = None
-                    await interaction.response.send_message(f"Konstellation gelöscht", ephemeral=True)
+                    await interaction.response.send_message("Konstellation gelöscht", ephemeral=True)
                     await self.session.refresh_msg()
                     return
                 await interaction.response.defer(ephemeral=True)
@@ -1019,7 +1021,6 @@ class EditPlanModal(ErrorHandledModal):
                 self.plan.constellation_id = const.id
                 await interaction.followup.send(f"Konstellation `{const.name}` ausgewählt", ephemeral=True)
                 await self.session.refresh_msg()
-                return
             case "del_array":
                 to_delete = []
                 msg = ""
@@ -1042,7 +1043,6 @@ class EditPlanModal(ErrorHandledModal):
                     f"`Array(s) {msg.strip().strip(',')}` wurde(n) gelöscht",
                     ephemeral=True)
                 await self.session.refresh_msg()
-                return
             case "lock_array":
                 for num in in1.split(";"):
                     try:
@@ -1060,7 +1060,6 @@ class EditPlanModal(ErrorHandledModal):
                     self.plan.arrays[num].locked = not self.plan.arrays[num].locked
                 await interaction.response.send_message("Arrays wurden gesperrt", ephemeral=True)
                 await self.session.refresh_msg()
-                return
             case "add_array":
                 if self.plan.constellation_name is None:
                     await interaction.response.send_message("Keine Konstellation ausgewählt!", ephemeral=True)
@@ -1075,7 +1074,6 @@ class EditPlanModal(ErrorHandledModal):
                 view = SelectArrayView(self.session, self.plan, f"{in1} in {self.plan.constellation_name}",
                                        resources)
                 await interaction.response.send_message(embed=view.build_embed(), view=view)
-                return
             case "prices":
                 if in1 is None:
                     self.plan.preferred_prices.clear()
@@ -1103,6 +1101,5 @@ class EditPlanModal(ErrorHandledModal):
                 msg = msg.strip().strip(">").strip()
                 await interaction.response.send_message(f"Preispriorität festgelegt:\n`{msg}`", ephemeral=True)
                 await self.session.refresh_msg()
-                return
             case _:
                 raise PlanetaryProductionException(f"Unknown data {self.data} for EditPlanModal")

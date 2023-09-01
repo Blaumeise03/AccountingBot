@@ -134,7 +134,7 @@ class AccountingPlugin(BotPlugin):
                            discord_id,
                            transaction.name_from,
                            transaction.name_to,
-                           "{:,} ISK".format(transaction.amount),
+                           f"{transaction.amount:,} ISK",
                            time_formatted)
 
     async def save_transaction(self, transaction: "Transaction", msg: Message, user_id: int):
@@ -154,7 +154,6 @@ class AccountingPlugin(BotPlugin):
         self.db.set_verification(msg.id, verified=1)
 
     async def inform_players(self, transaction: "Transaction"):
-        # ToDo: Fix bug were balance gets subtracted two times from cache
         # Update wallets
         if transaction.name_from and transaction.name_from in self.wallets:
             self.wallets[transaction.name_from] = self.wallets[transaction.name_from] - transaction.amount
@@ -787,7 +786,7 @@ class Transaction(TransactionLike):
             embed.add_field(name="Von", value=self.name_from, inline=True)
         if self.name_to is not None:
             embed.add_field(name="Zu", value=self.name_to, inline=True)
-        embed.add_field(name="Menge", value="{:,} ISK".format(self.amount), inline=True)
+        embed.add_field(name="Menge", value=f"{self.amount:,} ISK", inline=True)
         embed.add_field(name="Verwendungszweck", value=self.purpose, inline=True)
         if self.reference is not None and len(self.reference) > 0:
             embed.add_field(name="Referenz", value=self.reference, inline=True)

@@ -1,0 +1,19 @@
+{
+  "InduRoleMenu": {
+    "fields": [
+      {
+        "name": "Schiffbauskills",
+        "value": "<:Frigate:974611741633806376> Frigates\n<:Destroyer:974611810453958699> Destroyer\n<:Cruiser:974611846566936576> Cruiser\n<:BC:974611889982173193> Battlecruiser\n<:BS:974611977626329139> Battleship\n<:Industrial:974612368061517824> Industrial\n",
+        "inline": true
+      },
+      {
+        "name": "Sonstiges",
+        "value": ":regional_indicator_n: Nanocores\n:regional_indicator_b: B-Type Module\n:regional_indicator_f: Schiff-(Fitting)-Service",
+        "inline": true
+      }
+    ],
+    "color": 3066993,
+    "type": "rich",
+    "title": "Industrierollen"
+  }
+}
