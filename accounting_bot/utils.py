@@ -419,13 +419,13 @@ class AutoDisableView(ErrorHandledView):
             try:
                 await self.message.edit(view=None)
             except discord.errors.HTTPException as e:
-                logger.info("Can't edit view: %s", e)
+                logger.info("Can't edit view in channel %s: %s", self.message.channel.id, e)
                 try:
                     # Maybe this can be removed or has to be refactored
                     msg = await self.message.channel.fetch_message(self.message.id)
                     await msg.edit(view=None)
                 except discord.errors.HTTPException as e2:
-                    logger.error("Can't fetch message of view to edit: %s", e2)
+                    logger.info("Can't fetch message %s of view to edit: %s",  self.message.id, e2)
         self.clear_items()
         self.disable_all_items()
 
