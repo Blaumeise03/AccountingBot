@@ -17,7 +17,8 @@ from types import ModuleType
 from typing import Dict, Union, List, Optional, Tuple, Any
 
 import discord
-from discord import ApplicationContext, ApplicationCommandError, User, Member, Embed, Color, option, Thread
+from discord import ApplicationContext, ApplicationCommandError, User, Member, Embed, Color, option, Thread, \
+    ActivityType
 from discord.abc import GuildChannel, PrivateChannel
 from discord.ext import commands, tasks
 
@@ -42,7 +43,11 @@ base_config = {
     "error_log_channel": (int, None),
     "admins": (list, []),
     "test_server": (int, -1),
-    "main_server": (int, -1)
+    "main_server": (int, -1),
+    "rich_presence": {
+        "type": (str, None),
+        "name": (str, "N/A")
+    }
 }
 
 
@@ -181,6 +186,7 @@ class AccountingBot(commands.Bot):
             except PluginLoadException as e:
                 logger.error("Error while enabling plugin %s:%s", plugin.module_name, plugin.name)
                 utils.log_error(logger, e)
+        logger.info("Enabled %s plugins", len(self.get_plugins(require_state=PluginState.ENABLED)))
 
     async def stop(self):
         self.state = State.terminated
@@ -292,6 +298,17 @@ class AccountingBot(commands.Bot):
             logger.info("No error log channel defined in config")
         await self.enable_plugins()
         self.state = State.online
+        rp_type = self.config["rich_presence.type"]
+        if rp_type is not None:
+            try:
+                await self.change_presence(activity=discord.Activity(
+                    type=ActivityType[self.config["rich_presence.type"]],
+                    name=self.config["rich_presence.name"]
+                ))
+            except KeyError:
+                logger.error("Failed to set rich presence to type %s: Unknown activity type", rp_type)
+                logger.error("Allowed rich presence types are: %s", ", ".join(map(lambda a: a.name, ActivityType)))
+        logger.info("Bot is ready")
 
     async def get_or_fetch_channel(self, channel_id: int) -> Union[GuildChannel, Thread, PrivateChannel, None]:
         channel = self.get_channel(channel_id)
