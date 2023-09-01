@@ -5,7 +5,6 @@ import functools
 import io
 import json
 import logging
-import math
 import re
 import traceback
 from concurrent.futures import ThreadPoolExecutor
@@ -13,13 +12,11 @@ from enum import Enum
 from os.path import exists
 from typing import Union, Optional, Type, List, Callable, TypeVar, Dict, Coroutine, TYPE_CHECKING
 
-import cv2
 import discord
 from discord import Interaction, ApplicationContext, InteractionResponded, ApplicationCommand, CheckFailure
 from discord.ext import commands
 from discord.ext.commands import Context, Command, NotOwner
 from discord.ui import View, Modal, Button
-from numpy import ndarray
 
 from accounting_bot import exceptions
 from accounting_bot.exceptions import LoggedException, NoPermissionException, BotOfflineException, \
@@ -270,16 +267,6 @@ async def send_exception(error: Exception, ctx: Union[ApplicationContext, Contex
         logger.warning("Can't send error message for \"%s\", caused by %s: NotFound",
                        error.__class__.__name__,
                        location)
-
-
-def image_to_file(img: ndarray, encoding: str, filename: str):
-    if img is None:
-        return None
-    is_success, im_buf_arr = cv2.imencode(encoding, img)
-    if is_success:
-        img_byte = io.BytesIO(im_buf_arr)
-        return discord.File(img_byte, filename)
-    return None
 
 
 def string_to_file(text: str, filename="message.txt"):
