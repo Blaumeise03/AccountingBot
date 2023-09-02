@@ -77,8 +77,11 @@ class MembersPlugin(BotPlugin):
             return False
         if isinstance(user, discord.Member):
             # user = user  # type: discord.Member
-            return user.get_role(self.config["user_role"]) is not None
-        elif isinstance(user, User):
+            if user.guild.id == self.config["main_guild"]:
+                return user.get_role(self.config["user_role"]) is not None
+            else:
+                user = await self.bot.get_or_fetch_user(user.id)
+        if isinstance(user, User):
             # user = user  # type: User
             if self.config["main_guild"] is None:
                 logger.error("main_guild is not set inside the config members.main_guild")
@@ -409,7 +412,7 @@ class MembersCommands(commands.Cog):
         else:
             msg += "Spieler hat keinen eingetragenen Owner\n"
         if len(player.authorized_discord_ids) > 0:
-            msg += "Authorisierte Spieler (mit Owner-Berechtigungen):\n"
+            msg += "Authorisierte Nutzer (mit Owner-Berechtigungen):\n"
             for i in player.authorized_discord_ids:
                 msg += f"`{i}`: <@{i}>\n"
         await ctx.response.send_message(msg, ephemeral=True)

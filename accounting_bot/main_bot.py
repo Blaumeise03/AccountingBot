@@ -122,7 +122,9 @@ class AccountingBot(commands.Bot):
         return self.state.value >= State.online.value
 
     def load_config(self) -> None:
+        # ToDo: Add error handling when loading of config fails
         self.config.load_config(self.config_path)
+        self.admins = self.config["admins"]
 
     def save_config(self) -> None:
         self.config.save_config(self.config_path)

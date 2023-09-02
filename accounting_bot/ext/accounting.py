@@ -238,10 +238,10 @@ class AccountingPlugin(BotPlugin):
             return
         has_permissions = user_id in self.admins
         user = await self.bot.get_or_fetch_user(user_id)
-        user_from = self.member_p.get_user(transaction.name_from)
-        # user_to = self.member_p.get_user(transaction.name_to)
         if not has_permissions and isinstance(transaction,
                                               Transaction) and transaction.name_from and transaction.name_to:
+            user_from = self.member_p.get_user(transaction.name_from)
+            # user_to = self.member_p.get_user(transaction.name_to)
             # Only transactions between two players can be self-verified
             if user_from.has_permissions(user_id):
                 # Check if the balance is sufficient
@@ -1395,7 +1395,7 @@ class ShipyardModal(ErrorHandledModal):
         buyer = self.plugin.sheet.check_name_overwrites(self.plugin.member_p.get_main_name(buyer))
         if not buyer_is_match:
             warnings += f"Hinweis: Käufer \"{self.children[0].value}\" wurde zu \"**{buyer}**\" geändert!\n"
-        if buyer is not None:
+        if builder is not None:
             builder = self.plugin.sheet.check_name_overwrites(self.plugin.member_p.get_main_name(builder))
         if not builder_is_match and len(self.children[4].value) > 0:
             warnings += f"Warnung: Bauer \"{self.children[4].value}\" wurde zu \"**{builder}**\" geändert!\n"

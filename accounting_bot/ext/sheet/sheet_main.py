@@ -49,11 +49,11 @@ CONFIG_TREE = {
 CONFIG_TREE_MEMBERS = {
     "sheet_name": (str, "N/A"),
     "path_discord_ids": (str, "discord_ids.json"),
-    "members_area": (str, "A4:O"),
+    "members_area": (str, "A4:P"),
     "members_active_index": (int, 10),
     "members_name_index": (int, 0),
     "members_rank_index": (int, 8),
-    "members_note_index": (int, 14),
+    "members_note_index": (int, 15),
     "members_note_alt_prefix": (str, "Twink von "),
 }
 
@@ -105,7 +105,7 @@ class SheetPlugin(BotPlugin):
         agc = await self.agcm.authorize()
         sheet = await agc.open_by_key(self.sheet_id)
         if self.sheet_name is None:
-            self.sheet_name = sheet.get_title()
+            self.sheet_name = sheet.title
         return sheet
 
     def check_name_overwrites(self, name: str) -> str:
@@ -177,6 +177,7 @@ class SheetCog(commands.Cog):
 
 
 async def load_usernames(players: Dict[str, Player], plugin: SheetPlugin) -> Dict[str, Player]:
+    logger.info("Loading usernames from sheet")
     sheet = await plugin.get_sheet()
     config = plugin.member_config
     # Load usernames
@@ -225,6 +226,7 @@ async def load_usernames(players: Dict[str, Player], plugin: SheetPlugin) -> Dic
 
 
 def load_discord_ids(players: Dict[str, Player], path: str):
+    logger.info("Loading discord ids")
     if exists(path):
         with open(path, "r", encoding="utf-8") as file:
             raw = json.load(file)
@@ -267,6 +269,7 @@ def save_discord_ids(players: List[Player], path: str):
 
 
 def load_user_overwrites(players: Dict[str, Player]):
+    logger.info("Loading user overwrites")
     count = 0
     if exists(USER_OVERWRITES_FILE):
         with open(USER_OVERWRITES_FILE, "r") as file:
