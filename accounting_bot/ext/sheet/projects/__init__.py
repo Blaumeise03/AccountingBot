@@ -6,6 +6,7 @@
 import asyncio
 import functools
 import logging
+from difflib import SequenceMatcher
 from typing import Dict, List, Tuple, Callable
 
 import discord
@@ -334,7 +335,28 @@ class ListModal(ErrorHandledModal):
         super().__init__(title="Ingame List Parser", *args, **kwargs)
         self.skip_loading = skip_loading
         self.plugin = plugin
-        self.priority_projects = priority_projects
+        self.priority_projects = []
+        for p_name in priority_projects:
+            found = False
+            for project in self.plugin.all_projects:  # type: Project
+                if project.name.casefold() == p_name.casefold():
+                    self.priority_projects.append(project.name)
+                    found = True
+                    break
+            if found:
+                continue
+            best_ratio = 0.75
+            best_project = None
+            for project in self.plugin.all_projects:  # type: Project
+                ratio = SequenceMatcher(None, project.name, p_name).ratio()
+                if ratio > best_ratio:
+                    if project.name in self.priority_projects:
+                        continue
+                    best_project = project
+                    best_ratio = ratio
+            if best_project is None:
+                continue
+            self.priority_projects.append(best_project.name)
         self.add_item(InputText(label="Spielername", placeholder="Spielername", required=True))
         self.add_item(InputText(label="Ingame List", placeholder="Ingame liste hier einfügen",
                                 required=True, style=InputTextStyle.long))
@@ -359,15 +381,23 @@ class ListModal(ErrorHandledModal):
         log.append("Splitting contract...")
         async with self.plugin.projects_lock:
             logger.debug("Splitting contract for %s ", player)
-            split = Project.split_contract(items, self.plugin.all_projects, self.priority_projects)
+            split = Project.split_contract(items,
+                                           project_list=self.plugin.all_projects,
+                                           project_resources=self.plugin.project_resources,
+                                           priority_projects=self.priority_projects)
         log.append("Calculating investments...")
         investments = Project.calc_investments(split, self.plugin.project_resources)
         message = ""
         if not is_perfect:
             message = f"Meintest du \"{player}\"? (Deine Eingabe war \"{self.children[0].value}\").\n"
         msg_list = project_utils.format_list(split, [])
+        if len(self.priority_projects) == 0:
+            p_priority = None
+        else:
+            p_priority = " > ".join(self.priority_projects)
         message += f"Eingelesene items: \n```\n{Item.to_string(items)}\n```\n" \
-                   f"Willst du diese Liste als Investition für {player} eintragen?\n" \
+                   f"Projektpriorität: `{p_priority}`\n" \
+                   f"Willst du diese Liste als Investition für `{player}` eintragen?\n" \
                    f"Sheet: `{self.plugin.sheet.sheet_name}`"
         msg_file = [utils.string_to_file(msg_list, "split.txt")]
 

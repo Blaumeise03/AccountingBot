@@ -148,8 +148,8 @@ def format_list(split: {str: [(str, int)]}, success: {str, bool}):
 
 class Project(object):
     def __init__(self, name: str):
-        self.name = name
-        self.exclude = Project.ExcludeSettings.none
+        self.name = name  # type: str
+        self.exclude = Project.ExcludeSettings.none  # type: Project.ExcludeSettings
         self.pending_resources = []  # type: List[Item]
         self.investments_range = None
 
