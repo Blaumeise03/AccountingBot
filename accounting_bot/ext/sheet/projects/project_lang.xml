@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<translations>
+    <help_insertinvestment>
+        <en>Speichert eine Ingame Liste als Projektinvestition ab.</en>
+        <de>Saves an ingame list as a project investment.</de>
+    </help_insertinvestment>
+    <help_insertinvestment_skip_loading>
+        <en>Skip the reloading of the projects.</en>
+        <de>Überspringt das Nachladen der Projekte.</de>
+    </help_insertinvestment_skip_loading>
+    <help_insertinvestment_skip_loading_long>
+        <en>Skip the reloading of the projects and uses the cached projects. Can cause an overflow in the projects if the cache is outdated.</en>
+        <de>Überspringt das Nachladen der Projekte. Kann zu einem Überlaufen der Projekte führen wenn der Cache nicht aktuell war.</de>
+    </help_insertinvestment_skip_loading_long>
+    <help_insertinvestment_priority_project>
+        <en>Prioritize the given project, or multiple separated by a semicolon (;).</en>
+        <de>Priorisiert die angegebenen Projekte, oder mehrere getrennt durch ein Semikolon (;).</de>
+    </help_insertinvestment_priority_project>
+    <help_insertinvestment_priority_project_long>
+        <en>Prioritize the given projects. The project names are case-insensitive and if no direct match was found, the closest matching project name will be used. The final list will be shown before inserting the investment into the sheet.
+            Multiple projects have to be separated by a semicolon (;).</en>
+        <de>Priorisiert die angegebenen Projekte. Groß-/Kleinschreibung wird ignoriert, wenn keine direkte Übereinstimmung gefunden wurde, wird das Projekt mit dem ähnlichsten Namen gewählt. Bevor die Investition eingetragen wird, gibt es nochmal eine Information über die finale Reihenfolge.
+        Mehrere Projekte müssen durch ein Semikolon (;) getrennt werden.</de>
+    </help_insertinvestment_priority_project_long>
+</translations>

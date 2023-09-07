@@ -135,7 +135,7 @@ class HelpCommand(commands.Cog):
                               value=f"({t_('optional') if not opt.required else t_('required')}):"
                                     f" `{opt.input_type.name}`\n"
                                     f"Default: `{str(opt.default)}`\n"
-                                    f"{get_cmd_help(command, opt.name, fallback=opt.description)}",
+                                    f"{get_cmd_help(command, opt.name, long=True, fallback=opt.description)}",
                               inline=False)
         emb.description = description
         return emb

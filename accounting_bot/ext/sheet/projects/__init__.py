@@ -2,6 +2,7 @@
 # Name: ProjectPlugin
 # Author: Blaumeise03
 # Depends-On: [accounting_bot.ext.members, accounting_bot.ext.sheet.sheet_main]
+# Localization: project_lang.xml
 # End
 import asyncio
 import functools
