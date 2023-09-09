@@ -42,7 +42,7 @@ class Config:
         else:
             return self._tree[key]
 
-    def load_tree(self, tree: Dict[str, Any], root_key: str | None = None) -> None:
+    def load_tree(self, tree: Dict[str, Any], root_key: str | None = None, skip_existing=True) -> None:
         """
         Adds a config tree to this config, the tree must be a dictionary with strings as keys. The values must either be
         tuples with the type (str, int, list...) as the first value and a default value for the second value or a
@@ -58,10 +58,10 @@ class Config:
         This operation is additive, it's allowed to load multiple config trees. However, duplicated leaves are not
         allowed and will cause a ConfigException.
 
-        :raise ConfigException: If the config tree is malformed
-
+        :param skip_existing: Ignores if a key already exists in the config, if false raises an error
         :param tree: The config tree to insert
         :param root_key: The key at which the new tree should be inserted, empty for the root key
+        :raise ConfigException: If the config tree is malformed
         """
         config = self
         if root_key is not None and len(root_key) > 0:
@@ -80,6 +80,8 @@ class Config:
                         config._tree[key].data_type = value[0]
                         config._tree[key].default = value[1]
                         config._tree[key].unused = False
+                        continue
+                    if skip_existing:
                         continue
                     raise ConfigException(f"Can't load config tree: Key {key} already exists in config")
                 config._tree[key] = ConfigElement(value[0], value[1])
