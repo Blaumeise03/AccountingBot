@@ -63,8 +63,8 @@ class ProjectPlugin(BotPlugin):
     async def insert_investments(self, player: str, investments: Dict[str, List[int]]):
         return await _project_tools.insert_investments(self, player, investments)
 
-    async def split_overflow(self, log):
-        return await _project_tools.split_overflow(self, log)
+    async def split_overflow(self, project_resources: List[str], log=None):
+        return await _project_tools.split_overflow(self, project_resources, log)
 
     async def apply_overflow_split(self,
                                    investments: Dict[str, Dict[str, List[int]]],
@@ -168,7 +168,7 @@ class ProjectCommands(commands.Cog):
         await ctx.defer()
         await self.plugin.load_projects()
         log = []
-        investments, changes = await self.plugin.split_overflow(log)
+        investments, changes = await self.plugin.split_overflow(self.plugin.project_resources, log)
         msg_list = []
         for player, invests in investments.items():
             for proj, invest in invests.items():

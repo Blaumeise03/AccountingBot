@@ -338,7 +338,7 @@ def is_required(self: "ProjectPlugin", ressource: str):
     return False
 
 
-async def split_overflow(self: "ProjectPlugin", log=None) -> Tuple[Dict[str, Dict[str, List[int]]], List[Tuple[Cell, int]]]:
+async def split_overflow(self: "ProjectPlugin", project_resources: List[str], log=None) -> Tuple[Dict[str, Dict[str, List[int]]], List[Tuple[Cell, int]]]:
     if log is None:
         log = []
 
@@ -380,7 +380,7 @@ async def split_overflow(self: "ProjectPlugin", log=None) -> Tuple[Dict[str, Dic
                 self.all_projects,
                 self.project_resources,
                 extra_res=total_res)
-            invest = Project.calc_investments(split, self.config["project_resources"])
+            invest = Project.calc_investments(split, project_resources)
             new_value = 0
             if "overflow" in invest:
                 new_value = invest["overflow"][index]
