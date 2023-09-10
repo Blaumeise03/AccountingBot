@@ -15,7 +15,7 @@ from datetime import datetime
 from enum import Enum
 from os import PathLike
 from types import ModuleType
-from typing import Dict, Union, List, Optional, Tuple, Any
+from typing import Dict, Union, List, Optional, Tuple, Any, Callable
 
 import discord
 from discord import ApplicationContext, ApplicationCommandError, User, Member, Embed, Color, option, Thread, \
@@ -119,7 +119,6 @@ class AccountingBot(commands.Bot):
         return self.state.value >= State.online.value
 
     def load_config(self) -> None:
-        # ToDo: Add error handling when loading of config fails
         self.config.load_config(self.config_path)
         self.admins = self.config["admins"]
 
@@ -329,6 +328,14 @@ class AccountingBot(commands.Bot):
         return channel
 
     def run(self, *args: Any, **kwargs: Any) -> None:
+        try:
+            self._run(*args, **kwargs)
+        except Exception as e:
+            utils.log_error(logger, e, location="bot.run")
+            logger.critical("Bot could not be started")
+            exit(500)
+
+    def _run(self, *args: Any, **kwargs: Any) -> None:
         self.loop.set_exception_handler(_handle_asyncio_exception)
         self.load_plugins()
         loop = self.loop
@@ -413,7 +420,8 @@ class BotCommands(commands.Cog):
         await self.bot.stop()
 
     @group_bot.command(name="reload_plugin", description="Reloads a plugin")
-    @option(name="plugin_name", description="The name of the plugin to reload", type=str, required=True, autocomplete=plugin_autocomplete)
+    @option(name="plugin_name", description="The name of the plugin to reload", type=str, required=True,
+            autocomplete=plugin_autocomplete)
     @option(name="force", description="Forces a reload, ignoring all errors", type=bool, required=False, default=False)
     @option(name="silent", description="Execute the command silently", type=bool, required=False, default=True)
     @owner_only()
