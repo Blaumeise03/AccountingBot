@@ -1,10 +1,12 @@
 import logging
+from datetime import datetime
 from time import sleep
 from typing import Union, Optional, Tuple, List, Sequence
 
 import mariadb
 from mariadb import Cursor, Connection
 
+from accounting_bot import utils
 from accounting_bot.exceptions import DatabaseException
 
 logger = logging.getLogger("ext.accounting.db")
@@ -62,6 +64,17 @@ class AccountingDB:
         except mariadb.Error as e:
             logger.error(f"Error connecting to MariaDB Platform: {e}")
             raise e
+
+    def ping(self):
+        try:
+            if self.con is None or not self.con.open:
+                self.try_connect()
+            start = datetime.now()
+            self.con.ping()
+            return (datetime.now() - start).microseconds
+        except mariadb.Error as e:
+            utils.log_error(logger, e)
+            return None
 
     def execute_statement(self, statement: str, data: Sequence = ()) -> Cursor:
         if self.con is None or not self.con.open:

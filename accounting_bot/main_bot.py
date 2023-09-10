@@ -11,6 +11,7 @@ import signal
 import sys
 from abc import ABC
 from asyncio import AbstractEventLoop
+from datetime import datetime
 from enum import Enum
 from os import PathLike
 from types import ModuleType
@@ -388,8 +389,9 @@ class BotCommands(commands.Cog):
     @option(name="silent", description="Execute the command silently", type=bool, required=False, default=True)
     async def cmd_status(self, ctx: ApplicationContext, silent: bool):
         await ctx.response.defer(ephemeral=silent)
-        embed = await build_status_embed(self.bot)
-        await ctx.followup.send(embed=embed)
+        embed_bot = await build_status_embed(self.bot)
+        embed_plugins = await build_plugin_status_embed(self.bot)
+        await ctx.followup.send(embeds=[embed_bot, embed_plugins])
 
     @commands.slash_command(name="stop", description="Shuts down the discord bot, if set up properly, it will restart")
     @owner_only()
@@ -477,6 +479,17 @@ class BotPlugin(ABC):
     def on_unload(self):
         # Gets called before reloading the extension
         pass
+
+    # noinspection PyMethodMayBeStatic,PyUnusedLocal
+    async def get_status(self, short=False) -> Dict[str, str]:
+        """
+        Should return a dictionary describing the status of the plugin. Each key may be a category with the value
+        being the status information. This data will be visible in the status command of the bot.
+
+        :param short: If true the status should be reduced to the most important information.
+        :return:
+        """
+        return {}
 
 
 class PluginWrapper(object):
@@ -773,7 +786,7 @@ async def build_status_embed(bot: AccountingBot) -> Embed:
             owner = o.name
     desc = f"Status: `{bot.state.name}`\nShard-ID: `{bot.shard_id}`\nShards: `{bot.shard_count}`\nPing: `{bot.latency:.3f} sec`\n" \
            f"Owner: `{owner}`"
-    embed = Embed(title="Bot Status", colour=Color.gold(), description=desc)
+    embed = Embed(title="Bot Status", colour=Color.gold(), description=desc, timestamp=datetime.now())
     embed.add_field(
         name="Plugins", inline=False,
         value=f"```\n"
@@ -795,4 +808,26 @@ async def build_status_embed(bot: AccountingBot) -> Embed:
         value=f"```\n{desc}\n```"
     )
     embed.set_thumbnail(url=str(bot.user.display_avatar.url))
+    embed.set_author(name=bot.user.name)
+    return embed
+
+
+async def get_plugin_state(bot: AccountingBot, plugin_state: PluginState) -> Optional[str]:
+    msg = ""
+    for wrapper in bot.get_plugins(plugin_state):
+        state = await wrapper.plugin.get_status(short=True)
+        if len(state) > 0:
+            msg += f"{wrapper.name}\n```\n"
+            for key, value in state.items():
+                msg += f"{key:10}: {value}\n"
+            msg += "```\n"
+    return msg.strip("\n") if len(msg) > 0 else None
+
+
+async def build_plugin_status_embed(bot: AccountingBot) -> Embed:
+    embed = Embed(title="Plugin Status", colour=Color.darker_gray(), timestamp=datetime.now())
+    for state in reversed(PluginState):
+        msg = await get_plugin_state(bot, state)
+        if msg:
+            embed.add_field(name=state.name, value=msg, inline=False)
     return embed

@@ -10,7 +10,7 @@ import time
 from abc import ABC, abstractmethod
 from asyncio import Lock
 from datetime import datetime
-from typing import Optional, Callable, TypeVar, Tuple
+from typing import Optional, Callable, TypeVar, Tuple, Dict
 from typing import Union, List
 
 import discord
@@ -38,7 +38,6 @@ INVESTMENT_RATIO = 0.3  # percentage of investment that may be used for transact
 _T = TypeVar("_T")
 
 logger = logging.getLogger("ext.accounting")
-
 
 NAME_SHIPYARD = "Buyback Program"
 
@@ -113,6 +112,21 @@ class AccountingPlugin(BotPlugin):
             return
         logger.warning("Closing SQL connection")
         self.db.con.close()
+
+    async def get_status(self, short=False) -> Dict[str, str]:
+        result = {}
+        db_ping = self.db.ping()
+        if db_ping is not None:
+            result["DB Ping"] = f"{db_ping} ms"
+        else:
+            result["DB Ping"] = "Not connected"
+        # noinspection PyBroadException
+        try:
+            result["Sheet"] = (await self.sheet.get_sheet()).title
+        except Exception:
+            result["Sheet"] = "Error"
+        
+        return result
 
     async def inform_player(self, transaction, discord_id, receive):
         time_formatted = transaction.timestamp.astimezone(pytz.timezone(self.timezone)).strftime("%d.%m.%Y %H:%M")
