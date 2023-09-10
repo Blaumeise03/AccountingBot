@@ -815,7 +815,12 @@ async def build_status_embed(bot: AccountingBot) -> Embed:
 async def get_plugin_state(bot: AccountingBot, plugin_state: PluginState) -> Optional[str]:
     msg = ""
     for wrapper in bot.get_plugins(plugin_state):
-        state = await wrapper.plugin.get_status(short=True)
+        try:
+            state = await wrapper.plugin.get_status(short=True)
+        except Exception as e:
+            msg += f"{wrapper.name}\n```\n{e.__class__.__name__}: {e}\n```\n"
+            utils.log_error(logger, e, location=f"plugin_state of {wrapper.name}")
+            continue
         if len(state) > 0:
             msg += f"{wrapper.name}\n```\n"
             for key, value in state.items():

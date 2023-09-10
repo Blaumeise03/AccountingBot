@@ -84,6 +84,12 @@ class ProjectPlugin(BotPlugin):
         await self.find_projects()
         await self.load_projects()
 
+    async def get_status(self, short=False) -> Dict[str, str]:
+        result = {
+            "Projects": str(len(self.all_projects))
+        }
+        return result
+
 
 async def _check_permissions(plugin, interaction):
     if not (

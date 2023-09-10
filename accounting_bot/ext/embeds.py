@@ -40,6 +40,11 @@ class EmbedPlugin(BotPlugin):
     def on_unload(self):
         self.embeds.clear()
 
+    async def get_status(self, short=False) -> Dict[str, str]:
+        return {
+            "Loaded": str(len(self.embeds))
+        }
+
     def get_embed(self, name: str) -> Union[Embed, str]:
         if name in self.embeds:
             return self.embeds[name]

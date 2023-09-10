@@ -147,6 +147,12 @@ class MembersPlugin(BotPlugin):
         self._name_lookup_table.clear()
         self.main_chars.clear()
 
+    async def get_status(self, short=False) -> Dict[str, str]:
+        return {
+            "All": f"{len(self._name_lookup_table)} Chars",
+            "Players": f"{len(self.players)} Players"
+        }
+
     def set_data_source(self):
         self._data_provider = DataChain()
         return self._data_provider
