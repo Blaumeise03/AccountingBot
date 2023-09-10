@@ -19,7 +19,7 @@ from typing import Dict, Union, List, Optional, Tuple, Any
 
 import discord
 from discord import ApplicationContext, ApplicationCommandError, User, Member, Embed, Color, option, Thread, \
-    ActivityType, SlashCommandGroup
+    ActivityType, SlashCommandGroup, AutocompleteContext
 from discord.abc import GuildChannel, PrivateChannel
 from discord.ext import commands, tasks
 
@@ -379,13 +379,25 @@ class AccountingBot(commands.Bot):
         logger.info("Clean shutdown completed")
 
 
+def plugin_autocomplete(ctx: AutocompleteContext):
+    # noinspection PyTypeChecker
+    bot = ctx.bot  # type: AccountingBot
+    return filter(
+        lambda p: ctx.value is None or p.startswith(ctx.value.strip()),
+        map(
+            lambda w: w.name,
+            bot.get_plugins()
+        )
+    )
+
+
 class BotCommands(commands.Cog):
     def __init__(self, bot: AccountingBot):
         self.bot = bot
 
-    cmd_plugin = SlashCommandGroup(name="plugin", description="Command collection for plugin management")
+    group_bot = SlashCommandGroup(name="bot", description="Command collection for bot management")
 
-    @commands.slash_command(name="status")
+    @group_bot.command(name="status")
     @option(name="silent", description="Execute the command silently", type=bool, required=False, default=True)
     async def cmd_status(self, ctx: ApplicationContext, silent: bool):
         await ctx.response.defer(ephemeral=silent)
@@ -393,15 +405,15 @@ class BotCommands(commands.Cog):
         embed_plugins = await build_plugin_status_embed(self.bot)
         await ctx.followup.send(embeds=[embed_bot, embed_plugins])
 
-    @commands.slash_command(name="stop", description="Shuts down the discord bot, if set up properly, it will restart")
+    @group_bot.command(name="stop", description="Shuts down the discord bot, if set up properly, it will restart")
     @owner_only()
     async def cmd_stop(self, ctx: ApplicationContext):
         logger.critical("Shutdown Command received, shutting down bot in 10 seconds")
         await ctx.respond("Bot wird gestoppt...")
         await self.bot.stop()
 
-    @cmd_plugin.command(name="reload", description="Reloads a plugin")
-    @option(name="plugin_name", description="The name of the plugin to reload", type=str, required=True)
+    @group_bot.command(name="reload_plugin", description="Reloads a plugin")
+    @option(name="plugin_name", description="The name of the plugin to reload", type=str, required=True, autocomplete=plugin_autocomplete)
     @option(name="force", description="Forces a reload, ignoring all errors", type=bool, required=False, default=False)
     @option(name="silent", description="Execute the command silently", type=bool, required=False, default=True)
     @owner_only()
@@ -410,9 +422,24 @@ class BotCommands(commands.Cog):
         try:
             logger.warning("Reloading plugin %s, executed by %s:%s", plugin_name, ctx.user.name, ctx.user.id)
             await self.bot.reload_plugin(plugin_name, force=force)
-            await ctx.followup.send(f"Successfully reloaded plugin {plugin_name}")
+            msg = (f"Successfully reloaded plugin {plugin_name}\n**Warning**: Reloading a plugin can cause unexpected "
+                   f"side effects. It is recommended to perform a restart after a major update, especially for more "
+                   f"complicated plugins.")
+            if force:
+                msg += ("\n**Warning**: Force reloading is not recommended and can cause major issues if an error "
+                        "occurs during unloading of the old plugin.")
+            await ctx.followup.send(msg)
         except PluginNotFoundException as e:
             raise InputException("Invalid plugin name " + plugin_name) from e
+
+    @group_bot.command(name="reload_config", description="Reloads the bot config")
+    @option(name="silent", description="Execute the command silently", type=bool, required=False, default=True)
+    @owner_only()
+    async def cmd_config_reload(self, ctx: ApplicationContext, silent: bool):
+        await ctx.response.defer(ephemeral=silent)
+        logger.info("Reloading config, executed by %s:%s", ctx.user.name, ctx.user.id)
+        self.bot.load_config()
+        await ctx.followup.send("Config reloaded\nNot all plugins might be using the new config version.")
 
 
 class BotPlugin(ABC):
