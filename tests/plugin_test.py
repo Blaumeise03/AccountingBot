@@ -11,6 +11,8 @@ from discord import ApplicationContext, ApplicationCommandError, option
 from discord.ext import commands
 
 from accounting_bot.main_bot import BotPlugin, AccountingBot, PluginWrapper
+from accounting_bot.utils.ui import ModalForm
+
 logger = logging.getLogger("test.plugin_test")
 
 
@@ -56,3 +58,13 @@ class TestCommands(commands.Cog):
         # There is no need to log the stack traces here.
         logger.info("Command error in test")
         await ctx.respond("Error", ephemeral=True)
+
+    @commands.slash_command(name="modal")
+    async def test_modal_form(self, ctx: ApplicationContext):
+        res = await (
+            ModalForm(title="Test", submit_message="Abgeschickt")
+            .add_field(label="A")
+            .add_field(label="B")
+            .open_form(ctx.response)
+        )
+        await ctx.followup.send(str(res), ephemeral=True)
