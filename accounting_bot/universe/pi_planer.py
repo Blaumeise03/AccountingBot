@@ -14,7 +14,7 @@ from datetime import datetime, timedelta
 from typing import List, Dict, Optional, Callable, Coroutine, Any, Union, TYPE_CHECKING
 
 import discord
-from discord import User, Embed, Color, ApplicationContext, Message, InputTextStyle
+from discord import User, Embed, Color, ApplicationContext, Message, InputTextStyle, Interaction
 from discord.ui import InputText, Button
 
 from accounting_bot.exceptions import PlanetaryProductionException, PiPlanerException
@@ -636,7 +636,10 @@ class PiPlanningSession:
         for plan in self.plans:
             await plan.save_settings()
         for plan in self._deleted:
-            await data_utils.delete_pi_plan(plan)
+            try:
+                await data_utils.delete_pi_plan(plan)
+            except PlanetaryProductionException as e:
+                logger.warning("Plan %s:%s could not be deleted: %s", plan.user_id, plan.plan_num, e)
         self._deleted.clear()
 
     def get_embeds(self) -> List[Embed]:
@@ -684,37 +687,36 @@ class PiPlanningView(AutoDisableView):
         self.session.main_view = self
 
     @discord.ui.button(emoji="✖️", style=discord.ButtonStyle.red, row=0)
-    async def btn_close(self, button: Button, ctx: ApplicationContext):
+    async def btn_close(self, button: Button, ctx: Interaction):
         await self.message.delete()
         await ctx.response.send_message("Um die Änderungen zu speichern, klicke auf 💾", ephemeral=True)
 
     @discord.ui.button(emoji="💾", style=discord.ButtonStyle.green, row=0)
-    async def btn_save(self, button: Button, ctx: ApplicationContext):
+    async def btn_save(self, button: Button, ctx: Interaction):
         await ctx.response.defer(ephemeral=True)
         await self.session.save_plans()
         await ctx.followup.send("Änderungen gespeichert!", ephemeral=True)
 
     @discord.ui.button(emoji="◀️", style=discord.ButtonStyle.grey, row=0)
-    async def btn_prev_plan(self, button: Button, ctx: ApplicationContext):
+    async def btn_prev_plan(self, button: Button, ctx: Interaction):
         self.session.set_active("prev")
         await ctx.response.defer(ephemeral=True, invisible=True)
         await self.session.refresh_msg()
 
     @discord.ui.button(emoji="▶️", style=discord.ButtonStyle.grey, row=0)
-    async def btn_next_plan(self, button: Button, ctx: ApplicationContext):
+    async def btn_next_plan(self, button: Button, ctx: Interaction):
         self.session.set_active("next")
         await ctx.response.defer(ephemeral=True, invisible=True)
         await self.session.refresh_msg()
 
     @discord.ui.button(emoji="❓", style=discord.ButtonStyle.grey, row=0)
-    async def btn_help(self, button: Button, ctx: ApplicationContext):
-        # noinspection PyUnresolvedReferences
-        embed = ctx.bot.get_plugin("EmbedPlugin").get_embed("PiPlanerHelp")  # type: Embed
+    async def btn_help(self, button: Button, ctx: Interaction):
+        embed = self.session.plugin.bot.get_plugin("EmbedPlugin").get_embed("PiPlanerHelp")  # type: Embed
         await ctx.response.send_message(embed=embed, ephemeral=True)
 
     @discord.ui.button(emoji="🗑️", style=discord.ButtonStyle.red, row=1)
-    async def btn_delete(self, button: Button, ctx: ApplicationContext):
-        async def _delete(_ctx: ApplicationContext):
+    async def btn_delete(self, button: Button, ctx: Interaction):
+        async def _delete(_ctx: Interaction):
             self.session.delete_plan(self.session.get_active_plan())
             self.session.isEditing = False
             await _ctx.response.send_message("Plan gelöscht", ephemeral=True)
@@ -724,7 +726,7 @@ class PiPlanningView(AutoDisableView):
                                         ephemeral=True)
 
     @discord.ui.button(emoji="➕", style=discord.ButtonStyle.blurple, row=1)
-    async def btn_new(self, button: Button, ctx: ApplicationContext):
+    async def btn_new(self, button: Button, ctx: Interaction):
         plan = self.session.create_new_plan()
         plan.user_id = ctx.user.id
         plan.user_name = ctx.user.name
@@ -732,31 +734,31 @@ class PiPlanningView(AutoDisableView):
         await ctx.response.send_message(f"Es wurde ein neuer Plan erstellt: #{plan.plan_num + 1}", ephemeral=True)
 
     @discord.ui.button(emoji="✏", style=discord.ButtonStyle.blurple, row=1)
-    async def btn_basic(self, button: Button, ctx: ApplicationContext):
+    async def btn_basic(self, button: Button, ctx: Interaction):
         await ctx.response.send_modal(EditPlanModal(self.session, "basic"))
 
     @discord.ui.button(emoji="🗺️", style=discord.ButtonStyle.blurple, row=1)
-    async def btn_const(self, button: Button, ctx: ApplicationContext):
+    async def btn_const(self, button: Button, ctx: Interaction):
         await ctx.response.send_modal(EditPlanModal(self.session, "const"))
 
     @discord.ui.button(emoji="💸", style=discord.ButtonStyle.blurple, row=1)
-    async def btn_prices(self, button: Button, ctx: ApplicationContext):
+    async def btn_prices(self, button: Button, ctx: Interaction):
         await ctx.response.send_modal(EditPlanModal(self.session, "prices"))
 
     @discord.ui.button(emoji="🗑️", label="Array", style=discord.ButtonStyle.red, row=2)
-    async def btn_del_array(self, button: Button, ctx: ApplicationContext):
+    async def btn_del_array(self, button: Button, ctx: Interaction):
         await ctx.response.send_modal(EditPlanModal(self.session, "del_array"))
 
     @discord.ui.button(emoji="🔓", label="Array", style=discord.ButtonStyle.blurple, row=2)
-    async def btn_lock_array(self, button: Button, ctx: ApplicationContext):
+    async def btn_lock_array(self, button: Button, ctx: Interaction):
         await ctx.response.send_modal(EditPlanModal(self.session, "lock_array"))
 
     @discord.ui.button(emoji="➕", label="Array", style=discord.ButtonStyle.blurple, row=2)
-    async def btn_add_array(self, button: Button, ctx: ApplicationContext):
+    async def btn_add_array(self, button: Button, ctx: Interaction):
         await ctx.response.send_modal(EditPlanModal(self.session, "add_array"))
 
     @discord.ui.button(label="Auto", style=discord.ButtonStyle.blurple, row=2)
-    async def btn_auto_add_array(self, button: Button, ctx: ApplicationContext):
+    async def btn_auto_add_array(self, button: Button, ctx: Interaction):
         plan = self.session.get_active_plan()
         if plan is None:
             await ctx.response.send_message("Es ist kein Plan ausgewählt!", ephemeral=True)
@@ -764,7 +766,7 @@ class PiPlanningView(AutoDisableView):
         await ctx.response.send_modal(AutoSelectArrayModal(self.session, plan))
 
     @discord.ui.button(label="Export", style=discord.ButtonStyle.grey, row=3)
-    async def btn_export(self, button: Button, ctx: ApplicationContext):
+    async def btn_export(self, button: Button, ctx: Interaction):
         code = self.session.get_active_plan().encode_base64()
         emb = Embed(title="Export code",
                     description="Teile diesen Code um deinen Pi Plan zu teilen. Andere können mit diesem Code deinen "
@@ -775,7 +777,7 @@ class PiPlanningView(AutoDisableView):
         await ctx.response.send_message(embed=emb, ephemeral=True)
 
     @discord.ui.button(label="Import", style=discord.ButtonStyle.grey, row=3)
-    async def btn_import(self, button: Button, ctx: ApplicationContext):
+    async def btn_import(self, button: Button, ctx: Interaction):
         async def _import(code, _ctx: ApplicationContext):
             await _ctx.response.defer(ephemeral=True, invisible=False)
             plan = PiPlaner.decode_base64(code)
@@ -893,7 +895,7 @@ class AutoSelectArrayModal(ErrorHandledModal):
                                 required=True))
 
     async def callback(self, ctx: ApplicationContext):
-        async def save(_ctx: ApplicationContext):
+        async def save(_ctx: Interaction):
             self.session.get_active_plan().arrays = arrays
             await _ctx.response.send_message("Arrays geändert", ephemeral=True)
             await self.session.refresh_msg()

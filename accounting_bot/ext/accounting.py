@@ -1212,7 +1212,7 @@ class TransactionView(AutoDisableView):
         (owner, verified) = self.plugin.db.get_owner(interaction.message.id)
         if not verified and (owner == interaction.user.id or interaction.user.id in self.plugin.admins):
             embed = interaction.message.embeds[0]
-            await interaction.response.send_modal(EditModal(self.plugin, interaction.message, title=embed.title))
+            await interaction.response.send_modal(EditModal(plugin=self.plugin, message=interaction.message, title=embed.title))
         elif owner != interaction.user.id:
             await interaction.response.send_message("Dies ist nicht deine Transaktion, wenn du ein Admin bist, lösche "
                                                     "die Nachricht bitte eigenständig.", ephemeral=True)
@@ -1343,7 +1343,7 @@ class EditModal(TransferModal):
         self.plugin = plugin
         embed = message.embeds[0]
         # noinspection PyTypeChecker
-        super().__init__(color=embed.color, default=False, *args, **kwargs)
+        super().__init__(color=embed.color, plugin=plugin, default=False, *args, **kwargs)
         for field in embed.fields:
             self.add_item(InputText(label=field.name, required=True, value=field.value))
 

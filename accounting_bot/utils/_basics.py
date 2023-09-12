@@ -432,17 +432,17 @@ class AutoDisableView(ErrorHandledView):
 
 # noinspection PyUnusedLocal
 class ConfirmView(AutoDisableView):
-    def __init__(self, callback: Callable[[ApplicationContext], Coroutine], *args, **kwargs):
+    def __init__(self, callback: Callable[[Interaction], Coroutine], *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.function = callback
 
     @discord.ui.button(label="Bestätigen", style=discord.ButtonStyle.green)
-    async def btn_confirm(self, button: Button, ctx: ApplicationContext):
+    async def btn_confirm(self, button: Button, ctx: Interaction):
         await self.function(ctx)
         await self.message.delete()
 
     @discord.ui.button(label="Abbrechen", style=discord.ButtonStyle.grey)
-    async def btn_abort(self, button: Button, ctx: ApplicationContext):
+    async def btn_abort(self, button: Button, ctx: Interaction):
         await ctx.response.defer(invisible=True)
         await self.message.delete()
 
