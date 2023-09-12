@@ -240,6 +240,10 @@ async def insert_investment(self: "ProjectPlugin", player: str, project_name: st
         log = []
     if project_name.casefold() == "overflow".casefold():
         return await insert_overflow(self, player, quantities, log)
+    if project_name.casefold() == "unknown".casefold():
+        log.append("Unknown items in contract detected")
+        logger.warning("Unknown items in contract for player %s detected", player)
+        return False
     async with self.projects_lock:
         logger.debug("Inserting investment for %s into %s", player, project_name)
         sheet = await self.sheet.get_sheet()

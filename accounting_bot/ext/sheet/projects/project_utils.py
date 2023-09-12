@@ -188,7 +188,11 @@ class Project(object):
         split = {}  # type: {str: [(str, int)]}
         for item in items:  # type: Item
             left = item.amount
-            split[item.name] = []
+            if item.name not in split:
+                split[item.name] = []
+            if item.name not in project_resources:
+                split[item.name].append(("unknown", left))
+                continue
             for project in projects_ordered:  # type: Project
                 if project.exclude != Project.ExcludeSettings.none:
                     continue
