@@ -6,13 +6,16 @@
 # End
 import asyncio
 import functools
+import hashlib
 import logging
+import time
+from datetime import datetime
 from difflib import SequenceMatcher
 from typing import Dict, List, Tuple, Callable
 
 import discord
 import pytz
-from discord import ApplicationContext, InputTextStyle, Interaction, Option, option
+from discord import ApplicationContext, InputTextStyle, Interaction, Option, option, Embed, Colour
 from discord.ext import commands
 from discord.ext.commands import cooldown
 from discord.ui import InputText
@@ -52,7 +55,7 @@ class ProjectPlugin(BotPlugin):
         self.config = self.bot.create_sub_config("sheet.projects")
         self.config.load_tree(CONFIG_TREE)
         self.project_resources = []  # type: List[str]
-        self.bot.save_config()
+        self.contract_cache = {}  # type: Dict[str, Dict[str, str]]
 
     async def find_projects(self):
         return await _project_tools.find_projects(self)
@@ -89,6 +92,12 @@ class ProjectPlugin(BotPlugin):
             "Projects": str(len(self.all_projects))
         }
         return result
+
+
+def hash_contract(items: List[Item]) -> str:
+    items_sorted = sorted(items, key=lambda i: i.name)
+    string = "".join(f"{i.name}:{i.amount}" for i in items_sorted)
+    return hashlib.sha1(string.encode(encoding="utf-8")).hexdigest()
 
 
 async def _check_permissions(plugin, interaction):
@@ -407,9 +416,22 @@ class ListModal(ErrorHandledModal):
                    f"Willst du diese Liste als Investition für `{player}` eintragen?\n" \
                    f"Sheet: `{self.plugin.sheet.sheet_name}`"
         msg_file = [utils.string_to_file(msg_list, "split.txt")]
-
+        items_hash = hash_contract(items)
+        embed = None
+        if items_hash in self.plugin.contract_cache:
+            old_time = self.plugin.contract_cache[items_hash]["time"]
+            old_player = self.plugin.contract_cache[items_hash]["player"]
+            embed = Embed(colour=Colour.red(), title="Doppelter Vertrag:exclamation:",
+                          description="Dieser Vertrag wurde bereits verarbeitet (was aber nicht heißt dass dieser auch "
+                                      "eingetragen wurde).\n"
+                                      f"Zeit: <t:{old_time}:f> <t:{old_time}:R>\nSpieler: `{old_player}`")
+        self.plugin.contract_cache[items_hash] = {
+            "player": player,
+            "time": int(time.time())
+        }
         await interaction.followup.send(
             message,
             view=ConfirmView(self.plugin, investments, player, log, split),
             files=msg_file,
+            embed=embed,
             ephemeral=False)
