@@ -18,7 +18,8 @@ from discord.ui import InputText
 
 from accounting_bot.exceptions import InputException, ConfigException
 from accounting_bot.main_bot import BotPlugin, AccountingBot, PluginWrapper
-from accounting_bot.utils import admin_only, guild_only, AutoDisableView, ErrorHandledModal, ConfirmView
+from accounting_bot.utils import admin_only, guild_only, AutoDisableView, ErrorHandledModal
+from accounting_bot.utils.ui import ConfirmView
 
 logger = logging.getLogger("ext.frp")
 CONFIG_TREE = {

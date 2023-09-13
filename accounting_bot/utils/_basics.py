@@ -10,13 +10,13 @@ import traceback
 from concurrent.futures import ThreadPoolExecutor
 from enum import Enum
 from os.path import exists
-from typing import Union, Optional, Type, List, Callable, TypeVar, Dict, Coroutine, TYPE_CHECKING
+from typing import Union, Optional, Type, List, Callable, TypeVar, Dict, TYPE_CHECKING
 
 import discord
 from discord import Interaction, ApplicationContext, InteractionResponded, ApplicationCommand, CheckFailure
 from discord.ext import commands
 from discord.ext.commands import Context, Command, NotOwner
-from discord.ui import View, Modal, Button
+from discord.ui import View, Modal
 
 from accounting_bot import exceptions
 from accounting_bot.exceptions import LoggedException, NoPermissionException, BotOfflineException, \
@@ -428,23 +428,6 @@ class AutoDisableView(ErrorHandledView):
                     logger.info("Can't fetch message %s of view to edit: %s",  self.message.id, e2)
         self.clear_items()
         self.disable_all_items()
-
-
-# noinspection PyUnusedLocal
-class ConfirmView(AutoDisableView):
-    def __init__(self, callback: Callable[[Interaction], Coroutine], *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        self.function = callback
-
-    @discord.ui.button(label="Bestätigen", style=discord.ButtonStyle.green)
-    async def btn_confirm(self, button: Button, ctx: Interaction):
-        await self.function(ctx)
-        await self.message.delete()
-
-    @discord.ui.button(label="Abbrechen", style=discord.ButtonStyle.grey)
-    async def btn_abort(self, button: Button, ctx: Interaction):
-        await ctx.response.defer(invisible=True)
-        await self.message.delete()
 
 
 class State(Enum):

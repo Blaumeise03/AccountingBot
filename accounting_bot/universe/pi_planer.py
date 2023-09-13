@@ -22,7 +22,8 @@ from accounting_bot.main_bot import BotPlugin, AccountingBot, PluginWrapper
 from accounting_bot.universe import data_utils
 from accounting_bot.universe.data_utils import Item
 from accounting_bot.universe.models import PiPlanSettings, PiPlanResource
-from accounting_bot.utils import ErrorHandledModal, AutoDisableView, ConfirmView
+from accounting_bot.utils import ErrorHandledModal, AutoDisableView
+from accounting_bot.utils.ui import ConfirmView
 
 if TYPE_CHECKING:
     from accounting_bot.ext.sheet.projects import ProjectPlugin

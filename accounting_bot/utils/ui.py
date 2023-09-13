@@ -1,10 +1,11 @@
-from typing import Optional, Dict
+from typing import Optional, Dict, Coroutine, Callable
 
-from discord import InteractionResponse, Interaction, InputTextStyle
-from discord.ui import Modal, InputText
+import discord
+from discord import InteractionResponse, Interaction, InputTextStyle, Button
+from discord.ui import InputText
 
 from accounting_bot.exceptions import InputException
-from accounting_bot.utils import ErrorHandledModal
+from accounting_bot.utils import ErrorHandledModal, AutoDisableView
 
 
 class FormTimeoutException(InputException):
@@ -70,3 +71,20 @@ class ModalForm(ErrorHandledModal):
         if self._results is None and not ignore_timeout:
             raise FormTimeoutException("No results are available")
         return self._results
+
+
+# noinspection PyUnusedLocal
+class ConfirmView(AutoDisableView):
+    def __init__(self, callback: Callable[[Interaction], Coroutine], *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.function = callback
+
+    @discord.ui.button(label="Bestätigen", style=discord.ButtonStyle.green)
+    async def btn_confirm(self, button: Button, ctx: Interaction):
+        await self.function(ctx)
+        await self.message.delete()
+
+    @discord.ui.button(label="Abbrechen", style=discord.ButtonStyle.grey)
+    async def btn_abort(self, button: Button, ctx: Interaction):
+        await ctx.response.defer(invisible=True)
+        await self.message.delete()
