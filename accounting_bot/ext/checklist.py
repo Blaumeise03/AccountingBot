@@ -15,7 +15,7 @@ from typing import Optional, List, Dict, Any, Union, Literal
 import discord
 from dateutil import parser
 from dateutil.relativedelta import relativedelta
-from discord import SlashCommandGroup, ApplicationContext, Embed, Colour, Message, Interaction
+from discord import SlashCommandGroup, ApplicationContext, Embed, Colour, Message, Interaction, PartialEmoji
 from discord.ext import commands
 
 from accounting_bot.exceptions import UnexpectedStateException, InputException
@@ -26,6 +26,12 @@ from accounting_bot.utils.ui import ModalForm, NumPadView
 logger = logging.getLogger("ext.checklist")
 CONFIG_PATH = "config/checklists.json"
 hour_pattern = re.compile(r"[01]?\d:\d\d")
+
+EMOJI_CHECKED = "<:checked_checkbox_green_128:1152242632358101112>"
+EMOJI_UNCHECKED = "<:blank_checkbox_red_128:1152242630239997972>"
+EMOJI_REFRESH = "<:refresh_check_grey_128:1152242680873627779>"
+EMOJI_ADD_TASK = "<:add_task_grey_128:1152242628889432204>"
+EMOJI_VERT_BAR = "<:vertical_bar_128:1152233072209690684>"
 
 
 class CheckListPlugin(BotPlugin):
@@ -107,6 +113,19 @@ class RepeatDelay(Enum):
         if self is RepeatDelay.monthly:
             return start_time + relativedelta(months=1)
 
+    def get_end_time(self, start_time: datetime):
+        today = datetime.now()
+        if today < start_time:
+            return start_time
+        if self is RepeatDelay.never:
+            return start_time
+        if self is RepeatDelay.daily:
+            return start_time.replace(hour=23, minute=59, second=59)
+        if self is RepeatDelay.weekly:
+            return (start_time + timedelta(days=6-start_time.weekday())).replace(hour=23, minute=59, second=59)
+        if self is RepeatDelay.monthly:
+            return start_time + relativedelta(day=31, hour=23, minute=59, second=59)
+
     def __eq__(self, other):
         if not isinstance(other, RepeatDelay):
             return False
@@ -155,10 +174,10 @@ def _task_filter(tasks: List[Task], time_range: Union[RepeatDelay, Literal['expi
         max_age = now
         min_age = None
     elif isinstance(time_range, RepeatDelay):
-        max_age = time_range.get_next_time(now)
+        max_age = time_range.get_end_time(now)
         min_age = now
         if time_range > RepeatDelay.daily:
-            min_age = RepeatDelay(time_range.value - 1).get_next_time(now)
+            min_age = RepeatDelay(time_range.value - 1).get_end_time(now)
     else:
         raise TypeError(f"Unsupported type {type(time_range)} for time_range")
     return filter(
@@ -215,10 +234,11 @@ class CheckList:
             msg = ""
             for task in tasks:
                 if task.finished:
-                    msg += "✅"
+                    msg += EMOJI_CHECKED
                 else:
-                    msg += "❌"
-                msg += f"<t:{int(task.time.timestamp())}:{time_format}> {task.name}\n"
+                    msg += EMOJI_UNCHECKED
+                msg += (f"<t:{int(task.time.timestamp())}:{time_format}>\n"
+                        f"{EMOJI_VERT_BAR}{task.name}\n")
             if len(msg) > 0:
                 embed.add_field(name=title, inline=False, value=msg)
 
@@ -279,7 +299,7 @@ class CheckListView(AutoDisableView):
         super().__init__(timeout=None)
         self.checklist = checklist
 
-    @discord.ui.button(emoji="➕", style=discord.ButtonStyle.green, row=0)
+    @discord.ui.button(emoji=PartialEmoji.from_str(EMOJI_ADD_TASK), style=discord.ButtonStyle.green, row=0)
     async def btn_add_task(self, button: discord.Button, ctx: Interaction):
         modal = (
             await
@@ -308,7 +328,7 @@ class CheckListView(AutoDisableView):
         await ctx.response.send_message(content=self.checklist.build_list(),
                                         ephemeral=True, view=EditTaskView(self.checklist))
 
-    @discord.ui.button(label="Refresh", style=discord.ButtonStyle.gray, row=0)
+    @discord.ui.button(emoji=PartialEmoji.from_str(EMOJI_REFRESH), style=discord.ButtonStyle.gray, row=0)
     async def btn_refresh(self, button: discord.Button, ctx: Interaction):
         await ctx.response.defer(invisible=True)
         await self.checklist.update_message()
