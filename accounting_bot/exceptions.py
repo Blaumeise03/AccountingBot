@@ -3,6 +3,10 @@ from abc import ABC, abstractmethod
 from discord.ext.commands import CommandError, CheckFailure
 
 
+class UnexpectedStateException(Exception):
+    pass
+
+
 class InputException(CommandError):
     pass
 
