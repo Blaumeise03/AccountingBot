@@ -7,15 +7,16 @@ import functools
 import json
 import logging
 import os
+import re
 from datetime import datetime, timedelta
 from enum import Enum
-from typing import Optional, List, Dict, Any
+from typing import Optional, List, Dict, Any, Union, Literal
 
 import discord
 from dateutil import parser
 from dateutil.relativedelta import relativedelta
 from discord import SlashCommandGroup, ApplicationContext, Embed, Colour, Message, Interaction
-from discord.ext import commands, tasks
+from discord.ext import commands
 
 from accounting_bot.exceptions import UnexpectedStateException, InputException
 from accounting_bot.main_bot import BotPlugin, AccountingBot, PluginWrapper
@@ -24,6 +25,7 @@ from accounting_bot.utils.ui import ModalForm, NumPadView
 
 logger = logging.getLogger("ext.checklist")
 CONFIG_PATH = "config/checklists.json"
+hour_pattern = re.compile(r"[01]?\d:\d\d")
 
 
 class CheckListPlugin(BotPlugin):
@@ -129,10 +131,13 @@ class RepeatDelay(Enum):
 
 
 class Task:
-    def __init__(self, name: Optional[str] = None, time: Optional[datetime] = None):
+    def __init__(self,
+                 name: Optional[str] = None,
+                 time: Optional[datetime] = None,
+                 repeat: RepeatDelay = RepeatDelay.never):
         self.name = name  # type: str | None
         self.time = time  # type: datetime | None
-        self.repeat = RepeatDelay.never  # type: RepeatDelay
+        self.repeat = repeat  # type: RepeatDelay
         self.finished = False
 
     def update_time(self):
@@ -144,13 +149,22 @@ class Task:
             self.finished = False
 
 
-def _task_filter(tasks: List[Task], time_range: RepeatDelay):
+def _task_filter(tasks: List[Task], time_range: Union[RepeatDelay, Literal['expired']]):
     now = datetime.now()
-    max_age = time_range.get_next_time(now)
-    min_age = now
-    if time_range > RepeatDelay.daily:
-        min_age = RepeatDelay(time_range.value - 1).get_next_time(now)
-    return filter(lambda task: task.time is not None and min_age <= task.time <= max_age, tasks)
+    if type(time_range) == str:
+        max_age = now
+        min_age = None
+    elif isinstance(time_range, RepeatDelay):
+        max_age = time_range.get_next_time(now)
+        min_age = now
+        if time_range > RepeatDelay.daily:
+            min_age = RepeatDelay(time_range.value - 1).get_next_time(now)
+    else:
+        raise TypeError(f"Unsupported type {type(time_range)} for time_range")
+    return filter(
+        lambda task: task.time is not None and (min_age is None or min_age <= task.time) and task.time <= max_age,
+        tasks
+    )
 
 
 class CheckList:
@@ -187,7 +201,8 @@ class CheckList:
                 continue
             if task.time > now:
                 continue
-            task.update_time()
+            if task.finished or task.time < min_time:
+                task.update_time()
         for d in to_delete:
             self.tasks.remove(d)
         self.tasks.sort(key=lambda t: t.time)
@@ -207,10 +222,12 @@ class CheckList:
             if len(msg) > 0:
                 embed.add_field(name=title, inline=False, value=msg)
 
+        expired = sorted(_task_filter(self.tasks, "expired"), key=lambda task: task.time)
         today = sorted(_task_filter(self.tasks, RepeatDelay.daily), key=lambda task: task.time)
         week = sorted(_task_filter(self.tasks, RepeatDelay.weekly), key=lambda task: task.time)
         month = sorted(_task_filter(self.tasks, RepeatDelay.monthly), key=lambda task: task.time)
 
+        _add_field(title="Expired", tasks=list(expired), time_format="R")
         _add_field(title="Today", tasks=list(today), time_format="t")
         _add_field(title="This Week", tasks=list(week), time_format="F")
         _add_field(title="This Month", tasks=list(month), time_format="f")
@@ -221,7 +238,7 @@ class CheckList:
         msg = "```"
         for i, task in enumerate(self.tasks):
             time_str = task.time.strftime("%Y-%m-%d, %H:%M")
-            msg += f"\n{i + 1:2} {time_str} {task.repeat.name:7}: {task.name}  "
+            msg += f"\n{i + 1:2} {'✓' if task.finished else ' '} {time_str} {task.repeat.name:7}: {task.name}  "
         msg += "\n```"
         return msg
 
@@ -267,15 +284,18 @@ class CheckListView(AutoDisableView):
         modal = (
             await
             ModalForm(title="New Task", ignore_timeout=True)
-            .add_field(label="Task Name")
-            .add_field(label="Time")
+            .add_field(label="Task Name", placeholder="Enter the name of the task here")
+            .add_field(label="Time", value=datetime.now().isoformat(sep=" ", timespec="minutes"))
             .open_form(ctx.response)
         )
         if modal.is_timeout():
             return
         res = modal.retrieve_results()
         task_name = res["Task Name"]
-        task_time = parser.parse(res["Time"])
+        raw_time = res["Time"]
+        task_time = parser.parse(raw_time, parserinfo=parser.parserinfo(dayfirst=True))
+        if not re.search(hour_pattern, raw_time):
+            task_time = task_time.replace(hour=20, minute=0)
         task = Task(name=task_name, time=task_time)
         self.checklist.tasks.append(task)
         await asyncio.gather(
@@ -351,13 +371,15 @@ class EditTaskView(NumPadView):
         task = self.checklist.tasks[number - 1]
         match dropdown.values[0]:
             case "Edit time":
-                task_time = parser.parse(
-                    (
-                        await
-                        ModalForm(title="Change time", submit_message=True, ignore_timeout=True)
-                        .add_field(label="Time")
-                        .open_form(ctx.response)
-                    ).retrieve_result())
+                raw_time = (
+                    await
+                    ModalForm(title="Change time", submit_message=True, ignore_timeout=True)
+                    .add_field(label="Time", value=datetime.now().isoformat(sep=" ", timespec="minutes"))
+                    .open_form(ctx.response)
+                ).retrieve_result()
+                task_time = parser.parse(raw_time, parserinfo=parser.parserinfo(dayfirst=True))
+                if not re.search(hour_pattern, raw_time):
+                    task_time = task_time.replace(hour=20, minute=0)
                 if task_time is None:
                     return
                 task.time = task_time
@@ -379,9 +401,13 @@ class EditTaskView(NumPadView):
                 await ctx.response.defer(ephemeral=True, invisible=True)
             case _:
                 raise UnexpectedStateException("Unknown selection " + dropdown.values[0])
+        for opt in dropdown.options:
+            opt.default = False
+            if opt.value == dropdown.values[0]:
+                opt.default = True
         await asyncio.gather(
             self.checklist.update_message(),
-            self.message.edit(content=self.checklist.build_list())
+            self.message.edit(content=self.checklist.build_list(), view=self)
         )
 
 
@@ -391,7 +417,7 @@ class CheckListCommands(commands.Cog):
     def __init__(self, plugin: CheckListPlugin):
         self.plugin = plugin
 
-    @tasks.loop(hours=4)
+    @discord.ext.tasks.loop(hours=4)
     async def update_messages(self):
         await self.plugin.update_messages()
 
