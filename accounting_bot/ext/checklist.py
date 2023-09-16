@@ -399,7 +399,7 @@ class EditTaskView(NumPadView):
             ),
             discord.SelectOption(
                 label="Edit name",
-                description="Select how often the task should repeat"
+                description="Rename a task"
             ),
             discord.SelectOption(
                 label="Delete task",
