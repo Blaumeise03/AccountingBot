@@ -1,8 +1,8 @@
 import functools
-from typing import Optional, Dict, Coroutine, Callable, Union
+from typing import Optional, Dict, Coroutine, Callable, Union, List, Self
 
 import discord
-from discord import InteractionResponse, Interaction, InputTextStyle, Button, ApplicationContext
+from discord import InteractionResponse, Interaction, InputTextStyle, Button, ApplicationContext, Embed
 from discord.ui import InputText
 
 from accounting_bot.exceptions import InputException
@@ -115,6 +115,53 @@ class ConfirmView(AutoDisableView):
         await self.message.delete()
 
 
+class AwaitConfirmView(AutoDisableView):
+    def __init__(self, defer_response=True, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.confirmed = False
+        self.interaction = None  # type: Interaction | None
+        self._defer_response = defer_response
+
+    async def send_view(self,
+                        response: InteractionResponse,
+                        message: str, ephemeral=True,
+                        embed: Embed | None = None,
+                        embeds: List[Embed] | None = None) -> Self:
+        await response.send_message(
+            content=message,
+            view=self,
+            embed=embed,
+            embeds=embeds,
+            ephemeral=ephemeral)
+        time_out = await self.wait()
+        if time_out:
+            self.confirmed = False
+        return self
+
+    async def defer_response(self):
+        if self.interaction is None:
+            return
+        await self.interaction.response.defer(invisible=True)
+
+    @discord.ui.button(label="Bestätigen", style=discord.ButtonStyle.green)
+    async def btn_confirm(self, button: Button, ctx: Interaction):
+        self.confirmed = True
+        self.interaction = ctx
+        if self._defer_response:
+            await ctx.response.defer(invisible=True)
+        await self.message.delete()
+        self.stop()
+
+    @discord.ui.button(label="Abbrechen", style=discord.ButtonStyle.grey)
+    async def btn_abort(self, button: Button, ctx: Interaction):
+        self.confirmed = False
+        self.interaction = ctx
+        if self._defer_response:
+            await ctx.response.defer(invisible=True)
+        await self.message.delete()
+        self.stop()
+
+
 class NumPadView(AutoDisableView):
     class NumberButton(discord.ui.Button):
         def __init__(self,
@@ -177,7 +224,12 @@ class NumPadView(AutoDisableView):
         except ValueError as e:
             await modal.get_response().send_message(f"Input is not a valid number: {e}", ephemeral=True)
             return
-        await view.callback(number, modal.get_interaction())
+        confirm = await (AwaitConfirmView(defer_response=False)
+                         .send_view(modal.get_response(), message=f"Please confirm the number `{number}`"))
+        if not confirm.confirmed:
+            await confirm.defer_response()
+            return
+        await view.callback(number, confirm.interaction)
 
     @staticmethod
     async def btn_cancel(ctx: ApplicationContext, view):

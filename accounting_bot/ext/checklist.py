@@ -224,6 +224,8 @@ class CheckList:
                     raise e
                 else:
                     self.message_id = None
+        if self.message is None:
+            return
         if self.view is None:
             self.view = CheckListView(self)
         await self.message.edit(embed=self.build_embed(), view=self.view)
