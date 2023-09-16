@@ -18,7 +18,7 @@ from dateutil.relativedelta import relativedelta
 from discord import SlashCommandGroup, ApplicationContext, Embed, Colour, Message, Interaction, PartialEmoji
 from discord.ext import commands
 
-from accounting_bot.exceptions import UnexpectedStateException, InputException
+from accounting_bot.exceptions import UnexpectedStateException, InputException, NoPermissionException
 from accounting_bot.main_bot import BotPlugin, AccountingBot, PluginWrapper
 from accounting_bot.utils import AutoDisableView
 from accounting_bot.utils.ui import ModalForm, NumPadView
@@ -27,11 +27,14 @@ logger = logging.getLogger("ext.checklist")
 CONFIG_PATH = "config/checklists.json"
 hour_pattern = re.compile(r"[01]?\d:\d\d")
 
-EMOJI_CHECKED = "<:checked_checkbox_green_128:1152242632358101112>"
-EMOJI_UNCHECKED = "<:blank_checkbox_red_128:1152242630239997972>"
-EMOJI_REFRESH = "<:refresh_check_grey_128:1152242680873627779>"
-EMOJI_ADD_TASK = "<:add_task_grey_128:1152242628889432204>"
-EMOJI_VERT_BAR = "<:vertical_bar_128:1152233072209690684>"
+EMOJI_CHECKED = "<:c_r:1152242632358101112>"
+EMOJI_UNCHECKED = "<:c_g:1152242630239997972>"
+EMOJI_REFRESH = "<:r_c:1152242680873627779>"
+EMOJI_ADD_TASK = "<:a_t:1152242628889432204>"
+EMOJI_VERT_BAR = "<:vb:1152233072209690684>"
+EMOJI_REPEAT_DAILY = "<:rp_d:1152298830033850368>"
+EMOJI_REPEAT_WEEKLY = "<:rp_w:1152299344326840430>"
+EMOJI_REPEAT_MONTHLY = "<:rp_m:1152299341969633410>"
 
 
 class CheckListPlugin(BotPlugin):
@@ -39,6 +42,20 @@ class CheckListPlugin(BotPlugin):
     def __init__(self, bot: AccountingBot, wrapper: PluginWrapper) -> None:
         super().__init__(bot, wrapper, logger)
         self.checklists = []  # type: List[CheckList]
+
+    def _count_checklists(self, user: int):
+        count = 0
+        for checklist in self.checklists:
+            if checklist.user_id == user:
+                count += 1
+        return count
+
+    def add_checklist(self, checklist: "CheckList", user: int):
+        if self._count_checklists(user) >= 5:
+            raise NoPermissionException("Every user can have at most 5 checklists")
+        if len(self.checklists) > 40:
+            logger.warning("There are %s checklists, startup performance might be reduced", len(self.checklists))
+        self.checklists.append(checklist)
 
     def load_checklists(self):
         if not os.path.exists("config"):
@@ -122,7 +139,7 @@ class RepeatDelay(Enum):
         if self is RepeatDelay.daily:
             return start_time.replace(hour=23, minute=59, second=59)
         if self is RepeatDelay.weekly:
-            return (start_time + timedelta(days=6-start_time.weekday())).replace(hour=23, minute=59, second=59)
+            return (start_time + timedelta(days=6 - start_time.weekday())).replace(hour=23, minute=59, second=59)
         if self is RepeatDelay.monthly:
             return start_time + relativedelta(day=31, hour=23, minute=59, second=59)
 
@@ -195,6 +212,7 @@ class CheckList:
         self.message = None  # type: Message | None
         self.view = None  # type: CheckListView | None
         self.tasks = []  # type: List[Task]
+        self.user_id = None  # type: int | None
 
     async def update_message(self, ignore_error=False):
         if self.message is None:
@@ -234,11 +252,25 @@ class CheckList:
             msg = ""
             for task in tasks:
                 if task.finished:
-                    msg += EMOJI_CHECKED
+                    msg_next = EMOJI_CHECKED
                 else:
-                    msg += EMOJI_UNCHECKED
-                msg += (f"<t:{int(task.time.timestamp())}:{time_format}>\n"
-                        f"{EMOJI_VERT_BAR}{task.name}\n")
+                    msg_next = EMOJI_UNCHECKED
+                match task.repeat:
+                    case RepeatDelay.daily:
+                        task_r_emoji = EMOJI_REPEAT_DAILY
+                    case RepeatDelay.weekly:
+                        task_r_emoji = EMOJI_REPEAT_WEEKLY
+                    case RepeatDelay.monthly:
+                        task_r_emoji = EMOJI_REPEAT_MONTHLY
+                    case _:
+                        task_r_emoji = ""
+                msg_next += (f"<t:{int(task.time.timestamp())}:{time_format}>{task_r_emoji}\n"
+                             f"{EMOJI_VERT_BAR}{task.name}\n")
+                if len(msg) + len(msg_next) > 1000:
+                    embed.add_field(name=title, inline=False, value=msg)
+                    msg = ""
+                    title = " "
+                msg += msg_next
             if len(msg) > 0:
                 embed.add_field(name=title, inline=False, value=msg)
 
@@ -267,6 +299,7 @@ class CheckList:
             "id": self.id,
             "channel": self.channel_id,
             "message": self.message_id,
+            "user": self.user_id,
             "tasks": []
         }
         for task in self.tasks:
@@ -284,6 +317,8 @@ class CheckList:
         checklist.id = data["id"]
         checklist.channel_id = data["channel"]
         checklist.message_id = data["message"]
+        if "user" in data:
+            checklist.user_id = data["user"]
         for raw_task in data["tasks"]:
             task = Task(name=raw_task["name"])
             task.repeat = RepeatDelay(raw_task["repeat"])
@@ -363,6 +398,10 @@ class EditTaskView(NumPadView):
                 description="Select how often the task should repeat"
             ),
             discord.SelectOption(
+                label="Edit name",
+                description="Select how often the task should repeat"
+            ),
+            discord.SelectOption(
                 label="Delete task",
                 description="Remove a task from the checklist"
             )
@@ -394,7 +433,7 @@ class EditTaskView(NumPadView):
                 raw_time = (
                     await
                     ModalForm(title="Change time", submit_message=True, ignore_timeout=True)
-                    .add_field(label="Time", value=datetime.now().isoformat(sep=" ", timespec="minutes"))
+                    .add_field(label="Time", value=task.time.isoformat(sep=" ", timespec="minutes"))
                     .open_form(ctx.response)
                 ).retrieve_result()
                 task_time = parser.parse(raw_time, parserinfo=parser.parserinfo(dayfirst=True))
@@ -416,6 +455,16 @@ class EditTaskView(NumPadView):
                 if task_delay is None:
                     return
                 task.repeat = RepeatDelay.from_string(task_delay.lower())
+            case "Edit name":
+                task_name = (
+                    await
+                    ModalForm(title="Change name", submit_message=True, ignore_timeout=True)
+                    .add_field(label="Name", placeholder="Enter new name here", value=task.name)
+                    .open_form(ctx.response)
+                ).retrieve_result()
+                if task_name is None:
+                    return
+                task.name = task_name
             case "Delete task":
                 self.checklist.tasks.remove(task)
                 await ctx.response.defer(ephemeral=True, invisible=True)
@@ -442,14 +491,19 @@ class CheckListCommands(commands.Cog):
         await self.plugin.update_messages()
 
     @group.command(name="new", description="Create a new checklist")
-    async def cmd_status(self, ctx: ApplicationContext):
+    async def cmd_new(self, ctx: ApplicationContext):
         checklist = CheckList(self.plugin)
         checklist.channel_id = ctx.channel_id
         checklist.view = CheckListView(checklist)
+        checklist.user_id = ctx.user.id
         msg = await ctx.channel.send(embed=checklist.build_embed(), view=checklist.view)
         checklist.message_id = msg.id
         checklist.message = msg
-        self.plugin.checklists.append(checklist)
+        try:
+            self.plugin.add_checklist(checklist, ctx.user.id)
+        except NoPermissionException as e:
+            await msg.delete()
+            raise e
         await ctx.response.defer(ephemeral=True, invisible=True)
 
     @group.command(name="save", description="Saves all checklists")
