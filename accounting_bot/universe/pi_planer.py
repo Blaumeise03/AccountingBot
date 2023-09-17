@@ -104,6 +104,11 @@ def build_debug_table(debug_data: Dict):
     return d_msg
 
 
+def filter_planets(planets: List[Dict[str, Any]], arrays: List["Array"]):
+    planets_used = set(map(lambda array: array.planet.id if array.planet is not None else None, arrays))
+    return filter(lambda planet: planet["p_id"] not in planets_used, planets)
+
+
 def _encode_item_id(full_item_id: int):
     item_id = full_item_id - 42001000000
     # Pi have IDs 420010000xx with xx being between (inclusive) 00-11, 18-33
@@ -401,10 +406,8 @@ class PiPlaner:
             for p in all_planets:
                 p["eff"] = p["out"] / max_planets[p["res"]]
                 p["weight"] = p["eff"] * weights[p["res"]]
-
-            # Get the planet with the highest weight
-            all_planets.sort(key=lambda p: p["weight"], reverse=True)
-            next_array = all_planets.pop(0)
+            # Removed already used planets and get the planet with the highest weight
+            next_array = max(filter_planets(all_planets, arrays), key=lambda planet: planet["weight"])
             debug_array = None
             if debug_data is not None:
                 debug_array = {"res": next_array["res"],
