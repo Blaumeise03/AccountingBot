@@ -13,7 +13,8 @@ from os.path import exists
 from typing import Union, Optional, Type, List, Callable, TypeVar, Dict, TYPE_CHECKING
 
 import discord
-from discord import Interaction, ApplicationContext, InteractionResponded, ApplicationCommand, CheckFailure
+from discord import Interaction, ApplicationContext, InteractionResponded, ApplicationCommand, CheckFailure, Embed, \
+    EmbedField
 from discord.ext import commands
 from discord.ext.commands import Context, Command, NotOwner
 from discord.ui import View, Modal
@@ -290,6 +291,24 @@ def str_to_list(text: str, sep=";") -> List[str]:
         text_list = [r.strip() for r in text_list]
         text_list = list(filter(len, text_list))
     return text_list
+
+
+def compare_embed_content(embed1: Embed, embed2: Embed) -> bool:
+    if embed1.title.strip(" \n") != embed2.title.strip(" \n"):
+        return False
+    if type(embed1.description) == str and type(embed2.description) == str:
+        if embed1.description.strip(" \n") != embed2.description.strip(" \n"):
+            return False
+    elif embed1.description != embed2.description:
+        return False
+    if len(embed1.fields) != len(embed2.fields):
+        return False
+    for field1, field2 in zip(embed1.fields, embed2.fields):  # type: EmbedField, EmbedField
+        if field1.name.strip(" \n") != field2.name.strip(" \n"):
+            return False
+        if field1.value.strip(" \n") != field2.value.strip(" \n"):
+            return False
+    return True
 
 
 class CmdAnnotation(Enum):

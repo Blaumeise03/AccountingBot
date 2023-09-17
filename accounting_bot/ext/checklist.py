@@ -18,6 +18,7 @@ from dateutil.relativedelta import relativedelta
 from discord import SlashCommandGroup, ApplicationContext, Embed, Colour, Message, Interaction, PartialEmoji
 from discord.ext import commands
 
+from accounting_bot import utils
 from accounting_bot.exceptions import UnexpectedStateException, InputException, NoPermissionException
 from accounting_bot.main_bot import BotPlugin, AccountingBot, PluginWrapper
 from accounting_bot.utils import AutoDisableView
@@ -78,15 +79,14 @@ class CheckListPlugin(BotPlugin):
         with open(CONFIG_PATH, mode="w", encoding="utf-8") as file:
             json.dump(raw, file, ensure_ascii=False, indent=2)
 
-    async def update_messages(self):
-        # ToDo: Optimize this to reduce api requests
+    async def update_messages(self, force=False):
         async_tasks = []
         to_delete = []
         for checklist in self.checklists:
             if checklist.message_id is None:
                 to_delete.append(checklist)
                 continue
-            async_tasks.append(checklist.update_message(ignore_error=True))
+            async_tasks.append(checklist.update_message(ignore_error=True, force=force))
         for d in to_delete:
             self.checklists.remove(d)
         self.save_checklists()
@@ -176,13 +176,16 @@ class Task:
         self.repeat = repeat  # type: RepeatDelay
         self.finished = False
 
-    def update_time(self):
+    def update_time(self) -> bool:
         if self.repeat == RepeatDelay.never:
-            return
+            return False
         now = datetime.now()
+        if self.time >= now:
+            return False
         while self.time < now:
             self.time = self.repeat.get_next_time(self.time)
             self.finished = False
+        return True
 
 
 def _task_filter(tasks: List[Task], time_range: Union[RepeatDelay, Literal['expired']]):
@@ -213,8 +216,9 @@ class CheckList:
         self.view = None  # type: CheckListView | None
         self.tasks = []  # type: List[Task]
         self.user_id = None  # type: int | None
+        self.changed = False  # type: bool
 
-    async def update_message(self, ignore_error=False):
+    async def update_message(self, ignore_error=False, force=False):
         if self.message is None:
             try:
                 channel = await self.plugin.bot.get_or_fetch_channel(self.channel_id)
@@ -226,9 +230,17 @@ class CheckList:
                     self.message_id = None
         if self.message is None:
             return
+        update = False
+        new_embed = self.build_embed()
+        if len(self.message.embeds) == 1:
+            update = not utils.compare_embed_content(self.message.embeds[0], new_embed)
         if self.view is None:
             self.view = CheckListView(self)
-        await self.message.edit(embed=self.build_embed(), view=self.view)
+            update = True
+
+        if update or force:
+            logger.debug("Updated message %s in channel %s", self.message.id, self.channel_id)
+            await self.message.edit(embed=new_embed, view=self.view)
 
     def cleanup_tasks(self):
         now = datetime.now()
@@ -240,8 +252,8 @@ class CheckList:
                 continue
             if task.time > now:
                 continue
-            if task.finished or task.time < min_time:
-                task.update_time()
+            if (task.finished or task.time < min_time) and task.update_time():
+                self.changed = True
         for d in to_delete:
             self.tasks.remove(d)
         self.tasks.sort(key=lambda t: t.time)
@@ -389,7 +401,8 @@ class EditTaskView(NumPadView):
         options=[
             discord.SelectOption(
                 label="Toggle completed",
-                description="Check or uncheck pending tasks"
+                description="Check or uncheck pending tasks",
+                default=True
             ),
             discord.SelectOption(
                 label="Edit time",
@@ -420,6 +433,10 @@ class EditTaskView(NumPadView):
                 dropdown = child
         if dropdown is None:
             raise TypeError("Did not found select menu in view")
+        if len(dropdown.values) == 0:
+            for opt in dropdown.options:
+                if opt.default:
+                    dropdown.values.append(opt.value)
         if len(dropdown.values) == 0:
             await ctx.response.send_message(
                 "No edit option selected. Please select what you want to edit from the  dropdown", ephemeral=True)
@@ -487,10 +504,16 @@ class CheckListCommands(commands.Cog):
 
     def __init__(self, plugin: CheckListPlugin):
         self.plugin = plugin
+        now = datetime.now().replace(hour=0, minute=1, second=0, microsecond=0).astimezone()
+        refresh_time = now.time().replace(tzinfo=now.tzinfo)
+        logger.info("Message refresh will be every day at %s", refresh_time.isoformat(timespec="seconds"))
+        self.update_messages.change_interval(time=refresh_time)
+        self.update_messages.start()
 
-    @discord.ext.tasks.loop(hours=4)
+    @discord.ext.tasks.loop()
     async def update_messages(self):
-        await self.plugin.update_messages()
+        logger.info("Refreshing checklist messages")
+        await self.plugin.update_messages(force=True)
 
     @group.command(name="new", description="Create a new checklist")
     async def cmd_new(self, ctx: ApplicationContext):
