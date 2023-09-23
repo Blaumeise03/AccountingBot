@@ -340,11 +340,22 @@ class AccountingBot(commands.Bot):
         self.load_plugins()
         loop = self.loop
 
+        def _signal_handler(signum, frame):
+            logger.critical("Received %s, closing event loop", signal.Signals(signum).name)
+            loop.stop()
+
+        async def _signal_handler_sync(sig: signal.Signals):
+            logger.critical("Received %s, closing event loop", sig.name)
+            loop.stop()
+
         try:
-            loop.add_signal_handler(signal.SIGINT, loop.stop)
-            loop.add_signal_handler(signal.SIGTERM, loop.stop)
-        except RuntimeError:
-            pass
+            # Try to add signal handlers to the event loop, this may not work on all operating systems
+            loop.add_signal_handler(signal.SIGTERM, lambda: asyncio.ensure_future(_signal_handler_sync(signal.SIGTERM)))
+            loop.add_signal_handler(signal.SIGINT, lambda: asyncio.ensure_future(_signal_handler_sync(signal.SIGINT)))
+        except NotImplementedError:
+            # If the event loop does not support signal handlers, they will be handled directly
+            signal.signal(signal.SIGTERM, _signal_handler)
+            signal.signal(signal.SIGINT, _signal_handler)
 
         async def runner():
             try:
