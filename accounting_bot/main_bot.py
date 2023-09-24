@@ -9,6 +9,7 @@ import pkgutil
 import re
 import signal
 import sys
+import time
 from abc import ABC
 from asyncio import AbstractEventLoop
 from datetime import datetime
@@ -29,7 +30,7 @@ from accounting_bot.discordLogger import PycordHandler
 from accounting_bot.exceptions import PluginLoadException, PluginNotFoundException, PluginDependencyException, \
     InputException
 from accounting_bot.localization import LocalizationHandler
-from accounting_bot.utils import State, log_error, send_exception, owner_only
+from accounting_bot.utils import State, log_error, send_exception, owner_only, converters
 
 logger = logging.getLogger("bot.main")
 
@@ -94,6 +95,8 @@ class AccountingBot(commands.Bot):
         self.pycord_handler = pycord_handler
         self.add_cog(BotCommands(self))
         self.log_loop.start()
+        self.shutdown_reason = None  # type: str | None
+        self.maintenance_end_time = None  # type: datetime | None
 
         def _get_locale(ctx: commands.Context):
             if isinstance(ctx, ApplicationContext) and ctx.locale is not None:
@@ -192,13 +195,27 @@ class AccountingBot(commands.Bot):
 
     async def stop(self):
         self.state = State.terminated
-        for plugin in reversed(self.plugins):
-            if plugin.state == PluginState.ENABLED:
+        is_main = self.maintenance_end_time is not None
+        desc = (f"Bot was shut down at <t:{int(time.time())}:f>\n"
+                f"The shutdown reason was:\n```\n{self.shutdown_reason}\n```\n")
+        if is_main:
+            desc += (f"The bot is offline for maintenance, please be patient.\n"
+                     f"The maintenance will probably end at <t:{int(self.maintenance_end_time.timestamp())}:f>")
+        embed = Embed(title="Bot Offline" if not is_main else "Bot Maintenance",
+                      color=Color.red() if not is_main else Color.orange(),
+                      timestamp=datetime.now(),
+                      description=desc)
+
+        for wrapper in reversed(self.plugins):
+            if wrapper.state == PluginState.ENABLED:
                 try:
-                    await plugin.disable_plugin()
+                    await wrapper.disable_plugin()
                 except PluginLoadException as e:
-                    logger.error("Error while disabling plugin %s:%s", plugin.module_name, plugin.name)
+                    logger.error("Error while disabling plugin %s:%s", wrapper.module_name, wrapper.name)
                     utils.log_error(logger, e)
+        for wrapper in self.plugins:
+            await wrapper.edit_messages(embed=embed)
+
         await asyncio.sleep(5)
         await self.close()
 
@@ -342,10 +359,12 @@ class AccountingBot(commands.Bot):
 
         def _signal_handler(signum, frame):
             logger.critical("Received %s, closing event loop", signal.Signals(signum).name)
+            self.shutdown_reason = f"Received signal {signal.Signals(signum).name} from operating system"
             loop.stop()
 
         async def _signal_handler_sync(sig: signal.Signals):
             logger.critical("Received %s, closing event loop", sig.name)
+            self.shutdown_reason = f"Received signal {sig.name} from operating system"
             loop.stop()
 
         try:
@@ -362,6 +381,8 @@ class AccountingBot(commands.Bot):
                 await self.start(*args, **kwargs)
             finally:
                 if not self.is_closed():
+                    if self.shutdown_reason is None:
+                        self.shutdown_reason = "Unknown shutdown reason"
                     await self.stop()
 
         def stop_loop_on_completion(f):
@@ -373,11 +394,22 @@ class AccountingBot(commands.Bot):
             loop.run_forever()
         except KeyboardInterrupt:
             logger.info("Received signal to terminate bot and event loop")
+            if self.shutdown_reason is None:
+                self.shutdown_reason = "Received KeyboardInterrupt"
         finally:
             future.remove_done_callback(stop_loop_on_completion)
             logger.info("Cleaning up tasks")
             # noinspection PyProtectedMember
             discord.client._cleanup_loop(loop)
+            logger.info("Unloading plugins")
+            for plugin in reversed(self.plugins):
+                if plugin.state == PluginState.LOADED:
+                    try:
+                        plugin.unload_plugin()
+                    except PluginLoadException as e:
+                        logger.error("Error while unloading plugin %s:%s", plugin.module_name, plugin.name)
+                        utils.log_error(logger, e)
+            logger.info("Clean shutdown completed")
 
         if not future.cancelled():
             try:
@@ -385,16 +417,6 @@ class AccountingBot(commands.Bot):
             except KeyboardInterrupt:
                 # I am unsure why this gets raised here but suppress it anyway
                 return None
-
-        logger.info("Unloading plugins")
-        for plugin in reversed(self.plugins):
-            if plugin.state == PluginState.LOADED:
-                try:
-                    plugin.unload_plugin()
-                except PluginLoadException as e:
-                    logger.error("Error while unloading plugin %s:%s", plugin.module_name, plugin.name)
-                    utils.log_error(logger, e)
-        logger.info("Clean shutdown completed")
 
 
 def plugin_autocomplete(ctx: AutocompleteContext):
@@ -426,9 +448,22 @@ class BotCommands(commands.Cog):
     @group_bot.command(name="stop", description="Shuts down the discord bot, if set up properly, it will restart")
     @owner_only()
     async def cmd_stop(self, ctx: ApplicationContext):
+        self.bot.shutdown_reason = f"Manual shutdown executed by {ctx.user.name}:{ctx.user.id}"
         logger.critical("Shutdown Command received, shutting down bot in 10 seconds")
         await ctx.respond("Bot wird gestoppt...")
         await self.bot.stop()
+
+    @group_bot.command(name="maintenance", description="Sets the shutdown reason to maintenance")
+    @option(name="end_time", type=converters.LocalTimeConverter, required=False, default=None)
+    @owner_only()
+    async def cmd_maintenance(self, ctx: ApplicationContext, end_time: Optional[datetime]):
+        if end_time is None:
+            self.bot.maintenance_end_time = None
+            await ctx.response.send_message("Maintenance mode cleared", ephemeral=True)
+            return
+        self.bot.maintenance_end_time = end_time
+        await ctx.response.send_message(f"Set maintenance end time to <t:{int(end_time.timestamp())}:f>",
+                                        ephemeral=True)
 
     @group_bot.command(name="reload_plugin", description="Reloads a plugin")
     @option(name="plugin_name", description="The name of the plugin to reload", type=str, required=True,
@@ -536,6 +571,10 @@ class BotPlugin(ABC):
         :return:
         """
         return {}
+
+    def get_messages(self) -> List[Optional[discord.Message]]:
+        # Should return a list of messages that get replaced with an offline/maintenance embed
+        return []
 
 
 class PluginWrapper(object):
@@ -709,6 +748,20 @@ class PluginWrapper(object):
         self.load_plugin(bot, reload=True)
         await self.enable_plugin()
         logger.info("Reloaded plugin %s", self.module_name)
+
+    async def edit_messages(self, embed: Embed):
+        messages = self.plugin.get_messages()
+        if messages is None:
+            return
+        for msg in messages:
+            if msg is None:
+                continue
+            try:
+                await msg.edit(embed=embed, view=None)
+            except Exception as e:
+                logger.error("Error while editing message %s:%s for plugin %s",
+                             msg.channel.id, msg.id, self.name)
+                utils.log_error(self.plugin.logger, e)
 
     @classmethod
     def from_config(cls, module_name: str, config: Union[Dict[str, str], None] = None) -> "PluginWrapper":

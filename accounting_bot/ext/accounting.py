@@ -83,6 +83,7 @@ class AccountingPlugin(BotPlugin):
         self.wallets = {}  # type: {str: int}
         self.investments = {}  # type: {str: int}
         self.wallets_last_reload = 0
+        self.menu_message = None  # type: Message | None
 
     def on_load(self):
         self.accounting_log = self.config["logChannel"]
@@ -445,6 +446,7 @@ class AccountingPlugin(BotPlugin):
         msg = await channel.fetch_message(self.config["menuMessage"])
         await msg.edit(view=AccountingView(self),
                        embeds=self.embeds, content="")
+        self.menu_message = msg
 
         # Updating shortcut menus
         shortcuts = self.db.get_shortcuts()
@@ -519,6 +521,9 @@ class AccountingPlugin(BotPlugin):
                 else:
                     logger.warning("Message %s is listed as transaction but does not have an embed", msg.id)
         logger.info("AccountingPlugin ready")
+
+    def get_messages(self) -> List[Optional[discord.Message]]:
+        return [self.menu_message]
 
 
 def main_guild_only() -> Callable[[_T], _T]:
