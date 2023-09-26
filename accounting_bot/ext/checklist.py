@@ -239,7 +239,8 @@ class CheckList:
             update = True
 
         if update or force:
-            logger.debug("Updated message %s in channel %s", self.message.id, self.channel_id)
+            logger.debug("Updated message %s in channel %s, (update=%s, force=%s)",
+                         self.message.id, self.channel_id, update, force)
             await self.message.edit(embed=new_embed, view=self.view)
 
     def cleanup_tasks(self):
@@ -507,13 +508,26 @@ class CheckListCommands(commands.Cog):
         now = datetime.now().replace(hour=0, minute=1, second=0, microsecond=0).astimezone()
         refresh_time = now.time().replace(tzinfo=now.tzinfo)
         logger.info("Message refresh will be every day at %s", refresh_time.isoformat(timespec="seconds"))
-        self.update_messages.change_interval(time=refresh_time)
+        # self.update_messages.change_interval(time=refresh_time)
         self.update_messages.start()
+        self.last_refresh = None  # type: datetime | None
 
-    @discord.ext.tasks.loop()
+    def cog_unload(self) -> None:
+        self.update_messages.cancel()
+
+    @discord.ext.tasks.loop(hours=4)
     async def update_messages(self):
+        if self.last_refresh is not None and datetime.now() - self.last_refresh < timedelta(minutes=10):
+            logger.warning("Minimum refresh delay is 10 minutes for update loop")
+            return
+        self.last_refresh = datetime.now()
         logger.info("Refreshing checklist messages")
-        await self.plugin.update_messages(force=True)
+        await self.plugin.update_messages(force=False)
+
+    @update_messages.error
+    async def update_message_error(self, error):
+        logger.error("Error in checklist loop")
+        utils.log_error(logger, error, location="checklist_loop")
 
     @group.command(name="new", description="Create a new checklist")
     async def cmd_new(self, ctx: ApplicationContext):

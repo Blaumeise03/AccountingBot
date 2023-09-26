@@ -16,6 +16,7 @@ from discord import Message, User, Embed, Color, Interaction, ApplicationContext
 from discord.ext import commands, tasks
 from discord.ui import InputText
 
+from accounting_bot import utils
 from accounting_bot.exceptions import InputException, ConfigException
 from accounting_bot.main_bot import BotPlugin, AccountingBot, PluginWrapper
 from accounting_bot.utils import admin_only, guild_only, AutoDisableView, ErrorHandledModal
@@ -99,6 +100,9 @@ class FrpCommands(commands.Cog):
         self.plugin = plugin
         self.update_messages.start()
 
+    def cog_unload(self) -> None:
+        self.update_messages.cancel()
+
     @commands.slash_command(name="frp_menu", description="Creates a FRP ping menu")
     @admin_only()
     @guild_only()
@@ -145,6 +149,11 @@ class FrpCommands(commands.Cog):
     @tasks.loop(minutes=1)
     async def update_messages(self):
         await self.plugin.update_messages()
+
+    @update_messages.error
+    async def update_message_error(self, error):
+        logger.error("Error in frp loop")
+        utils.log_error(logger, error, location="frp_loop")
 
 
 class FRPsState(object):

@@ -63,6 +63,7 @@ class ApplicationPlugin(BotPlugin):
         self.apl_loop.start()
 
     async def on_disable(self):
+        self.apl_loop.cancel()
         return await super().on_disable()
 
     @tasks.loop(minutes=5)
@@ -93,6 +94,11 @@ class ApplicationPlugin(BotPlugin):
         for session in delete_sessions:
             if session in self.active_sessions:
                 self.active_sessions.remove(session)
+
+    @apl_loop.error
+    async def update_message_error(self, error):
+        logger.error("Error in applications loop")
+        utils.log_error(logger, error, location="applications_loop")
 
 
 class ApplicationSession(object):

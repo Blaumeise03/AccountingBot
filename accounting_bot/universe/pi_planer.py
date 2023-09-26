@@ -18,6 +18,7 @@ from discord import User, Embed, Color, ApplicationContext, Message, InputTextSt
 from discord.ui import InputText, Button
 
 from accounting_bot.exceptions import PlanetaryProductionException, PiPlanerException
+from accounting_bot.ext.embeds import EmbedPlugin
 from accounting_bot.main_bot import BotPlugin, AccountingBot, PluginWrapper
 from accounting_bot.universe import data_utils
 from accounting_bot.universe.data_utils import Item
@@ -43,9 +44,10 @@ autoarray_help_b = "N/A"
 class PiPlanerPlugin(BotPlugin):
     def __init__(self, bot: AccountingBot, wrapper: PluginWrapper) -> None:
         super().__init__(bot, wrapper, logger)
+        self.embed_p = None  # type: EmbedPlugin | None
 
     def on_load(self):
-        pass
+        self.embed_p = self.bot.get_plugin("EmbedPlugin")  # type: EmbedPlugin
 
     async def on_enable(self):
         global pi_ids, pi_resources
@@ -97,7 +99,7 @@ def build_debug_table(debug_data: Dict):
                   f"{v['aweight']:4.2} "
                   f"{v['rweight']:4.2f} "
                   f"{v['nrweight']:4.2f}")
-        if len(d_msg) > 900:
+        if len(d_msg) > 980:
             d_msg += "\n(Truncated)"
             break
     d_msg += "\n```"
@@ -159,87 +161,87 @@ class Array:
                 return
         self.planet = Planet(p_id=p_id, name=p_name)
 
-    @staticmethod
-    def build_table(arrays: List["Array"], mode="LnRhdi", price_types: List[str] = None):
-        if price_types is None:
-            price_types = []
-        msg = ""
+
+def build_planet_table(arrays: List["Array"], mode="LnRhdi", price_types: List[str] = None):
+    if price_types is None:
+        price_types = []
+    msg = ""
+    for m in mode:
+        match m:
+            # Caps = Align left, lowercase = align right
+            case "L":
+                msg += "🔒"
+            case "l":
+                msg += "🔒"
+            case "n":
+                msg += " n"
+            case "R":
+                msg += "Resource             "
+            case "P":
+                msg += "Planet     "
+            case "b":
+                msg += "  Base"
+            case "h":
+                msg += "items/h"
+            case "d":
+                msg += "items/d"
+            case "i":
+                msg += "    ISK/d"
+            case _:
+                msg += m
+    msg += "\n"
+    for i, array in enumerate(arrays):
         for m in mode:
             match m:
-                # Caps = Align left, lowercase = align right
                 case "L":
-                    msg += "🔒"
+                    msg += "🔒" if array.locked else "  "
                 case "l":
-                    msg += "🔒"
+                    msg += "🔒" if array.locked else "  "
                 case "n":
-                    msg += " n"
+                    msg += f"{i:>2}"
                 case "R":
-                    msg += "Resource             "
+                    msg += f"{array.resource:<21}"
                 case "P":
-                    msg += "Planet     "
+                    msg += f"{array.planet.name:<11}"
                 case "b":
-                    msg += "  Base"
+                    msg += f"{array.base_output:6.2f}"
                 case "h":
-                    msg += "items/h"
+                    msg += f"{array.base_output * array.amount:6.1f}"
                 case "d":
-                    msg += "items/d"
+                    msg += f"{array.base_output * array.amount * 24:7,.0f}"
                 case "i":
-                    msg += "    ISK/d"
+                    price = get_price(array.resource, price_types)
+                    if price is not None:
+                        msg += f"{array.base_output * array.amount * 24 * price:9,.0f}"
+                    else:
+                        msg += "    ???  "
                 case _:
                     msg += m
         msg += "\n"
-        for i, array in enumerate(arrays):
-            for m in mode:
-                match m:
-                    case "L":
-                        msg += "🔒" if array.locked else "  "
-                    case "l":
-                        msg += "🔒" if array.locked else "  "
-                    case "n":
-                        msg += f"{i:>2}"
-                    case "R":
-                        msg += f"{array.resource:<21}"
-                    case "P":
-                        msg += f"{array.planet.name:<11}"
-                    case "b":
-                        msg += f"{array.base_output:6.2f}"
-                    case "h":
-                        msg += f"{array.base_output * array.amount:6.1f}"
-                    case "d":
-                        msg += f"{array.base_output * array.amount * 24:7,.0f}"
-                    case "i":
-                        price = get_price(array.resource, price_types)
-                        if price is not None:
-                            msg += f"{array.base_output * array.amount * 24 * price:9,.0f}"
-                        else:
-                            msg += "    ???  "
-                    case _:
-                        msg += m
-            msg += "\n"
-        return msg
+    return msg
 
-    @staticmethod
-    def build_income_table(
-            arrays: Optional[List["Array"]] = None,
-            income_sum: Optional[float] = None,
-            price_types: List[str] = None):
-        if price_types is None:
-            price_types = []
-        if arrays is None and income_sum is None:
-            raise TypeError("Expected at least one argument for function build_income_table")
-        if income_sum is None:
-            income_sum = 0
-            for array in arrays:
-                price = get_price(array.resource, price_types)
-                if price is not None:
-                    income_sum += array.base_output * array.amount * price
-                else:
-                    income_sum += 0
-        msg = (f"Zeitraum           Einnahmen\n"
-               f"Pro Tag   {income_sum * 24:14,.0f} ISK\n"
-               f"Pro Woche {income_sum * 24 * 7:14,.0f} ISK\n"
-               f"Pro Monat {income_sum * 24 * 30:14,.0f} ISK")
-        return msg
+
+def build_income_table(
+        arrays: Optional[List["Array"]] = None,
+        income_sum: Optional[float] = None,
+        price_types: List[str] = None):
+    if price_types is None:
+        price_types = []
+    if arrays is None and income_sum is None:
+        raise TypeError("Expected at least one argument for function build_income_table")
+    if income_sum is None:
+        income_sum = 0
+        for array in arrays:
+            price = get_price(array.resource, price_types)
+            if price is not None:
+                income_sum += array.base_output * array.amount * price
+            else:
+                income_sum += 0
+    msg = (f"Zeitraum           Einnahmen\n"
+           f"Pro Tag   {income_sum * 24:14,.0f} ISK\n"
+           f"Pro Woche {income_sum * 24 * 7:14,.0f} ISK\n"
+           f"Pro Monat {income_sum * 24 * 30:14,.0f} ISK")
+    return msg
 
 
 class Planet:
@@ -454,7 +456,7 @@ class PiPlaner:
                 resources[array.resource] += array.base_output * array.amount
             else:
                 resources[array.resource] = array.base_output * array.amount
-        val = Array.build_table(self.arrays, mode="L n R P b h", price_types=self.preferred_prices)
+        val = build_planet_table(self.arrays, mode="L n R P b h", price_types=self.preferred_prices)
         emb.add_field(name="Aktive Arrays", value=f"```\n{val}\n```", inline=False)
         val = f"{'Resource':<21}: items/h  items/d          ISK/d"
         resources = sorted(resources.items(), key=lambda res: data_utils.data_plugin.resource_order[res[0]])
@@ -469,7 +471,7 @@ class PiPlaner:
         emb.add_field(name="Produktion", value=f"```\n{val}\n```", inline=False)
         emb.add_field(
             name="Einnahmen",
-            value=f"```\n{Array.build_income_table(income_sum=income_sum)}\n```")
+            value=f"```\n{build_income_table(income_sum=income_sum)}\n```")
         return emb
 
     def encode_base64(self) -> str:
@@ -926,18 +928,18 @@ class AutoSelectArrayModal(ErrorHandledModal):
                 await ctx.followup.send("Gewichtung nicht erkannt, bitte Eingabe überprüfen.")
                 return
             arrays = await self.plan.auto_select_weighted(weights, debug_data)
-        msg = Array.build_table(arrays, mode="L n: R P d i", price_types=self.plan.preferred_prices)
+        msg = build_planet_table(arrays, mode="L n: R P d i", price_types=self.plan.preferred_prices)
         emb = Embed(title="Auto Array",
                     description="Es wurden die besten Planeten gesucht. Willst Du diese "
                                 "in den Plan übernehmen?")
         emb.add_field(name="Arrays", value=f"```\n{msg}```\n", inline=False)
         emb.add_field(name="Einnahmen",
-                      value=f"```\n{Array.build_income_table(arrays, price_types=self.plan.preferred_prices)}\n```",
+                      value=f"```\n{build_income_table(arrays, price_types=self.plan.preferred_prices)}\n```",
                       inline=False)
         if debug_data is not None and len(debug_data) > 0:
             emb.add_field(name="Debug", value=build_debug_table(debug_data), inline=False)
-            emb.add_field(name="Erklärung", value=autoarray_help_a)
-            emb.add_field(name="Finale Auswahl", value=autoarray_help_b)
+            emb.add_field(name="Erklärung", value=self.session.plugin.embed_p.get_embed("PiPlanAutoSelectHelpA"))
+            emb.add_field(name="Finale Auswahl", value=self.session.plugin.embed_p.get_embed("PiPlanAutoSelectHelpB"))
         view = ConfirmView(callback=save)
         msg = await ctx.followup.send(
             embed=emb,
