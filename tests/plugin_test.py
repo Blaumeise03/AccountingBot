@@ -62,7 +62,7 @@ class TestCommands(commands.Cog):
     @commands.slash_command(name="modal")
     async def test_modal_form(self, ctx: ApplicationContext):
         res = await (
-            ModalForm(title="Test", submit_message="Abgeschickt")
+            ModalForm(title="Test", send_response="Abgeschickt")
             .add_field(label="A")
             .add_field(label="B")
             .open_form(ctx.response)

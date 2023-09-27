@@ -14,19 +14,20 @@ class FormTimeoutException(InputException):
 
 
 class ModalForm(ErrorHandledModal):
-    def __init__(self, title: str, submit_message: Union[str, bool, None] = None, ignore_timeout=False, *args, **kwargs):
+    def __init__(self, title: str, send_response: Union[str, bool, None] = None, ignore_timeout=False, *args, **kwargs):
         """
 
         :param title: The title for the form
-        :param submit_message: The response message after submitting. If None the interaction will not be completed and
-                               can be retrieved by get_interaction for custom responses.
+        :param send_response: The response message after submitting. If None the interaction will not be completed and
+                               can be retrieved by get_interaction for custom responses. If true the response will get
+                               deferred. If a string is given, it will get send to the user.
         :param args:
         :param kwargs:
         """
         super().__init__(title=title, timeout=30 * 60, *args, **kwargs)
         self.ignore_timeout = ignore_timeout
         self._is_timeout = False
-        self.submit_message = submit_message
+        self.submit_message = send_response
         self._interaction = None  # type: Interaction | None
         self._results = None  # type: Dict[str, str] | None
 
@@ -80,6 +81,10 @@ class ModalForm(ErrorHandledModal):
             if len(self._results) > 1:
                 raise TypeError("Both label and index are None and there is more than one result")
             return next(iter(self._results.values()))
+        elif label is not None:
+            return self._results[label]
+        elif index is not None:
+            return self._results[self.children[index].label]
 
     def retrieve_results(self, ignore_timeout=False):
         if self._results is None and not ignore_timeout:
@@ -213,7 +218,7 @@ class NumPadView(AutoDisableView):
     async def btn_custom(ctx: Interaction, view):
         # noinspection PyTypeChecker
         modal = await (
-            ModalForm(title="Insert Number", submit_message=None, ignore_timeout=True)
+            ModalForm(title="Insert Number", send_response=None, ignore_timeout=True)
             .add_field(label="Insert Number", placeholder="Insert Number here")
             .open_form(ctx.response)
         )

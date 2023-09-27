@@ -43,6 +43,7 @@ class CheckListPlugin(BotPlugin):
     def __init__(self, bot: AccountingBot, wrapper: PluginWrapper) -> None:
         super().__init__(bot, wrapper, logger)
         self.checklists = []  # type: List[CheckList]
+        self.cog = None  # type: CheckListCommands | None
 
     def _count_checklists(self, user: int):
         count = 0
@@ -93,10 +94,12 @@ class CheckListPlugin(BotPlugin):
         await asyncio.gather(*async_tasks)
 
     def on_load(self):
-        self.register_cog(CheckListCommands(self))
+        self.cog = CheckListCommands(self)
+        self.register_cog(self.cog)
         self.load_checklists()
 
     async def on_enable(self):
+        self.cog.update_messages.start()
         await self.update_messages()
 
     async def on_disable(self):
@@ -452,7 +455,7 @@ class EditTaskView(NumPadView):
             case "Edit time":
                 raw_time = (
                     await
-                    ModalForm(title="Change time", submit_message=True, ignore_timeout=True)
+                    ModalForm(title="Change time", send_response=True, ignore_timeout=True)
                     .add_field(label="Time", value=task.time.isoformat(sep=" ", timespec="minutes"))
                     .open_form(ctx.response)
                 ).retrieve_result()
@@ -468,7 +471,7 @@ class EditTaskView(NumPadView):
             case "Edit repeat delay":
                 task_delay = (
                     await
-                    ModalForm(title="Change delay", submit_message=True, ignore_timeout=True)
+                    ModalForm(title="Change delay", send_response=True, ignore_timeout=True)
                     .add_field(label="Delay", placeholder="[N]ever, [D]aily, [W]eekly, [M]onthly")
                     .open_form(ctx.response)
                 ).retrieve_result()
@@ -478,7 +481,7 @@ class EditTaskView(NumPadView):
             case "Edit name":
                 task_name = (
                     await
-                    ModalForm(title="Change name", submit_message=True, ignore_timeout=True)
+                    ModalForm(title="Change name", send_response=True, ignore_timeout=True)
                     .add_field(label="Name", placeholder="Enter new name here", value=task.name)
                     .open_form(ctx.response)
                 ).retrieve_result()
@@ -509,7 +512,7 @@ class CheckListCommands(commands.Cog):
         refresh_time = now.time().replace(tzinfo=now.tzinfo)
         logger.info("Message refresh will be every day at %s", refresh_time.isoformat(timespec="seconds"))
         # self.update_messages.change_interval(time=refresh_time)
-        self.update_messages.start()
+        # self.update_messages.start()
         self.last_refresh = None  # type: datetime | None
 
     def cog_unload(self) -> None:
