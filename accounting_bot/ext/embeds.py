@@ -13,13 +13,15 @@ from typing import Dict, Union, List
 
 import discord
 from discord import Embed, Color, Interaction, InputTextStyle, SlashCommandGroup, ApplicationContext, EmbedField, \
-    option, TextChannel
+    option, TextChannel, InteractionResponse
+from discord.abc import GuildChannel
 from discord.embeds import EmptyEmbed
 from discord.ext import commands
 
+from accounting_bot import utils
 from accounting_bot.main_bot import BotPlugin, AccountingBot, PluginWrapper
 from accounting_bot.utils import AutoDisableView, admin_only
-from accounting_bot.utils.ui import ModalForm
+from accounting_bot.utils.ui import ModalForm, NumPadView
 
 logger = logging.getLogger("ext.embeds")
 re_file = re.compile(r"[a-zA-Z0-9-_]+")
@@ -159,15 +161,16 @@ class EmbedBuilder:
     def build_edit_embed(self):
         return discord.Embed(
             title="Embed Builder",
-            description="Use the controls to edit the embed:\n"
-                        "+ to add Fields\n✏ to change the basic settings\n⚙ To change the save settings\n"
-                        "🖼 to change the icons and footer",
+            description="Use the controls to edit the embed:\nRow 1 for the embed itself, Row 2 for the fields\n"
+                        "✏ change the basic/field settings\n⚙ change the save settings\n"
+                        "🖼 change the icons and footer\n"
+                        "➕ add fields\n➖ remove fields\n",
             fields=[EmbedField(
                 name="Basic Settings",
-                value=f"Embed name: `{self.embed_name}`\nFile name: `custom/{self.file_name}.json`"
+                value=f"Embed name: `{self.embed_name}`\nFile name: `custom/{self.file_name}.json`", inline=True
             ), EmbedField(
                 name="Info",
-                value="The embed name must be *unique* or else it will overwrite other embeds."
+                value="The embed name must be *unique* or else it will overwrite other embeds.", inline=True
             )]
         )
 
@@ -180,31 +183,31 @@ class EmbedBuilderView(AutoDisableView):
     async def refresh_message(self):
         await self.message.edit(embeds=[self.builder.build_embed(), self.builder.build_edit_embed()])
 
-    @discord.ui.button(label="➕", style=discord.ButtonStyle.blurple, row=0)
-    async def btn_add(self, button: discord.Button, ctx: Interaction):
-        form = await (
-            ModalForm(title="Add field", send_response=True)
-            .add_field(label="Title", placeholder="The title of the field")
-            .add_field(label="Content", placeholder="The content of the field", style=InputTextStyle.paragraph)
-            .add_field(label="Inline", placeholder="[Y]es or [N]o", value="No")
-            .open_form(ctx.response)
-        )
-        if form.is_timeout():
-            return
-        self.builder.add_field(
-            name=form.retrieve_result(label="Title"),
-            value=form.retrieve_result(label="Content"),
-            inline=form.retrieve_result(label="Inline").casefold().startswith("y".casefold())
-        )
-        await self.refresh_message()
+    async def select_field(self, ctx: Interaction, return_response=False):
+        num_view = NumPadView(consume_response=False)
+        msg = "```"
+        for i, field in enumerate(self.builder.fields):
+            msg += f"\n{i + 1:2}: {field.name}"
+        msg += "\n```"
+        await ctx.response.send_message(f"Please select the field to delete:\n{msg}", view=num_view, ephemeral=True)
+        await num_view.wait()
+        if num_view.selected is None:
+            return None
+        if num_view.selected > len(self.builder.fields):
+            await ctx.followup.send(
+                f"Number {num_view.selected} is to high, there are only {len(self.builder.fields)} fields.")
+            return None
+        if not return_response:
+            return self.builder.fields[num_view.selected - 1]
+        return self.builder.fields[num_view.selected - 1], num_view.response
 
     @discord.ui.button(label="✏", style=discord.ButtonStyle.blurple, row=0)
     async def btn_edit(self, button: discord.Button, ctx: Interaction):
         form = await (
             ModalForm(title="Edit embed", send_response=True)
-            .add_field(label="Title", placeholder="The title of the embed", value=self.builder.title)
+            .add_field(label="Title", placeholder="The title of the embed", value=self.builder.title, max_length=256)
             .add_field(label="Description", placeholder="The description of the embed", required=False,
-                       style=InputTextStyle.paragraph, value=self.builder.description)
+                       style=InputTextStyle.paragraph, value=self.builder.description, max_length=4000)
             .add_field(label="Color", placeholder="Color hex code",
                        value="#%02x%02x%02x" % self.builder.color.to_rgb())
             .open_form(ctx.response)
@@ -254,7 +257,7 @@ class EmbedBuilderView(AutoDisableView):
                                     f"it might not get overwritten in the file itself.", ephemeral=True)
         await self.refresh_message()
 
-    @discord.ui.button(label="💾", style=discord.ButtonStyle.blurple, row=1)
+    @discord.ui.button(label="💾", style=discord.ButtonStyle.green, row=0)
     async def btn_save(self, button: discord.Button, ctx: Interaction):
         if not re_file.match(self.builder.file_name):
             await ctx.followup.send_message(
@@ -271,6 +274,52 @@ class EmbedBuilderView(AutoDisableView):
                         {self.builder.embed_name: self.builder.build_embed()})
         await ctx.followup.send(f"Saved embed to `{file_path}` (already existing embeds in that file were NOT "
                                 f"overwritten, as long as they had another name.", ephemeral=True)
+
+    @discord.ui.button(label="➕", style=discord.ButtonStyle.blurple, row=1)
+    async def btn_add(self, button: discord.Button, ctx: Interaction):
+        form = await (
+            ModalForm(title="Add field", send_response=True)
+            .add_field(label="Title", placeholder="The title of the field", max_length=256)
+            .add_field(label="Content", placeholder="The content of the field", style=InputTextStyle.paragraph, max_length=1024)
+            .add_field(label="Inline", placeholder="[Y]es or [N]o", value="No", max_length=3)
+            .open_form(ctx.response)
+        )
+        if form.is_timeout():
+            return
+        self.builder.add_field(
+            name=form.retrieve_result(label="Title"),
+            value=form.retrieve_result(label="Content"),
+            inline=form.retrieve_result(label="Inline").casefold().startswith("y".casefold())
+        )
+        await self.refresh_message()
+
+    @discord.ui.button(label="➖", style=discord.ButtonStyle.blurple, row=1)
+    async def btn_remove(self, button: discord.Button, ctx: Interaction):
+        field = await self.select_field(ctx)
+        if field is None:
+            return
+        self.builder.fields.remove(field)
+        await self.refresh_message()
+
+    @discord.ui.button(label="✏", style=discord.ButtonStyle.blurple, row=1)
+    async def btn_edit_field(self, button: discord.Button, ctx: Interaction):
+        field, res = await self.select_field(ctx, return_response=True)  # type: EmbedField, InteractionResponse
+        if field is None:
+            return
+        form = await (
+            ModalForm(title="Edit field", send_response=True)
+            .add_field(label="Title", placeholder="The title of the field", value=field.name, max_length=256)
+            .add_field(label="Content", placeholder="The content of the field", value=field.value,
+                       style=InputTextStyle.paragraph, max_length=1024)
+            .add_field(label="Inline", placeholder="[Y]es or [N]o", value="Yes" if field.inline else "No", max_length=3)
+            .open_form(res)
+        )
+        if form.is_timeout():
+            return
+        field.name = form.retrieve_result(label="Title")
+        field.value = form.retrieve_result(label="Content")
+        field.inline = form.retrieve_result(label="Inline").casefold().startswith("y".casefold())
+        await self.refresh_message()
 
     @discord.ui.button(label="✖", style=discord.ButtonStyle.red, row=1)
     async def btn_close(self, button: discord.Button, ctx: Interaction):
@@ -294,9 +343,14 @@ class EmbedCommands(commands.Cog):
             builder.load_from_embed(embed)
             if embed_name in self.plugin.embed_locations:
                 builder.file_name = ntpath.basename(self.plugin.embed_locations[embed_name]).replace(".json", "")
+                msg = f"Edit the **existing** embed `{embed_name}` (saved in file `{builder.file_name}`)"
+            else:
+                msg = f"Create a new embed `{embed_name}`"
+        else:
+            msg = "Create a new embed, you have to define a name before saving"
         builder.embed_name = embed_name
         view = EmbedBuilderView(builder)
-        await ctx.user.send("Create a new embed", view=view, embeds=[builder.build_embed(), builder.build_edit_embed()])
+        await ctx.user.send(msg, view=view, embeds=[builder.build_embed(), builder.build_edit_embed()])
         await ctx.response.defer(ephemeral=True, invisible=True)
 
     @group.command(name="show", description="Shows a preview of an embed")
@@ -305,7 +359,7 @@ class EmbedCommands(commands.Cog):
     @admin_only()
     async def cmd_show(self, ctx: ApplicationContext, embed_name: str, silent: bool):
         if embed_name is None:
-            msg = "```"
+            msg = f"```\n{'Embed Name':20}: Filename"
             for k, v in self.plugin.embeds.items():
                 if not isinstance(v, Embed):
                     continue
@@ -320,13 +374,20 @@ class EmbedCommands(commands.Cog):
     @option(name="embed_name", description="The name of the embed", type=str)
     @option(name="channel", description="The target channel (or empty)", type=TextChannel, required=False, default=None)
     @admin_only()
-    async def cmd_send(self, ctx: ApplicationContext, embed_name: str, channel: TextChannel):
+    async def cmd_send(self, ctx: ApplicationContext, embed_name: str, channel: Union[GuildChannel, TextChannel]):
         embed = self.plugin.get_embed(embed_name, return_default=False, raise_warn=False)
         if embed is None:
             await ctx.response.send_message(f"Unknown embed `{embed_name}`. Use `/embed show` to see all available "
                                             f"embeds (case-sensitive).", ephemeral=True)
+            return
         if channel is None:
             channel = ctx.channel
+        if isinstance(channel, GuildChannel):
+            if not self.plugin.bot.is_admin(ctx.user) and not channel.permissions_for(ctx.user).send_messages:
+                await ctx.response.send_message("You have no permissions to send an embed into this channel. "
+                                                "You have to be an administrator or you need `Send Messages` "
+                                                "permissions for this channel.", ephemeral=True)
+                return
         await channel.send(embed=embed)
         await ctx.response.send_message(f"Embed sent into channel `{channel.name}:{channel.id}`", ephemeral=True)
         logger.info("User %s:%s sent the embed %s into channel %s:%s",

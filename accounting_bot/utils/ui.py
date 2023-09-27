@@ -1,3 +1,4 @@
+import asyncio
 import functools
 from typing import Optional, Dict, Coroutine, Callable, Union, List, Self
 
@@ -182,9 +183,11 @@ class NumPadView(AutoDisableView):
         async def callback(self, ctx: Interaction):
             await self.function(self.number, ctx)
 
-    def __init__(self, start_row=0, *args, **kwargs):
+    def __init__(self, start_row=0, consume_response=True, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.selected = None
+        self.consume_response = consume_response
+        self.response = None  # type: InteractionResponse | None
         for i in range(7, 10):
             self.add_item(NumPadView.NumberButton(i, self.callback, row=start_row))
         for i in range(4, 7):
@@ -208,8 +211,13 @@ class NumPadView(AutoDisableView):
 
     async def callback(self, number: int, ctx: Interaction):
         self.selected = number
-        await ctx.response.defer(invisible=True)
-        await ctx.message.delete()
+        self.response = ctx.response
+        self.stop()
+        if self.consume_response:
+            await ctx.response.defer(invisible=True)
+            await self.message.delete()
+        else:
+            asyncio.get_event_loop().create_task(self.message.delete())
 
     async def on_timeout(self) -> None:
         await super().on_timeout()

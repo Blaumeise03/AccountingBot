@@ -430,23 +430,25 @@ class AutoDisableView(ErrorHandledView):
         super().__init__(*args, **kwargs)
 
     async def on_timeout(self) -> None:
-        logger.info("View %s timed out (%s) in channel %s.",
+        logger.info("View %s timed out (msg %s) in channel %s.",
                     self.id,
                     self.message.id if self.message is not None else "None",
                     self.message.channel.id if self.message is not None else "None")
         if self.message is not None:
             try:
                 await self.message.edit(view=None)
-            except discord.errors.HTTPException as e:
-                logger.info("Can't edit view in channel %s: %s", self.message.channel.id, e)
+            except discord.errors.HTTPException:
+                # logger.info("Can't edit view in channel %s: %s", self.message.channel.id, e)
                 try:
                     # Maybe this can be removed or has to be refactored
                     msg = await self.message.channel.fetch_message(self.message.id)
                     await msg.edit(view=None)
-                except discord.errors.HTTPException as e2:
-                    logger.info("Can't fetch message %s of view to edit: %s",  self.message.id, e2)
+                except discord.errors.HTTPException:
+                    # logger.info("Can't fetch message %s of view to edit: %s",  self.message.id, e2)
+                    pass
         self.clear_items()
         self.disable_all_items()
+        self.stop()
 
 
 class State(Enum):
