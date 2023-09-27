@@ -38,6 +38,19 @@ EMOJI_REPEAT_WEEKLY = "<:rp_w:1152299344326840430>"
 EMOJI_REPEAT_MONTHLY = "<:rp_m:1152299341969633410>"
 
 
+def parse_time_str(time_str: str) -> datetime:
+    time = None
+    try:
+        time = parser.isoparse(time_str)
+        if time.tzinfo is None:
+            time.replace(tzinfo=datetime.now().tzinfo)
+    except ValueError:
+        pass
+    if time is None:
+        time = parser.parse(time_str, parserinfo=parser.parserinfo(dayfirst=True))
+    return time
+
+
 class CheckListPlugin(BotPlugin):
 
     def __init__(self, bot: AccountingBot, wrapper: PluginWrapper) -> None:
@@ -191,8 +204,9 @@ class Task:
         return True
 
 
-def _task_filter(tasks: List[Task], time_range: Union[RepeatDelay, Literal['expired']]):
-    now = datetime.now()
+def _task_filter(tasks: List[Task], time_range: Union[RepeatDelay, Literal['expired']],
+                 base_time: Optional[datetime] = None):
+    now = base_time if base_time is not None else datetime.now()
     if type(time_range) == str:
         max_age = now
         min_age = None
@@ -302,13 +316,25 @@ class CheckList:
         _add_field(title="This Week", tasks=list(week), time_format="F")
         _add_field(title="This Month", tasks=list(month), time_format="f")
 
+        next_month_time = datetime.today() + relativedelta(months=1, day=1)
+        if datetime.now() > next_month_time - relativedelta(weeks=1):
+            next_month_end = next_month_time + relativedelta(months=1)
+            next_month = sorted(
+                filter(
+                    lambda task: next_month_time <= task.time < next_month_end, self.tasks),
+                key=lambda task: task.time)
+            _add_field(title="Next Month", tasks=list(next_month), time_format="f")
         return embed
 
     def build_list(self) -> str:
         msg = "```"
         for i, task in enumerate(self.tasks):
             time_str = task.time.strftime("%Y-%m-%d, %H:%M")
-            msg += f"\n{i + 1:2} {'✓' if task.finished else ' '} {time_str} {task.repeat.name:7}: {task.name}  "
+            n_msg = f"\n{i + 1:2} {'✓' if task.finished else ' '} {time_str} {task.repeat.name:7}: {task.name}  "
+            if len(n_msg) > 1450:
+                msg += "\n---Truncated (to many entries)---"
+                break
+            msg += n_msg
         msg += "\n```"
         return msg
 
@@ -366,7 +392,7 @@ class CheckListView(AutoDisableView):
         res = modal.retrieve_results()
         task_name = res["Task Name"]
         raw_time = res["Time"]
-        task_time = parser.parse(raw_time, parserinfo=parser.parserinfo(dayfirst=True))
+        task_time = parse_time_str(raw_time)
         if not re.search(hour_pattern, raw_time):
             task_time = task_time.replace(hour=20, minute=0)
         task = Task(name=task_name, time=task_time)
@@ -459,7 +485,7 @@ class EditTaskView(NumPadView):
                     .add_field(label="Time", value=task.time.isoformat(sep=" ", timespec="minutes"))
                     .open_form(ctx.response)
                 ).retrieve_result()
-                task_time = parser.parse(raw_time, parserinfo=parser.parserinfo(dayfirst=True))
+                task_time = parse_time_str(raw_time)
                 if not re.search(hour_pattern, raw_time):
                     task_time = task_time.replace(hour=20, minute=0)
                 if task_time is None:
