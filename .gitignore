@@ -17,6 +17,7 @@ python
 .env
 config*.json
 resources/application_config.json
+resources/embeds/custom
 tests/test_config.json
 user_overwrites.json
 discord_ids*.json
