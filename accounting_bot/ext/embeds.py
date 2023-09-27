@@ -280,7 +280,8 @@ class EmbedBuilderView(AutoDisableView):
         form = await (
             ModalForm(title="Add field", send_response=True)
             .add_field(label="Title", placeholder="The title of the field", max_length=256)
-            .add_field(label="Content", placeholder="The content of the field", style=InputTextStyle.paragraph, max_length=1024)
+            .add_field(label="Content", placeholder="The content of the field", style=InputTextStyle.paragraph,
+                       max_length=1024)
             .add_field(label="Inline", placeholder="[Y]es or [N]o", value="No", max_length=3)
             .open_form(ctx.response)
         )
@@ -392,3 +393,39 @@ class EmbedCommands(commands.Cog):
         await ctx.response.send_message(f"Embed sent into channel `{channel.name}:{channel.id}`", ephemeral=True)
         logger.info("User %s:%s sent the embed %s into channel %s:%s",
                     ctx.user.name, ctx.user.id, embed_name, channel.name, channel.id)
+
+    @group.command(name="export", description="Exports an embed as json")
+    @option(name="embed_name", description="The name of the embed", type=str)
+    @option(name="silent", description="Execute the command silently", type=bool, required=False, default=True)
+    @admin_only()
+    async def cmd_export_name(self, ctx: ApplicationContext, embed_name: str, silent: bool):
+        embed = self.plugin.get_embed(embed_name, return_default=False, raise_warn=False)
+        if embed is None:
+            await ctx.response.send_message(f"Unknown embed `{embed_name}`. Use `/embed show` to see all available "
+                                            f"embeds (case-sensitive).", ephemeral=True)
+            return
+        embed_json = json.dumps(embed.to_dict(), indent=4, ensure_ascii=False)
+        await ctx.response.send_message(f"Embed `{embed_name}`", ephemeral=silent,
+                                        file=utils.string_to_file(embed_json, f"{embed_name}.json"))
+
+    @commands.message_command(name="Export Embed")
+    @admin_only()
+    async def cmd_export_message(self, ctx: ApplicationContext, message: discord.Message):
+        if len(message.embeds) == 0:
+            await ctx.response.send_message("Message does not contain any embeds", ephemeral=True)
+            return
+        files = []
+        await ctx.response.defer(ephemeral=True)
+        for i, embed in enumerate(message.embeds):
+            j_str = json.dumps(embed.to_dict(), indent=4, ensure_ascii=False)
+            files.append(utils.string_to_file(text=j_str, filename=f"embed_{i}.json"))
+        logger.info("User %s:%s exported %s embeds from message %s from channel %s:%s",
+                    ctx.user.name, ctx.user.id, len(message.embeds), message.id, message.channel.id,
+                    message.channel.type.name)
+        await ctx.followup.send(f"Exported {len(message.embeds)} embeds from message {message.id}",
+                                ephemeral=True, files=files)
+        for file in files:
+            file.reset()
+        # If the user uses the context menu command at a very old message (and the chat is scrolled up a lot), he won't
+        # receive the ephemeral response because the message gets not cached.
+        await ctx.user.send("Your exported files in case you did not receive the response:", files=files)
