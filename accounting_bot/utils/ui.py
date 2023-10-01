@@ -147,14 +147,14 @@ class AwaitConfirmView(AutoDisableView):
     async def defer_response(self):
         if self.interaction is None:
             return
-        await self.interaction.response.defer(invisible=True)
+        await self.interaction.response.defer(ephemeral=True, invisible=True)
 
     @discord.ui.button(label="Bestätigen", style=discord.ButtonStyle.green)
     async def btn_confirm(self, button: Button, ctx: Interaction):
         self.confirmed = True
         self.interaction = ctx
         if self._defer_response:
-            await ctx.response.defer(invisible=True)
+            await self.defer_response()
         await self.message.delete()
         self.stop()
 
@@ -163,7 +163,7 @@ class AwaitConfirmView(AutoDisableView):
         self.confirmed = False
         self.interaction = ctx
         if self._defer_response:
-            await ctx.response.defer(invisible=True)
+            await self.defer_response()
         await self.message.delete()
         self.stop()
 

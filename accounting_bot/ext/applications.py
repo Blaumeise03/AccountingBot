@@ -7,12 +7,12 @@ import logging
 import time
 from collections import defaultdict
 from datetime import datetime, timedelta
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Literal
 
 import discord
 import pytz
 from discord import SlashCommandGroup, ApplicationContext, User, Embed, Color, option, ButtonStyle, InputTextStyle, \
-    Message
+    Message, PartialEmoji, Interaction
 from discord.ext import commands, tasks
 from discord.ui import Button, InputText
 
@@ -30,7 +30,8 @@ CONFIG_TREE = {
     "resultChannel": (int, -1),
     "thumbnail_url": (str, ""),
     "ticket_command": (str, ""),
-    "complete_message": (str, "Bewerbung abgeschickt.")
+    "complete_message": (str, "Bewerbung abgeschickt."),
+    "views": (list, [])
 }
 
 
@@ -43,6 +44,7 @@ class ApplicationPlugin(BotPlugin):
         self.active_sessions = []  # type: List[ApplicationSession]
         self.questions = []  # type: List[Question]
         self.thumbnail_url = None
+        self.views = []  # type: List[AutoDisableView]
 
     def on_load(self):
         logger.info("Loading config")
@@ -58,13 +60,63 @@ class ApplicationPlugin(BotPlugin):
             self.register_cog(ApplicationCommands(self))
         else:
             logger.info("ApplicationCommands are not enabled")
+        msg_ids = []
+        to_delete = []
+        for view in self.config["views"]:
+            if view["message"] in msg_ids:
+                logger.warning("Duplicated views, deleting it. View %s at message %s in channel %s",
+                               view["type"], view["message"], view["channel"])
+                to_delete.append(view)
+                continue
+            msg_ids.append(view["message"])
+        for v in to_delete:
+            self.config["views"].remove(v)
 
     async def on_enable(self):
         self.apl_loop.start()
+        _views = self.config["views"]  # type: List[Dict[str, Any]]
+        logger.info("Setting up %s views", len(_views))
+        coros = []
+        to_delete = []
+        for raw_view in _views:
+            try:
+                channel = await self.bot.get_or_fetch_channel(raw_view["channel"])
+                message = await channel.fetch_message(raw_view["message"])
+            except discord.HTTPException as e:
+                logger.error("Failed to set up view in channel %s for message %s",
+                             raw_view["channel"], raw_view["message"])
+                utils.log_error(logger=self.logger, error=e, minimal=True)
+                to_delete.append(raw_view)
+                continue
+            view_type = raw_view["type"]
+            if view_type == "TICKET":
+                view = TicketView(self)
+            elif view_type == "APPLY":
+                view = ApplyView(self)
+            else:
+                logger.error("Unknown view type %s for msg %s in channel %s",
+                             view_type, raw_view["message"], raw_view["channel"])
+                continue
+            self.views.append(view)
+
+            async def _edit_msg():
+                msg = await message.edit(view=view)
+                if view.message is None:
+                    view.message = msg
+            coros.append(_edit_msg())
+        for v in to_delete:
+            _views.remove(v)
+        self.config.save_config(self.config_path)
+        await asyncio.gather(*coros)
 
     async def on_disable(self):
         self.apl_loop.cancel()
-        return await super().on_disable()
+        coros = []
+        logger.info("Removing %s views", len(self.views))
+        for view in self.views:
+            if view.message is not None:
+                coros.append(view.message.edit(view=None))
+        await asyncio.gather(*coros)
 
     @tasks.loop(minutes=5)
     async def apl_loop(self):
@@ -308,11 +360,76 @@ class ApplicationCommands(commands.Cog):
                             value=f"Optional: {question.optional}\nMax Length: {question.max_length}")
         await ctx.respond(embed=embed, ephemeral=silent)
 
+    @cmd_o7.command(name="add_view", description="Appends a view to a message in the current channel")
+    @option(name="msg_id", description="The discord id of the message", type=str)
+    @option(name="view_type", description="'TICKET' or 'APPLY'", type=str, choices=["TICKET", "APPLY"])
+    @admin_only()
+    async def cmd_o7_add_view(self, ctx: ApplicationContext, msg_id: str, view_type: Literal["TICKET", "APPLY"]):
+        await ctx.defer(ephemeral=True)
+        try:
+            msg = await ctx.channel.fetch_message(int(msg_id))
+        except discord.NotFound:
+            await ctx.followup.send(f"Message with id `{msg_id}` not found in current channel", ephemeral=True)
+            return
+        if view_type == "TICKET":
+            view = TicketView(self.plugin)
+        elif view_type == "APPLY":
+            view = ApplyView(self.plugin)
+        else:
+            await ctx.followup.send(f"Unknown view type `{view_type}`.", ephemeral=True)
+            return
+        await msg.edit(view=view)
+        if view.message is None:
+            view.message = msg
+        await ctx.followup.send(f"Attached view `{view.__class__.__name__}` to message `{msg.id}`.",
+                                ephemeral=True)
+        self.plugin.views.append(view)
+        self.plugin.config["views"].append({
+            "channel": msg.channel.id,
+            "message": msg.id,
+            "type": view_type
+        })
+        self.plugin.config.save_config(self.plugin.config_path)
+        logger.info("User %s:%s added view %s to message %s in %s",
+                    ctx.user.name, ctx.user.id, view_type, msg.id, msg.channel.id)
+
     @cmd_o7.command(name="ticket", description="Opens a ticket (for diplo)")
     @online_only()
     async def cmd_o7_ticket(self, ctx: ApplicationContext):
         await ctx.respond("Opening ticket...", ephemeral=True)
-        channel = await self.state.bot.fetch_channel(self.plugin.config["resultChannel"])
+        channel = await self.plugin.bot.fetch_channel(self.plugin.config["resultChannel"])
+        await channel.send(
+            self.plugin.config["ticket_command"].format_map(
+                defaultdict(str, id=ctx.user.id, reason="Diplomatic Request")))
+
+
+class ApplyView(AutoDisableView):
+    def __init__(self, plugin: ApplicationPlugin, *args, **kwargs):
+        super().__init__(timeout=None, *args, **kwargs)
+        self.plugin = plugin
+
+    @discord.ui.button(emoji="📨",
+                       label="Bewerben",
+                       style=discord.ButtonStyle.green, row=0)
+    async def btn_add_task(self, button: discord.Button, ctx: Interaction):
+        session = ApplicationSession(ctx.user, self.plugin)
+        await asyncio.gather(
+            ctx.response.send_message("Bitte überprüfe deine Direktnachrichten.", ephemeral=True),
+            session.start()
+        )
+
+
+class TicketView(AutoDisableView):
+    def __init__(self, plugin: ApplicationPlugin, *args, **kwargs):
+        super().__init__(timeout=None, *args, **kwargs)
+        self.plugin = plugin
+
+    @discord.ui.button(emoji="🏳️",
+                       label="Open ticket",
+                       style=discord.ButtonStyle.green, row=0)
+    async def btn_add_task(self, button: discord.Button, ctx: Interaction):
+        await ctx.response.send_message("Opening ticket...", ephemeral=True)
+        channel = await self.plugin.bot.fetch_channel(self.plugin.config["resultChannel"])
         await channel.send(
             self.plugin.config["ticket_command"].format_map(
                 defaultdict(str, id=ctx.user.id, reason="Diplomatic Request")))

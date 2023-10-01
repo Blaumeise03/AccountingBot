@@ -9,7 +9,7 @@ import ntpath
 import os
 import re
 from os import PathLike
-from typing import Dict, Union, List
+from typing import Dict, Union, List, Optional
 
 import discord
 from discord import Embed, Color, Interaction, InputTextStyle, SlashCommandGroup, ApplicationContext, EmbedField, \
@@ -192,11 +192,17 @@ class EmbedBuilderView(AutoDisableView):
         await ctx.response.send_message(f"Please select the field to delete:\n{msg}", view=num_view, ephemeral=True)
         await num_view.wait()
         if num_view.selected is None:
-            return None
+            if return_response:
+                return None
+            else:
+                return None, None
         if num_view.selected > len(self.builder.fields):
             await ctx.followup.send(
                 f"Number {num_view.selected} is to high, there are only {len(self.builder.fields)} fields.")
-            return None
+            if return_response:
+                return None
+            else:
+                return None, None
         if not return_response:
             return self.builder.fields[num_view.selected - 1]
         return self.builder.fields[num_view.selected - 1], num_view.response
@@ -272,6 +278,8 @@ class EmbedBuilderView(AutoDisableView):
         file_path = f"resources/embeds/custom/{self.builder.file_name}.json"
         save_new_embeds(file_path,
                         {self.builder.embed_name: self.builder.build_embed()})
+        self.builder.plugin.embeds[self.builder.embed_name] = self.builder.build_embed()
+        self.builder.plugin.embed_locations[self.builder.embed_name] = file_path
         await ctx.followup.send(f"Saved embed to `{file_path}` (already existing embeds in that file were NOT "
                                 f"overwritten, as long as they had another name.", ephemeral=True)
 
@@ -346,9 +354,13 @@ class EmbedCommands(commands.Cog):
                 builder.file_name = ntpath.basename(self.plugin.embed_locations[embed_name]).replace(".json", "")
                 msg = f"Edit the **existing** embed `{embed_name}` (saved in file `{builder.file_name}`)"
             else:
-                msg = f"Create a new embed `{embed_name}`"
+                msg = (f"Edit the **existing** embed `{embed_name}`.\n**Warning**: Unknown file location, saving will "
+                       f"not overwrite the embed. This **will** cause a loading **conflict** on the next startup.")
         else:
-            msg = "Create a new embed, you have to define a name before saving"
+            if embed_name is None:
+                msg = "Create a new embed, you have to define a name before saving"
+            else:
+                msg = f"Create a new embed `{embed_name}`"
         builder.embed_name = embed_name
         view = EmbedBuilderView(builder)
         await ctx.user.send(msg, view=view, embeds=[builder.build_embed(), builder.build_edit_embed()])
@@ -374,8 +386,13 @@ class EmbedCommands(commands.Cog):
     @group.command(name="send", description="Sends an embed into a channel")
     @option(name="embed_name", description="The name of the embed", type=str)
     @option(name="channel", description="The target channel (or empty)", type=TextChannel, required=False, default=None)
+    @option(name="msg_id", description="Update the message with this id instead", type=str, required=False, default=None)
     @admin_only()
-    async def cmd_send(self, ctx: ApplicationContext, embed_name: str, channel: Union[GuildChannel, TextChannel]):
+    async def cmd_send(self,
+                       ctx: ApplicationContext,
+                       embed_name: str,
+                       channel: Union[GuildChannel, TextChannel, None],
+                       msg_id: Optional[str]):
         embed = self.plugin.get_embed(embed_name, return_default=False, raise_warn=False)
         if embed is None:
             await ctx.response.send_message(f"Unknown embed `{embed_name}`. Use `/embed show` to see all available "
@@ -383,16 +400,32 @@ class EmbedCommands(commands.Cog):
             return
         if channel is None:
             channel = ctx.channel
+        msg = None
+        if msg_id is not None:
+            try:
+                msg = await channel.fetch_message(int(msg_id))
+            except discord.NotFound:
+                await ctx.response.send_message(f"Message with id `{msg_id}` not found in channel <#{channel.id}>",
+                                                ephemeral=True)
+                return
         if isinstance(channel, GuildChannel):
             if not self.plugin.bot.is_admin(ctx.user) and not channel.permissions_for(ctx.user).send_messages:
                 await ctx.response.send_message("You have no permissions to send an embed into this channel. "
                                                 "You have to be an administrator or you need `Send Messages` "
                                                 "permissions for this channel.", ephemeral=True)
                 return
-        await channel.send(embed=embed)
-        await ctx.response.send_message(f"Embed sent into channel `{channel.name}:{channel.id}`", ephemeral=True)
-        logger.info("User %s:%s sent the embed %s into channel %s:%s",
-                    ctx.user.name, ctx.user.id, embed_name, channel.name, channel.id)
+        if msg is not None:
+            await msg.edit(embed=embed)
+            await ctx.response.send_message(f"Updated message {msg.id}",
+                                            ephemeral=True)
+            logger.info("User %s:%s updated message %s with the embed %s in channel %s:%s",
+                        ctx.user.name, ctx.user.id, msg.id, embed_name, channel.name, channel.id)
+        else:
+            await channel.send(embed=embed)
+            await ctx.response.send_message(f"Embed sent into channel `{channel.name}:{channel.id}`",
+                                            ephemeral=True)
+            logger.info("User %s:%s sent the embed %s into channel %s:%s",
+                        ctx.user.name, ctx.user.id, embed_name, channel.name, channel.id)
 
     @group.command(name="export", description="Exports an embed as json")
     @option(name="embed_name", description="The name of the embed", type=str)
