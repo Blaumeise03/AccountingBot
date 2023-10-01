@@ -8,16 +8,21 @@ import functools
 import json
 import logging
 from os.path import exists
-from typing import Dict, List
+from typing import Dict, List, Union, Iterable, Optional
 
+import gspread
 import gspread_asyncio
+from discord import ApplicationContext, option
 from discord.ext import commands
 from google.oauth2.service_account import Credentials
-from gspread.utils import ValueRenderOption
+from gspread.utils import ValueRenderOption, ValueInputOption
 
 from accounting_bot.exceptions import GoogleSheetException
 from accounting_bot.ext.members import Player, MembersPlugin
+from accounting_bot.ext.sheet import sheet_utils
 from accounting_bot.main_bot import BotPlugin, AccountingBot, PluginWrapper
+from accounting_bot.utils import admin_only
+from accounting_bot.utils.ui import AwaitConfirmView
 
 logger = logging.getLogger("ext.sheet")
 logger.setLevel(logging.DEBUG)
@@ -71,6 +76,7 @@ class SheetPlugin(BotPlugin):
         self.agcm = gspread_asyncio.AsyncioGspreadClientManager(get_creds)
 
     def on_load(self):
+        self.register_cog(SheetCog(self))
         if exists(USER_OVERWRITES_FILE):
             with open(USER_OVERWRITES_FILE) as json_file:
                 self.name_overwrites = json.load(json_file)
@@ -101,7 +107,7 @@ class SheetPlugin(BotPlugin):
     async def on_enable(self):
         return await super().on_enable()
 
-    async def get_sheet(self):
+    async def get_sheet(self) -> gspread_asyncio.AsyncioGspreadSpreadsheet:
         agc = await self.agcm.authorize()
         sheet = await agc.open_by_key(self.sheet_id)
         if self.sheet_name is None:
@@ -163,17 +169,45 @@ class SheetCog(commands.Cog):
     def __init__(self, plugin: SheetPlugin):
         self.plugin = plugin
 
-    @commands.Cog.listener()
-    async def on_ready(self) -> None:
-        # Connect to API
-        logger.info("Loading google sheet")
-        agc = await self.agcm.authorize()
-        if self.plugin.sheet_id is None:
-            logger.warning("Sheet id not specified")
+    @commands.slash_command(name="export_players", description="Saves the discord ids into a google sheet")
+    @option(name="sheet", type=str, description="The target sheet name")
+    @option(name="index_name", type=str, description="The column for char names (0-indexed or letter)")
+    @option(name="index_main", type=str, description="The column for main char names (0-indexed or letter)")
+    @option(name="index_id", type=str, description="The column for discord ids (0-indexed or letter)")
+    @admin_only()
+    async def cmd_export_player(self,
+                                ctx: ApplicationContext,
+                                sheet: str,
+                                index_name: str,
+                                index_main: str,
+                                index_id: str):
+        def _get_index(string: str) -> int:
+            if string.strip().isnumeric():
+                return int(string.strip())
+            else:
+                return gspread.utils.a1_to_rowcol(string.strip() + "1")[1] - 1
+
+        index_id = _get_index(index_id)
+        index_main = _get_index(index_main)
+        index_name = _get_index(index_name)
+        confirm = await (AwaitConfirmView(defer_response=False)
+                         .send_view(ctx.response,
+                                    message=f"Please confirm the operation:\nSheet: `{sheet}`\nIndizes (0-based):\n"
+                                            f"Char Name: `{index_name}`\nMain Name: `{index_main}`\n"
+                                            f"Discord ID Index: `{index_id}`\n\nDo you want to update the data?"))
+        if not confirm.confirmed:
+            if confirm.interaction:
+                await confirm.interaction.response.send_message("Aborted", ephemeral=True)
             return
-        sheet = await agc.open_by_key(self.plugin.sheet_id)
-        self.plugin.sheet_name = sheet.title
-        logger.info("Sheet connected")
+        members_plugin = self.plugin.bot.get_plugin("MembersPlugin")  # type: MembersPlugin
+        logger.info("User %s:%s has started the player export into sheet %s (c %s, m %s, i %s)",
+                    ctx.user.name, ctx.user.id, sheet, index_name, index_main, index_id)
+        await confirm.interaction.response.defer(ephemeral=True)
+        await save_players_to_sheet(
+            players=members_plugin.players,
+            sheet=await self.plugin.get_sheet(),
+            wk_name=sheet, wk_i_id=index_id, wk_i_main=index_main, wk_i_char=index_name)
+        await confirm.interaction.followup.send(f"Exported players to sheet {sheet}", ephemeral=True)
 
 
 async def load_usernames(players: Dict[str, Player], plugin: SheetPlugin) -> Dict[str, Player]:
@@ -266,6 +300,74 @@ def save_discord_ids(players: List[Player], path: str):
             raw["granted_permissions"][player.name] = player.authorized_discord_ids
     with open(path, "w", encoding="utf-8") as file:
         json.dump(raw, file, ensure_ascii=False, indent=4)
+
+
+async def save_players_to_sheet(
+        players: Iterable[Player],
+        sheet: gspread_asyncio.AsyncioGspreadSpreadsheet,
+        wk_name: str, wk_i_char: int, wk_i_main: int, wk_i_id: int):
+    """
+    All indizes have to be 0-indexed
+    :param players:
+    :param sheet:
+    :param wk_name:
+    :param wk_i_char:
+    :param wk_i_main:
+    :param wk_i_id:
+    :return:
+    """
+    logger.info("Preparing update of player sheet %s for %s players", wk_name, len(players))
+    wk = await sheet.worksheet(wk_name)
+    data = await wk.get_values(value_render_option=ValueRenderOption.unformatted)
+
+    def _find_player_row(_name: str):
+        for i, row in enumerate(data):
+            if len(row) < wk_i_char:
+                continue
+            if row[wk_i_char] == _name:
+                return i, row
+        return None, None
+
+    batch_change = []
+    new_data = []
+
+    def _insert_update_char(_name: str, _main: str, _id: Optional[int] = None):
+        if _id is None:
+            return
+        r, d = _find_player_row(_name)
+        if r is None:
+            new = [None] * (max(wk_i_char, wk_i_main, wk_i_id) + 1)  # type: List[Union[None, int, str]]
+            new[wk_i_id] = str(_id)
+            new[wk_i_main] = _main
+            new[wk_i_char] = _name
+            new_data.append(new)
+        else:
+            if str(d[wk_i_main]) != str(_main):
+                batch_change.append({
+                    "range": gspread.utils.rowcol_to_a1(r + 1, wk_i_main + 1),
+                    "values": [[_main]]
+                })
+            if str(d[wk_i_id]) != str(_id):
+                batch_change.append({
+                    "range": gspread.utils.rowcol_to_a1(r + 1, wk_i_id + 1),
+                    "values": [[str(_id)]]
+                })
+
+    for player in players:
+        _insert_update_char(player.name, player.name, player.discord_id)
+        for char in player.alts:
+            _insert_update_char(char, player.name, player.discord_id)
+    if len(new_data) != 0:
+        logger.info("Inserting %s new rows into worksheet", len(new_data))
+        await wk.append_rows(new_data, value_input_option=ValueInputOption.user_entered)
+    else:
+        logger.info("No new data")
+    if len(batch_change) != 0:
+        logger.info("Updating %s existing cells", len(batch_change))
+        await wk.batch_update(batch_change, value_input_option=ValueInputOption.user_entered)
+    else:
+        logger.info("No updates required")
+    logger.info("Updated user data in sheet %s", wk_name)
 
 
 def load_user_overwrites(players: Dict[str, Player]):
