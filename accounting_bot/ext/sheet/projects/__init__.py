@@ -102,7 +102,7 @@ def hash_contract(items: List[Item]) -> str:
 
 async def _check_permissions(plugin, interaction):
     if not (
-            interaction.user.guild_permissions.administrator or interaction.user.id in plugin.admins or await plugin.bot.is_owner(interaction.user)
+            plugin.bot.is_admin(interaction.user)
     ):
         await interaction.response.send_message("Missing permissions", ephemeral=True)
         return
