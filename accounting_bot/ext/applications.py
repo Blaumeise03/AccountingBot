@@ -99,11 +99,12 @@ class ApplicationPlugin(BotPlugin):
                 continue
             self.views.append(view)
 
-            async def _edit_msg():
-                msg = await message.edit(view=view)
-                if view.message is None:
-                    view.message = msg
-            coros.append(_edit_msg())
+            async def _edit_msg(msg: Message, _view: AutoDisableView):
+                logger.info("Refreshing view for msg %s", msg.id)
+                msg = await msg.edit(view=_view)
+                if _view.message is None:
+                    _view.message = msg
+            coros.append(_edit_msg(message, view))
         for v in to_delete:
             _views.remove(v)
         self.config.save_config(self.config_path)
@@ -411,7 +412,7 @@ class ApplyView(AutoDisableView):
     @discord.ui.button(emoji="📨",
                        label="Bewerben",
                        style=discord.ButtonStyle.green, row=0)
-    async def btn_add_task(self, button: discord.Button, ctx: Interaction):
+    async def btn_apply(self, button: discord.Button, ctx: Interaction):
         session = ApplicationSession(ctx.user, self.plugin)
         await asyncio.gather(
             ctx.response.send_message("Bitte überprüfe deine Direktnachrichten.", ephemeral=True),
@@ -427,7 +428,7 @@ class TicketView(AutoDisableView):
     @discord.ui.button(emoji="🏳️",
                        label="Open ticket",
                        style=discord.ButtonStyle.green, row=0)
-    async def btn_add_task(self, button: discord.Button, ctx: Interaction):
+    async def btn_open_ticket(self, button: discord.Button, ctx: Interaction):
         await ctx.response.send_message("Opening ticket...", ephemeral=True)
         channel = await self.plugin.bot.fetch_channel(self.plugin.config["resultChannel"])
         await channel.send(
