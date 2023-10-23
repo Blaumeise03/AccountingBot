@@ -7,14 +7,13 @@ import logging
 import math
 import re
 from datetime import datetime
-from typing import List, Tuple, Optional, Dict, Union
+from typing import List, Tuple, Optional, Dict, Union, Any
 
 import networkx as nx
 import numpy as np
 import plotly.graph_objects as go
 from discord import Embed
 
-from accounting_bot.config import Config
 from accounting_bot.exceptions import InputException
 from accounting_bot.ext.members import MembersPlugin
 from accounting_bot.main_bot import BotPlugin, AccountingBot, PluginWrapper
@@ -36,19 +35,19 @@ CONFIG_TREE = {
     }
 }
 CNFG_KILL_TREE = {
-        "channel": (int, -1),
-        "admins": (list, []),
-        "home_regions": (list, []),
-        "field_id": (str, "TITLE"),
-        "regex_id": (str, "Kill Report #(\\d+)"),
-        "field_final_blow": (str, "Pilot"),
-        "regex_final_blow": (str, ".*"),
-        "field_ship": (str, "Killed"),
-        "regex_ship": (str, ".*"),
-        "field_kill_value": (str, "ISK"),
-        "regex_kill_value": (str, ".*"),
-        "field_system": (str, "Location"),
-        "regex_system": (str, "([-a-zA-Z0-9 ]+) < .* < .*")
+    "channel": (int, -1),
+    "admins": (list, []),
+    "home_regions": (list, []),
+    "field_id": (str, "TITLE"),
+    "regex_id": (str, "Kill Report #(\\d+)"),
+    "field_final_blow": (str, "Pilot"),
+    "regex_final_blow": (str, ".*"),
+    "field_ship": (str, "Killed"),
+    "regex_ship": (str, ".*"),
+    "field_kill_value": (str, "ISK"),
+    "regex_kill_value": (str, ".*"),
+    "field_system": (str, "Location"),
+    "regex_system": (str, "([-a-zA-Z0-9 ]+) < .* < .*")
 }
 
 
@@ -99,13 +98,23 @@ class Item(object):
 
     @staticmethod
     def sort_list(items: List["Item"], order: Union[List[str], Dict[str, int]]) -> None:
-        if type(order) == list:
+        if type(order) is list:
             for item in items:  # type: Item
                 if item.name not in order:
                     order.append(item.name)
             items.sort(key=lambda x: order.index(x.name) if x.name in order else math.inf)
-        elif type(order) == dict:
+        elif type(order) is dict:
             items.sort(key=lambda x: order[x.name] if x.name in order else math.inf)
+
+    @staticmethod
+    def sort_tuple_list(items: List[Tuple[str, Any, ...]], order: Union[List[str], Dict[str, int]]) -> None:
+        if type(order) is list:
+            for item in items:
+                if item[0] not in order:
+                    order.append(item[0])
+            items.sort(key=lambda x: order.index(x[0]) if x[0] in order else math.inf)
+        elif type(order) is dict:
+            items.sort(key=lambda x: order[x[0]] if x[0] in order else math.inf)
 
     @staticmethod
     def parse_ingame_list(raw: str) -> List["Item"]:

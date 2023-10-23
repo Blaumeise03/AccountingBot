@@ -1,7 +1,7 @@
 # PluginConfig
 # Name: ProjectPlugin
 # Author: Blaumeise03
-# Depends-On: [accounting_bot.ext.members, accounting_bot.ext.sheet.sheet_main]
+# Depends-On: [accounting_bot.ext.members, accounting_bot.ext.sheet.sheet_main, accounting_bot.universe.data_utils]
 # Localization: project_lang.xml
 # End
 import asyncio
@@ -11,7 +11,7 @@ import logging
 import time
 from datetime import datetime
 from difflib import SequenceMatcher
-from typing import Dict, List, Tuple, Callable
+from typing import Dict, List, Tuple, Callable, TYPE_CHECKING
 
 import discord
 import pytz
@@ -29,7 +29,7 @@ from accounting_bot.ext.sheet import sheet_main
 from accounting_bot.ext.sheet.projects.project_utils import format_list, Project
 from accounting_bot.ext.sheet.sheet_main import SheetPlugin
 from accounting_bot.main_bot import BotPlugin, AccountingBot, PluginWrapper
-from accounting_bot.universe.data_utils import Item
+from accounting_bot.universe.data_utils import Item, DataUtilsPlugin
 from accounting_bot.utils import string_to_file, list_to_string, AutoDisableView, ErrorHandledModal, admin_only, \
     online_only
 
@@ -138,16 +138,16 @@ class ProjectCommands(commands.Cog):
     @online_only()
     async def load_projects(self, ctx: discord.commands.context.ApplicationContext,
                             silent: Option(bool, "Execute command silently", required=False, default=True)):
-        await ctx.response.defer(ephemeral=True)
+        await ctx.response.defer(ephemeral=silent)
+        await self.plugin.find_projects()
         log = await self.plugin.load_projects()
         res = "Projectlist version: " + sheet_main.lastChanges.astimezone(pytz.timezone("Europe/Berlin")).strftime(
             "%d.%m.%Y %H:%M") + "\n"
         for p in self.plugin.all_projects:
             res += p.to_string() + "\n\n"
 
-        await ctx.respond("Projektliste:", files=[
-            string_to_file(list_to_string(log), "log.txt"),
-            string_to_file(res, "project_list.txt")], ephemeral=silent)
+        await ctx.followup.send("Projektliste:", files=[
+            string_to_file(res, "project_list.txt")])
 
     @commands.slash_command(name="listprojects", description="Lists all projects")
     @member_only()
@@ -158,6 +158,26 @@ class ProjectCommands(commands.Cog):
             for p in self.plugin.all_projects:
                 res += p.to_string() + "\n\n"
         await ctx.respond("Projektliste:", file=string_to_file(res, "project_list.txt"), ephemeral=silent)
+
+    @commands.slash_command(name="listresources", description="Lists all required resources")
+    @member_only()
+    async def list_resources(self, ctx: ApplicationContext,
+                             silent: Option(bool, "Execute command silently", required=False, default=True)):
+        await ctx.response.defer(ephemeral=silent)
+        res = "Benötigte Items\n```"
+        items = list((await self.plugin.load_pending_resources()).items())
+        data_utils = self.plugin.bot.get_plugin("DataUtilsPlugin")  # type: DataUtilsPlugin | None
+        if data_utils is not None:
+            Item.sort_tuple_list(items, data_utils.resource_order)
+        for item, num in items:
+            if num > 0:
+                if len(item) <= 20:
+                    res += f"\n{item:20}: {int(num):10,}"
+                else:
+                    res += f"\n{item:20}: {int(num):{max(0, 10 - len(item) + 20)},}"
+        res += "\n```"
+        embed = Embed(title="Projekte", description=res, colour=Colour.orange())
+        await ctx.followup.send(embed=embed, ephemeral=silent)
 
     @commands.slash_command(name="insertinvestment", description="Saves an investment into the sheet")
     @option("skip_loading", description="Skip the reloading of the projects", required=False, default=False)
