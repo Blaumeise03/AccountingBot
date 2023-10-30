@@ -292,8 +292,10 @@ def member_only() -> Callable[[_T], _T]:
                 raise CheckFailure("Can't execute command") \
                     from NoPermissionException("Only members may execute this command")
             return True
+
         CmdAnnotation.annotate_cmd(func, CmdAnnotation.member)
         return commands.check(predicate)(func)
+
     return decorator
 
 
@@ -426,10 +428,11 @@ class MembersCommands(commands.Cog):
     # noinspection SpellCheckingInspection
     @commands.slash_command(name="listunregusers", description="Lists all unregistered users of the discord")
     @option("role", description="The role to check", required=True)
+    @option(name="silent", description="Execute the command silently", type=bool, required=False, default=True)
     @admin_only()
     @guild_only()
-    async def find_unregistered_users(self, ctx: ApplicationContext, role: Role):
-        await ctx.defer(ephemeral=True)
+    async def find_unregistered_users(self, ctx: ApplicationContext, role: Role, silent: bool):
+        await ctx.defer(ephemeral=silent)
         users = await ctx.guild \
             .fetch_members() \
             .filter(lambda m: m.get_role(role.id) is not None) \
@@ -445,4 +448,52 @@ class MembersCommands(commands.Cog):
             if len(msg) > 1900:
                 msg += "**Truncated**\n"
                 break
-        await ctx.followup.send(msg, ephemeral=True)
+        await ctx.followup.send(msg)
+
+    # noinspection SpellCheckingInspection
+    @commands.slash_command(name="listmissingplayers", description="Lists all players that are not in the discord")
+    @option("role", description="The required role every user should have", required=False, default=None)
+    @option(name="silent", description="Execute the command silently", type=bool, required=False, default=True)
+    @admin_only()
+    @guild_only()
+    async def find_missing_players(self, ctx: ApplicationContext, role: Role, silent: bool):
+        await ctx.defer(ephemeral=silent)
+        users = dict(await ctx.guild
+                     .fetch_members()
+                     .map(lambda m: (m.id, m))
+                     .flatten())  # type: Dict[int, discord.Member]
+        unreg_users = []
+        missing_roles = []
+        for player in self.plugin.players:
+            if player.rank is None:
+                continue
+            if player.discord_id is None:
+                unreg_users.append(player)
+                continue
+            if player.discord_id not in users:
+                unreg_users.append(player)
+                continue
+            if role is None:
+                continue
+            if users[player.discord_id].get_role(role.id) is None:
+                missing_roles.append(player)
+        msg = f"Found {len(unreg_users)} missing players.\n"
+        for player in unreg_users:
+            msg += f"`{player.name}`"
+            if player.discord_id is not None:
+                msg += f": `{player.discord_id}` <@{player.discord_id}>"
+            if len(player.alts) > 0:
+                msg += f", {len(player.alts)} alts"
+            msg += "\n"
+            if len(msg) > 1900:
+                msg += "**Truncated**\n"
+                break
+        if len(missing_roles) > 0:
+            msg += f"Found {len(missing_roles)} players without the specified role.\n"
+        for player in missing_roles:
+            if len(msg) > 1900:
+                msg += "**Truncated**\n"
+                break
+            msg += f"`{player.name}`: `{player.discord_id}` <@{player.discord_id}>\n"
+
+        await ctx.followup.send(msg)
