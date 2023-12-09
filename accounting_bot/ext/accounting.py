@@ -132,7 +132,7 @@ class AccountingPlugin(BotPlugin):
     async def inform_player(self, transaction, discord_id, receive):
         time_formatted = transaction.timestamp.astimezone(pytz.timezone(self.timezone)).strftime("%d.%m.%Y %H:%M")
         if not discord_id:
-            logger.warning("Didn't received an ID for %s (receive=%s)", str(transaction), str(receive))
+            # logger.warning("Didn't receive an ID for %s (receive=%s)", str(transaction), str(receive))
             return
         user = await self.bot.get_or_fetch_user(discord_id)
         if user is not None:
@@ -1126,23 +1126,26 @@ class AccountingView(AutoDisableView):
     async def btn_transfer_callback(self, button, interaction):
         if not self.plugin.bot.is_online():
             raise BotOfflineException()
-        modal = TransferModal(title="Transfer", color=Color.blue(), plugin=self.plugin)
+        user_name, _, _ = self.plugin.member_p.find_main_name(discord_id=interaction.user.id)
+        modal = TransferModal(title="Transfer", color=Color.blue(), plugin=self.plugin, name_from=user_name)
         await interaction.response.send_modal(modal)
 
     @discord.ui.button(label="Einzahlen", style=discord.ButtonStyle.green)
     async def btn_deposit_callback(self, button, interaction):
         if not self.plugin.bot.is_online():
             raise BotOfflineException()
+        user_name, _, _ = self.plugin.member_p.find_main_name(discord_id=interaction.user.id)
         modal = TransferModal(title="Einzahlen", color=Color.green(), plugin=self.plugin,
-                              special=True, purpose="Einzahlung Accounting")
+                              special=True, purpose="Einzahlung Accounting", name_to=user_name)
         await interaction.response.send_modal(modal)
 
     @discord.ui.button(label="Auszahlen", style=discord.ButtonStyle.red)
     async def btn_withdraw_callback(self, button, interaction):
         if not self.plugin.bot.is_online():
             raise BotOfflineException()
+        user_name, _, _ = self.plugin.member_p.find_main_name(discord_id=interaction.user.id)
         modal = TransferModal(plugin=self.plugin, title="Auszahlen", color=Color.red(),
-                              special=True, purpose="Auszahlung Accounting")
+                              special=True, purpose="Auszahlung Accounting", name_from=user_name)
         await interaction.response.send_modal(modal)
 
     @discord.ui.button(label="Shipyard", style=discord.ButtonStyle.grey)
@@ -1306,7 +1309,7 @@ class TransferModal(ErrorHandledModal):
                 self.add_item(InputText(label="Zu", placeholder="Zu", required=True, value=name_to))
             else:
                 self.add_item(InputText(label="Spieler(konto)name", placeholder="z.B. \"KjinaDeNiel\"", required=True,
-                                        value=name_from))
+                                        value=name_from or name_to))
             self.add_item(InputText(label="Menge", placeholder="Menge", required=True, value=amount))
             self.add_item(
                 InputText(label="Verwendungszweck", placeholder="Verwendungszweck", required=True, value=purpose))
@@ -1339,8 +1342,11 @@ class TransferModal(ErrorHandledModal):
         view = ConfirmView(self.plugin)
         msg = await interaction.followup.send(
             warnings, embed=transaction.create_embed(),
-            ephemeral=True, view=view)
+            ephemeral=True, view=view)  # type: discord.WebhookMessage | None
         view.message = msg
+        logger.info("Received transaction modal from %s:%s in %s, message %s: %s",
+                    interaction.user.id, interaction.user.name, interaction.channel_id,
+                    msg.id if msg is not None else None, transaction)
 
 
 class EditModal(TransferModal):

@@ -329,7 +329,7 @@ async def insert_overflow(self: "ProjectPlugin", player: str, quantities: [int],
     for r in request:
         log.append(f"  {r}")
     log.append("  Inserting into sheet...")
-    await s.append_rows(request, value_input_option=ValueInputOption.user_entered)
+    await s.append_rows(request, value_input_option=ValueInputOption.user_entered, table_range="A2")
     log.append("Overflow inserted!")
     logger.debug("Inserted overflow for %s!", player)
     return True

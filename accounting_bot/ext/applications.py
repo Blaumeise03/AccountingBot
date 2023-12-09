@@ -233,7 +233,7 @@ class ApplicationSession(object):
             embed.add_field(name="Status",
                             value=
                             ("*Befragung abgebrochen*" if time_outed else "Befragung läuft...") +
-                            "\nStartzeit war <t:{int(time.mktime(self.start_time.timetuple()))}:f>\nLetzte Antwort wurde "
+                            f"\nStartzeit war <t:{int(time.mktime(self.start_time.timetuple()))}:f>\nLetzte Antwort wurde "
                             f"<t:{int(time.mktime(self.last_action.timetuple()))}:R> abgegeben.")
         return embed
 

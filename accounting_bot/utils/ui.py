@@ -3,7 +3,7 @@ import functools
 from typing import Optional, Dict, Coroutine, Callable, Union, List, Self
 
 import discord
-from discord import InteractionResponse, Interaction, InputTextStyle, Button, ApplicationContext, Embed
+from discord import InteractionResponse, Interaction, InputTextStyle, Button, ApplicationContext, Embed, Webhook
 from discord.ui import InputText
 
 from accounting_bot.exceptions import InputException
@@ -129,16 +129,24 @@ class AwaitConfirmView(AutoDisableView):
         self._defer_response = defer_response
 
     async def send_view(self,
-                        response: InteractionResponse,
+                        response: Union[InteractionResponse, Webhook],
                         message: str, ephemeral=True,
                         embed: Embed | None = None,
                         embeds: List[Embed] | None = None) -> Self:
-        await response.send_message(
-            content=message,
-            view=self,
-            embed=embed,
-            embeds=embeds,
-            ephemeral=ephemeral)
+        if isinstance(response, InteractionResponse):
+            await response.send_message(
+                content=message,
+                view=self,
+                embed=embed,
+                embeds=embeds,
+                ephemeral=ephemeral)
+        else:
+            self.message = await response.send(
+                content=message,
+                view=self,
+                embed=embed if embed is not None else discord.utils.MISSING,
+                embeds=embeds if embeds is not None else discord.utils.MISSING,
+                ephemeral=ephemeral)
         time_out = await self.wait()
         if time_out:
             self.confirmed = False

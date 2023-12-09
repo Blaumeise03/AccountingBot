@@ -336,6 +336,27 @@ class AccountingBot(commands.Bot):
         logger.info("Bot is ready")
 
     async def get_or_fetch_channel(self, channel_id: int) -> Union[GuildChannel, Thread, PrivateChannel, None]:
+        """|coro|
+
+        Retrieves a :class:`.abc.GuildChannel`, :class:`.abc.PrivateChannel`, or :class:`.Thread` with the specified ID.
+        Tries to load the channel from the cache, if not found it fetches the channel from Discord.
+
+        Returns
+        -------
+        Union[:class:`.abc.GuildChannel`, :class:`.abc.PrivateChannel`, :class:`.Thread`]
+            The channel from the ID.
+
+        Raises
+        ------
+        :exc:`InvalidData`
+            An unknown channel type was received from Discord.
+        :exc:`HTTPException`
+            Retrieving the channel failed.
+        :exc:`NotFound`
+            Invalid Channel ID.
+        :exc:`Forbidden`
+            You do not have permission to fetch this channel.
+        """
         channel = self.get_channel(channel_id)
         if channel is None:
             try:
