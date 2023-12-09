@@ -3,18 +3,21 @@
 # Author: Blaumeise03
 # End
 import asyncio
+import datetime
 import difflib
 import logging
 from typing import Optional, List, Dict, Callable, Union, Tuple, Set, TypeVar, Awaitable
 
 import discord
-from discord import option, AutocompleteContext, ApplicationContext, User, Role, CheckFailure, DMChannel
+from discord import option, AutocompleteContext, ApplicationContext, User, Role, CheckFailure, DMChannel, \
+    InputTextStyle, Embed, Color
 from discord.ext import commands
 
 from accounting_bot import utils
 from accounting_bot.exceptions import UsernameNotFoundException, NoPermissionException
 from accounting_bot.main_bot import BotPlugin, AccountingBot, PluginWrapper, PluginState
 from accounting_bot.utils import admin_only, guild_only, cmd_check, CmdAnnotation
+from accounting_bot.utils.ui import ModalForm, ConfirmView, AwaitConfirmView
 
 logger = logging.getLogger("ext.members")
 _T = TypeVar("_T")
@@ -497,3 +500,57 @@ class MembersCommands(commands.Cog):
             msg += f"`{player.name}`: `{player.discord_id}` <@{player.discord_id}>\n"
 
         await ctx.followup.send(msg)
+
+    @commands.slash_command(name="assign_role", description="Assign roles to player by a list of ingame names")
+    @option("role", description="The role to assign", required=True)
+    @option(name="silent", description="Execute the command silently", type=bool, required=False, default=True)
+    @admin_only()
+    @guild_only()
+    async def assign_role(self, ctx: ApplicationContext, role: Role, silent: bool):
+        modal = (
+            await
+            ModalForm(title="Player list", ignore_timeout=True)
+            .add_field(label="Players", placeholder="Enter the list of players here", style=InputTextStyle.paragraph)
+            .open_form(ctx.response)
+        )
+        if modal.is_timeout():
+            return
+        res = map(lambda s: s.strip(), modal.retrieve_result().split("\n"))
+        interaction = modal.get_interaction()
+        await interaction.response.defer(ephemeral=True)
+        players = set()  # type: Set[int]
+        missing = []
+        for r in res:
+            discord_id = self.plugin.get_discord_id(player_name=r, only_id=True)
+            if discord_id is None:
+                missing.append(r)
+                continue
+            players.add(discord_id)
+        members = await ctx.guild.fetch_members().filter(lambda m: m.id in players).flatten()
+        member_ids = list(map(lambda m: m.id, members))
+        for i in players:
+            if i not in member_ids:
+                missing.append(self.plugin.get_user(discord_id=i).name)
+        msg = "\n".join(map(lambda m: f"<@{m.id}>: {m.name}", members))
+        msg_missing = ""
+        if len(missing) > 0:
+            msg_missing += f"\n\n**{len(missing)} Users not found:**\n"
+            msg_missing += "\n".join(missing)
+        embed = Embed(title=f"Assign role {role.name}", description=msg + msg_missing, timestamp=datetime.datetime.now(), color=Color.red())
+        confirm = await AwaitConfirmView(defer_response=True).send_view(
+            interaction.followup,
+            f"Do you want to assign the role {role.mention} to {len(members)} members?",
+            embed=embed
+        )
+        if not confirm.confirmed:
+            return
+        logger.warning("Assigning the role %s:%s to %s users in discord server %s:%s, executed by %s:%s",
+                       role.name, role.id, len(members), ctx.guild.name, ctx.guild.name, ctx.user.name, ctx.user.id)
+        coros = []
+        for member in members:
+            coros.append(member.add_roles(role, reason=f"Assigned by {ctx.user.name}:{ctx.user.id}"))
+        await asyncio.gather(*coros)
+        embed = Embed(title=f"Assigned role {role.name}", description=msg,
+                      timestamp=datetime.datetime.now(), color=Color.green())
+        embed.set_footer(text=f"Executed by {ctx.user.name}", icon_url=ctx.user.avatar.url)
+        await interaction.followup.send(f"Assigned the role {role.mention} to {len(members)} members", embed=embed, ephemeral=silent)
