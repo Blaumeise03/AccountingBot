@@ -11,7 +11,7 @@ import logging
 import time
 from datetime import datetime
 from difflib import SequenceMatcher
-from typing import Dict, List, Tuple, Callable, TYPE_CHECKING
+from typing import Dict, List, Tuple, Callable, TYPE_CHECKING, Optional
 
 import discord
 import pytz
@@ -26,7 +26,7 @@ from accounting_bot.exceptions import GoogleSheetException, BotOfflineException
 from accounting_bot.ext.members import MembersPlugin, member_only
 from accounting_bot.ext.sheet.projects import project_utils, _project_tools
 from accounting_bot.ext.sheet import sheet_main
-from accounting_bot.ext.sheet.projects.project_utils import format_list, Project
+from accounting_bot.ext.sheet.projects.project_utils import format_list, Project, Contract
 from accounting_bot.ext.sheet.sheet_main import SheetPlugin
 from accounting_bot.main_bot import BotPlugin, AccountingBot, PluginWrapper
 from accounting_bot.universe.data_utils import Item, DataUtilsPlugin
@@ -63,14 +63,14 @@ class ProjectPlugin(BotPlugin):
     async def load_projects(self):
         return await _project_tools.load_projects(self)
 
-    async def insert_investments(self, player: str, investments: Dict[str, List[int]]):
-        return await _project_tools.insert_investments(self, player, investments)
+    async def insert_investments(self, contract: Contract):
+        return await _project_tools.insert_investments(self, contract)
 
     async def split_overflow(self, project_resources: List[str], log=None):
         return await _project_tools.split_overflow(self, project_resources, log)
 
     async def apply_overflow_split(self,
-                                   investments: Dict[str, Dict[str, List[int]]],
+                                   investments: List[Contract],
                                    changes: List[Tuple[Cell, int]]):
         return await _project_tools.apply_overflow_split(self, investments, changes)
 
@@ -141,8 +141,11 @@ class ProjectCommands(commands.Cog):
         await ctx.response.defer(ephemeral=silent)
         await self.plugin.find_projects()
         log = await self.plugin.load_projects()
-        res = "Projectlist version: " + sheet_main.lastChanges.astimezone(pytz.timezone("Europe/Berlin")).strftime(
-            "%d.%m.%Y %H:%M") + "\n"
+        if sheet_main.lastChanges.year != 1970:
+            res = "Projectlist version: " + sheet_main.lastChanges.astimezone(pytz.timezone("Europe/Berlin")).strftime(
+                "%d.%m.%Y %H:%M") + "\n"
+        else:
+            res = "Unknown sheet time\n"
         for p in self.plugin.all_projects:
             res += p.to_string() + "\n\n"
 
@@ -205,28 +208,26 @@ class ProjectCommands(commands.Cog):
         log = []
         investments, changes = await self.plugin.split_overflow(self.plugin.project_resources, log)
         msg_list = []
-        for player, invests in investments.items():
-            for proj, invest in invests.items():
-                for index, amount in enumerate(invest):
-                    if amount == 0:
+        for contract in investments:
+            player = contract.player_name
+            for proj, invest in contract.split.items():
+                for item in invest:
+                    if item.amount == 0:
                         continue
-                    item = self.plugin.project_resources[index]
-                    msg_list.append(f"{player}: {amount} {item} -> {proj}")
-        await ctx.followup.send(f"Überlauf berechnet, soll {len(changes)} Änderung durchgeführt werden?",
+                    msg_list.append(f"{player}: {item.amount} {item.name} -> {proj.name}")
+        await ctx.followup.send(f"Überlauf berechnet, sollen {len(changes)} Änderung durchgeführt werden?",
                                 file=string_to_file(list_to_string(msg_list), "split.txt"),
                                 view=ConfirmOverflowView(self.plugin, investments, changes, log), ephemeral=False)
 
 
 # noinspection PyUnusedLocal
 class ConfirmView(AutoDisableView):
-    def __init__(self, plugin: ProjectPlugin, investments: Dict[str, List[int]], player: str, log=None, split=None):
+    def __init__(self, plugin: ProjectPlugin, contract: Contract, log=None):
         super().__init__()
         if log is None:
             log = []
         self.log = log
-        self.investments = investments
-        self.player = player
-        self.split = split
+        self.contract = contract
         self.plugin = plugin
 
     @discord.ui.button(label="Eintragen", style=discord.ButtonStyle.green)
@@ -236,8 +237,8 @@ class ConfirmView(AutoDisableView):
         await interaction.message.edit(view=None)
         self.log.append("Inserting into sheet...")
         try:
-            logger.info("Inserting investments for player %s: %s", self.player, self.investments)
-            log, results = await self.plugin.insert_investments(self.player, self.investments)
+            logger.info("Inserting investments for player %s: %s", self.contract.player_name, self.contract.split)
+            log, results = await self.plugin.insert_investments(self.contract)
             success = True
             self.log += log
         except GoogleSheetException as e:
@@ -248,13 +249,15 @@ class ConfirmView(AutoDisableView):
             for s in self.log:
                 logger.error("[Log] %s", s)
             success = False
-        msg_list = format_list(self.split, results)
+        msg_list = self.contract.build_split_list(results=results)
+        if success:
+            success = self.contract.validate_investments(results=results)
         msg_files = [string_to_file(list_to_string(self.log), "log.txt")]
         base_message = ("An **ERROR** occurred during execution of the command" if not success else
                         "Investition wurde eingetragen!")
 
         msg_files.append(utils.string_to_file(msg_list, "split.txt"))
-        view = InformPlayerView(self.plugin, self.player, self.split, results, base_message)
+        view = InformPlayerView(self.plugin, self.contract, results, base_message)
         await view.load_user()
         view.message = await interaction.followup.send(
             base_message,
@@ -265,7 +268,7 @@ class ConfirmView(AutoDisableView):
 
 
 class ConfirmOverflowView(AutoDisableView):
-    def __init__(self, plugin: ProjectPlugin, investments: Dict[str, Dict[str, List[int]]], changes: [(Cell, int)],
+    def __init__(self, plugin: ProjectPlugin, investments: List[Contract], changes: List[Tuple[Cell, int]],
                  log=None):
         super().__init__()
         if log is None:
@@ -287,38 +290,37 @@ class ConfirmOverflowView(AutoDisableView):
 
 # noinspection PyUnusedLocal
 class InformPlayerView(AutoDisableView):
-    def __init__(self, plugin: ProjectPlugin, user: str, split: {str: [(str, int)]}, results: {str, bool},
+    def __init__(self, plugin: ProjectPlugin, contract: Contract, results: Dict[Project, Optional[List[Item]]],
                  base_message):
         super().__init__()
         self.base_message = base_message
         self.results = results
-        self.split = split
         self.plugin = plugin
-        self.user = user
-        self.discord_id, _, _ = self.plugin.member_p.get_discord_id(user)
+        self.contract = contract
+        self.contract.discord_id, _, _ = self.plugin.member_p.get_discord_id(contract.player_name)
 
     async def load_user(self):
-        if self.discord_id is None:
-            main_char, _, _ = self.plugin.member_p.find_main_name(name=self.user)
+        if self.contract.discord_id is None:
+            main_char, _, _ = self.plugin.member_p.find_main_name(self.contract.player_name)
             if main_char is None:
-                main_char = self.user
+                main_char = self.contract.player_name
             discord_id = self.plugin.member_p.get_discord_id(main_char, only_id=True)
             if discord_id is not None:
-                self.discord_id = discord_id
+                self.contract.discord_id = discord_id
 
     async def update_message(self):
-        await self.message.edit(self.base_message + f"\n\nSoll der Nutzer <@{self.discord_id}> benachrichtigt werden?")
+        await self.message.edit(self.base_message + f"\n\nSoll der Nutzer <@{self.contract.discord_id}> benachrichtigt werden?")
 
     @discord.ui.button(label="Senden", style=discord.ButtonStyle.green)
     @button_admin_check
     async def btn_send_callback(self, button, interaction: Interaction):
-        if self.discord_id is None:
+        if self.contract.discord_id is None:
             await interaction.response.send_message("Kein Nutzer gefunden...", ephemeral=True)
             return
-        user = await self.plugin.bot.get_or_fetch_user(self.discord_id)
-        admin_name = interaction.user.nick if interaction.user.nick is not None else interaction.user.name
-        message = f"Dein Investitionsvertrag wurde von {admin_name} angenommen und für {self.user} eingetragen:\n"
-        msg_list = f"```\n{format_list(self.split, self.results)}\n```"
+        user = await self.plugin.bot.get_or_fetch_user(self.contract.discord_id)
+        admin_name = interaction.user.name
+        message = f"Dein Investitionsvertrag wurde von {admin_name} angenommen und für {self.contract.player_name} eingetragen:\n"
+        msg_list = f"```\n{self.contract.build_split_list(results=self.results)}\n```"
         msg_files = []
         if len(message) + len(msg_list) < 1500:
             message += msg_list
@@ -326,7 +328,7 @@ class InformPlayerView(AutoDisableView):
             msg_files = [utils.string_to_file(msg_list, "split.txt")]
         await user.send(message, files=msg_files)
         await interaction.response.send_message(
-            f"Nutzer {self.user}: {self.discord_id} wurde informiert.", ephemeral=True)
+            f"Nutzer {self.contract.player_name}: {self.contract.discord_id} wurde informiert.", ephemeral=True)
         # utils.save_discord_id(self.user, self.discord_id)
         await interaction.message.edit(view=None)
 
@@ -407,8 +409,9 @@ class ListModal(ErrorHandledModal):
         if player is None:
             await interaction.followup.send(f"Fehler: Spieler \"{self.children[0].value}\" nicht gefunden!")
             return
+        contract = Contract(discord_id=interaction.user.id, player_name=player)
         log.append("Parsing list...")
-        items = Item.parse_ingame_list(self.children[1].value)
+        contract.parse_list(self.children[1].value)
         if not self.skip_loading:
             await interaction.followup.send(
                 "Eingabe verarbeitet, lade Projekte. Bitte warten, dies dauert nun einige Sekunden", ephemeral=True)
@@ -417,26 +420,26 @@ class ListModal(ErrorHandledModal):
         log.append("Splitting contract...")
         async with self.plugin.projects_lock:
             logger.debug("Splitting contract for %s ", player)
-            split = Project.split_contract(items,
-                                           project_list=self.plugin.all_projects,
-                                           project_resources=self.plugin.project_resources,
-                                           priority_projects=self.priority_projects)
+            Project.split_contract(contract,
+                                   project_list=self.plugin.all_projects,
+                                   project_resources=self.plugin.project_resources,
+                                   priority_projects=self.priority_projects)
         log.append("Calculating investments...")
-        investments = Project.calc_investments(split, self.plugin.project_resources)
+        # investments = Project.calc_investments(split, self.plugin.project_resources)
         message = ""
         if not is_perfect:
             message = f"Meintest du \"{player}\"? (Deine Eingabe war \"{self.children[0].value}\").\n"
-        msg_list = project_utils.format_list(split, [])
+        msg_list = contract.build_split_list()
         if len(self.priority_projects) == 0:
             p_priority = None
         else:
             p_priority = " > ".join(self.priority_projects)
-        message += f"Eingelesene items: \n```\n{Item.to_string(items)}\n```\n" \
+        message += f"Eingelesene items: \n```\n{Item.to_string(contract.contents)}\n```\n" \
                    f"Projektpriorität: `{p_priority}`\n" \
                    f"Willst du diese Liste als Investition für `{player}` eintragen?\n" \
                    f"Sheet: `{self.plugin.sheet.sheet_name}`"
         msg_file = [utils.string_to_file(msg_list, "split.txt")]
-        items_hash = hash_contract(items)
+        items_hash = hash_contract(contract.contents)
         embed = None
         if items_hash in self.plugin.contract_cache:
             old_time = self.plugin.contract_cache[items_hash]["time"]
@@ -451,7 +454,7 @@ class ListModal(ErrorHandledModal):
         }
         await interaction.followup.send(
             message,
-            view=ConfirmView(self.plugin, investments, player, log, split),
+            view=ConfirmView(self.plugin, contract, log),
             files=msg_file,
             embed=embed,
             ephemeral=False)

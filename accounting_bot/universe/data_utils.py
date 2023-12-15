@@ -96,6 +96,9 @@ class Item(object):
         self.name = name
         self.amount = amount
 
+    def __repr__(self):
+        return f"Item({self.name}={self.amount})"
+
     @staticmethod
     def sort_list(items: List["Item"], order: Union[List[str], Dict[str, int]]) -> None:
         if type(order) is list:
@@ -124,7 +127,7 @@ class Item(object):
                 continue
             line = re.sub("\t", "    ", line.strip())  # Replace Tabs with spaces
             line = re.sub("^\\d+ *", "", line.strip())  # Delete first column (numeric Index)
-            if len(re.findall(r"\d+", line.strip())) > 1:
+            if len(re.findall(r" \d+", line.strip())) > 1:
                 line = re.sub(" *[0-9.]+$", "", line.strip())  # Delete last column (Valuation, decimal)
             item = re.sub(" +\\d+$", "", line)
             quantity = line.replace(item, "").strip()

@@ -7,7 +7,7 @@
 # End
 import logging
 
-from discord import ApplicationContext, ApplicationCommandError, option
+from discord import ApplicationContext, ApplicationCommandError, option, TextChannel
 from discord.ext import commands
 
 from accounting_bot.main_bot import BotPlugin, AccountingBot, PluginWrapper
@@ -38,8 +38,8 @@ class TestCommands(commands.Cog):
     def __init__(self, bot: AccountingBot):
         self.bot = bot
 
-    @commands.slash_command(name="test")
-    async def test(self, ctx: ApplicationContext):
+    @commands.slash_command(name="error_test")
+    async def error_test(self, ctx: ApplicationContext):
         # This error will get handled both by the bot's main error handling and by the error handling
         # inside this cog (cog_command_error).
         raise Exception("Errror")
@@ -48,6 +48,28 @@ class TestCommands(commands.Cog):
     @option("echo", description="The text to repeat", required=False, default=None)
     async def test2(self, ctx: ApplicationContext, echo: str):
         await ctx.respond("Echo: " + echo, ephemeral=True)
+
+    @commands.slash_command(name="channels")
+    @option("channel_name", description="The target channel", required=False, default=None)
+    async def channels(self, ctx: ApplicationContext, channel_name: str):
+        await ctx.response.defer(ephemeral=True)
+        if channel_name is None:
+            msg = ""
+            for c in ctx.guild.channels:
+                msg += f"{c.name}\n"
+        else:
+            channel = None  # type: TextChannel | None
+            for c in ctx.guild.channels:
+                if c.name == channel_name or str(c.id) == channel_name:
+                    channel = c
+                    break
+            if channel is None:
+                await ctx.followup.send(f"Unknown channel `{channel_name}`")
+                return
+            msg = ""
+            for t, p in channel.overwrites.items():
+                msg += f"\n{t.name}: READ: {p.read_messages}"
+        await ctx.followup.send(msg)
 
     @commands.Cog.listener()
     async def on_ready(self):

@@ -54,6 +54,10 @@ class GoogleSheetException(LoggedException):
         return list_to_string(self.log)
 
 
+class ProjectException(Exception):
+    pass
+
+
 class ConfigException(Exception):
     pass
 

@@ -1,8 +1,7 @@
 import asyncio
 import logging
 import re
-from operator import add
-from typing import List, TYPE_CHECKING, Tuple, Dict
+from typing import List, TYPE_CHECKING, Tuple, Dict, Optional, Generator
 
 import gspread_asyncio
 from gspread import GSpreadException, Cell
@@ -11,7 +10,7 @@ from gspread.utils import ValueRenderOption, ValueInputOption
 from accounting_bot.config import Config
 from accounting_bot.exceptions import BotOfflineException, GoogleSheetException
 from accounting_bot.ext.sheet.projects.project_utils import process_first_column, verify_batch_data, find_player_row, \
-    calculate_changes, Project
+    calculate_changes, Project, Contract
 from accounting_bot.ext.sheet.sheet_utils import find_cell
 from accounting_bot.universe.data_utils import Item
 
@@ -127,8 +126,8 @@ async def load_project(self: "ProjectPlugin", project_name: str, log: [str], she
 
     # Batch requesting all data
     batch_data = await s.batch_get(
-        ["H2:2",  # Item names row
-         f"H{pending_cell.row}:{pending_cell.row}",  # Item quantities row (pending resources)
+        ["I2:2",  # Item names row
+         f"I{pending_cell.row}:{pending_cell.row}",  # Item quantities row (pending resources)
          "A1",  # Project settings (exclude or not)
          f"A{invest_cell_row}:A{payout_cell_row - 1}"  # Investment area
          ],
@@ -154,18 +153,14 @@ async def load_project(self: "ProjectPlugin", project_name: str, log: [str], she
     # Verifying resource names (top row of the sheet)
     i = 0
     for name in items_names:  # type: str
-        if i >= len(self.project_resources):
+        if name not in self.project_resources:
             log.append(
-                f"  Error: More Project resources ({len(items_names)}) found than expected "
-                f"({len(self.project_resources)})")
-            raise GoogleSheetException(log, f"More Project resources ({len(items_names)}) found than expected "
-                                            f"({len(self.project_resources)})")
-        if name.casefold() != self.project_resources[i].casefold():
-            log.append(
-                f"  Error: Unexpected item at position {i}: Found \"{name}\", expected {self.project_resources[i]}")
-            raise GoogleSheetException(log, f"Unexpected item at position {i} in {project_name}: Found \"{name}\", "
-                                            f"expected \"{self.project_resources[i]}\"")
+                f"  Error: Unexpected item at position {i}: Found \"{name}\". "
+                f"Illegal item for projects, please rename it or add it to the config")
+            raise GoogleSheetException(log, f"Unexpected item at position {i} for project {project}: Found '{name}'. "
+                                            f"Illegal item for projects, please rename it or add it to the config")
         i += 1
+        project.resource_order.append(name)
 
     # Processing investments area
     investments_raw = batch_data[3]
@@ -192,16 +187,12 @@ async def load_project(self: "ProjectPlugin", project_name: str, log: [str], she
     log.append(f"\"{project_name}\" processed!")
 
 
-async def insert_investments(self: "ProjectPlugin",
-                             player: str,
-                             investments: Dict[str, List[int]]) -> Tuple[List[str], Dict[str, bool]]:
+async def insert_investments(self: "ProjectPlugin", contract: Contract) -> Tuple[List[str], Dict[Project, List[Item]]]:
     """
     Inserts investments for a player into the Google Sheet.
 
     :param self:
-    :param player: The player name.
-    :param investments: The investments as a dictionary, with the keys being the project names and the values being an
-    array of ints that represent the quantities.
+    :param contract: The contract to split.
 
     :return: The log and a dictionary containing which projects succeeded and which failed (no entry = not attempted)
 
@@ -211,21 +202,21 @@ async def insert_investments(self: "ProjectPlugin",
     success = {}
     if not self.bot.is_online():
         raise BotOfflineException()
-    for project in investments:
-        log.append(f"Processing investment into {project} for player {player}")
+    for project in contract.split:
+        log.append(f"Processing investment into {project} for player {contract.player_name}")
         try:
-            success[project] = await insert_investment(self, player, project, investments[project], log)
+            success[project] = await insert_investment(self, contract.player_name, project.name, contract.split[project], log)
         except Exception as e:
             log.append("Error: " + str(e))
-            success[project] = False
-            logger.exception("Error while inserting investments for player %s", player, exc_info=e)
+            success[project] = None
+            logger.exception("Error while inserting investments for player %s", contract.player_name, exc_info=e)
             raise GoogleSheetException(log,
-                                       f"Error while trying to insert investments for {player}",
+                                       f"Error while trying to insert investments for {contract.player_name}",
                                        progress=success) from e
     return log, success
 
 
-async def insert_investment(self: "ProjectPlugin", player: str, project_name: str, quantities: [int], log=None) -> bool:
+async def insert_investment(self: "ProjectPlugin", player: str, project_name: str, quantities: List[Item], log=None) -> Optional[List[Item]]:
     """
     Inserts an investment (for a specific project) into according Worksheet.
 
@@ -239,11 +230,11 @@ async def insert_investment(self: "ProjectPlugin", player: str, project_name: st
     if log is None:
         log = []
     if project_name.casefold() == "overflow".casefold():
-        return await insert_overflow(self, player, quantities, log)
+        return quantities if await insert_overflow(self, player, quantities, log) else None
     if project_name.casefold() == "unknown".casefold():
         log.append("Unknown items in contract detected")
         logger.warning("Unknown items in contract for player %s detected", player)
-        return False
+        return None
     async with self.projects_lock:
         logger.debug("Inserting investment for %s into %s", player, project_name)
         sheet = await self.sheet.get_sheet()
@@ -289,8 +280,17 @@ async def insert_investment(self: "ProjectPlugin", player: str, project_name: st
         player_row_formulas = player_row_formulas[0][0]
 
         log.append("  Calculating changes...")
+        raw_quantities = [0]*len(project.resource_order)
+        handled_items = []
+        for i, res_name in enumerate(project.resource_order):
+            for item in quantities:
+                if item.name != project.resource_order[i]:
+                    continue
+                raw_quantities[i] += item.amount
+                handled_items.append(item)
+        log.append(f"  Calculated raw quantities: {raw_quantities}")
         changes = calculate_changes(
-            self.project_resources, quantities,
+            project.resource_order, raw_quantities,
             player_row, player_row_formulas,
             project_name, player,
             cells, log)
@@ -301,10 +301,10 @@ async def insert_investment(self: "ProjectPlugin", player: str, project_name: st
         await worksheet.batch_update(changes, value_input_option=ValueInputOption.user_entered)
     logger.debug("Inserted investment for %s into %s!", player, project_name)
     log.append(f"Project {project_name} processed!")
-    return True
+    return handled_items
 
 
-async def insert_overflow(self: "ProjectPlugin", player: str, quantities: [int], log=None) -> bool:
+async def insert_overflow(self: "ProjectPlugin", player: str, items: List[Item], log=None) -> bool:
     """
     Inserts the overflow for a player into the Overflow sheet.
 
@@ -319,12 +319,12 @@ async def insert_overflow(self: "ProjectPlugin", player: str, quantities: [int],
     logger.debug("Inserting overflow for %s", player)
     sheet = await self.sheet.get_sheet()
     s = await sheet.worksheet(self.config["sheet_overflow_name"])
-    log.append(f"Generating overflow for {player}: {quantities}")
+    log.append(f"Generating overflow for {player}: {len(items)} items")
     request = []
-    for item, quantity in zip(self.project_resources, quantities):
-        if quantity > 0:
-            log.append(f"  Item \"{item}\": {quantity}")
-            request.append([item, quantity, player])
+    for item in items:
+        if item.amount > 0:
+            log.append(f"  Item \"{item.name}\": {item.amount}")
+            request.append([item.name, item.amount, player])
     log.append("Overflow table generated:")
     for r in request:
         log.append(f"  {r}")
@@ -335,84 +335,137 @@ async def insert_overflow(self: "ProjectPlugin", player: str, quantities: [int],
     return True
 
 
-def is_required(self: "ProjectPlugin", ressource: str):
-    for project in self.all_projects:
+def is_required(plugin: "ProjectPlugin", ressource: str):
+    for project in plugin.all_projects:
         if project.get_pending_resource(ressource) > 0:
             return True
     return False
 
 
-async def split_overflow(self: "ProjectPlugin", project_resources: List[str], log=None) -> Tuple[Dict[str, Dict[str, List[int]]], List[Tuple[Cell, int]]]:
+def iterate_overflow(plugin: "ProjectPlugin", overflow: List[Cell]) -> Generator[Tuple[Cell, Cell, Cell], None, None]:
+    """
+    A generator that iterates all entries of the project overflow. Will yield a tuple consisting of:
+        - the item cell
+        - the player cell
+        - the amount cell
+    :param plugin:
+    :param overflow:
+    """
+    i = 0
+    for res_cell in overflow:
+        i += 1
+        if res_cell.col != 1:
+            continue
+        amount_cell = find_cell(overflow, res_cell.row, 2, i)
+        player_cell = find_cell(overflow, res_cell.row, 3, i)
+        if not is_required(plugin, res_cell.value):
+            continue
+        if amount_cell is None or player_cell is None:
+            continue
+        yield res_cell, player_cell, amount_cell
+
+
+async def split_overflow(plugin: "ProjectPlugin", project_resources: List[str], log=None) -> Tuple[List[Contract], List[Tuple[Cell, int]]]:
     if log is None:
         log = []
 
     logger.debug("Splitting overflow")
     log.append("Loading overflow...")
-    sheet = await self.sheet.get_sheet()
-    s = await sheet.worksheet(self.config["sheet_overflow_name"])
+    sheet = await plugin.sheet.get_sheet()
+    s = await sheet.worksheet(plugin.config["sheet_overflow_name"])
     overflow = await s.range("A2:C")
     i = -1
-    total_res = [0] * len(self.project_resources)
+    total_items = {}  # type: Dict[Project, List[Item]]
+    overflow_resources = []  # type: List[Contract]
 
-    investments = {}  # type: {str: [Item]}
-    changes = []
-    async with self.projects_lock:
-        for res_cell in overflow:
-            i += 1
-            if res_cell.col != 1:
-                continue
-            amount_cell = find_cell(overflow, res_cell.row, 2, i)
-            player_cell = find_cell(overflow, res_cell.row, 3, i)
-            if not is_required(self, res_cell.value):
-                continue
-            if not amount_cell or not player_cell:
-                continue
+    def _increment_resource(_player: str, _res: str, _amount: int):
+        _contract = next(filter(lambda _c: _c.player_name == _player, overflow_resources), None)
+        if _contract is None:
+            _contract = Contract(discord_id=-1, player_name=_player)
+            overflow_resources.append(_contract)
+        _contract_item = next(filter(lambda _i: _i.name == _res, _contract.contents), None)
+        if _contract_item is None:
+            _contract_item = Item(_res, 0)
+            _contract.contents.append(_contract)
+        _contract_item.amount += _amount
+
+    async with plugin.projects_lock:
+        # Sum up resources for all players
+        for item_cell, player_cell, amount_cell in iterate_overflow(plugin, overflow):
             amount = amount_cell.numeric_value
-            item = res_cell.value
+            item = item_cell.value
             player = player_cell.value
-            if item not in self.project_resources:
+            if item not in plugin.project_resources:
                 continue
-            index = self.project_resources.index(item)
-
-            if type(amount) != int:
-                logger.warning("Warning, value in overflow row %s is not an integer", res_cell.row)
+            if type(amount) is not int:
+                logger.warning("Warning, value in overflow row %s is not an integer", item_cell.row)
                 continue
-            if player not in investments:
-                investments[player] = {}
-            split = Project.split_contract(
-                [Item(item, amount)],
-                self.all_projects,
-                self.project_resources,
-                extra_res=total_res)
-            invest = Project.calc_investments(split, project_resources)
-            new_value = 0
-            if "overflow" in invest:
-                new_value = invest["overflow"][index]
+            _increment_resource(player, item, amount)
 
-            old_invest = investments[player]
-            for proj, inv in invest.items():
-                if proj == "overflow":
+        # Remove overflow from contracts
+        for contract in overflow_resources:
+            for project in contract.split.keys():
+                if project.name == "overflow":
+                    for item in contract.split[project]:
+                        _increment_resource(contract.player_name, item.name, -item.amount)
+                    del contract.split[project]
+                    break
+
+        # Split contracts
+        remaining = {}
+        for contract in overflow_resources:
+            Project.split_contract(contract, plugin.all_projects, project_resources, extra_res=total_items)
+            remaining[contract.player_name] = {}
+            # Increment total_amount so the invested resources will be deducted from the required resources
+            for project, items in contract.split.items():
+                if project.name == "overflow":
                     continue
-                total_res = list(map(add, total_res, inv))
-                changes.append((amount_cell, new_value))
-                if proj in old_invest.keys():
-                    old_invest[proj] = list(map(add, old_invest[proj], inv))
-                else:
-                    old_invest[proj] = inv
+                if project not in total_items:
+                    total_items[project] = []
+                for item in items:
+                    total_item = next(filter(lambda _i: _i.name == item.name, total_items[project]), None)
+                    if total_item is None:
+                        total_item = Item(item.name, 0)
+                        total_items[project].append(total_item)
+                    total_item.amount += item.amount
+                    if item.name not in remaining[contract.player_name]:
+                        remaining[contract.player_name][item.name] = 0
+                    remaining[contract.player_name][item.name] += item.amount
+
+        changes = []  # type: List[Tuple[Cell, int]]
+        # Calculate cell changes
+        for item_cell, player_cell, amount_cell in iterate_overflow(plugin, overflow):
+            amount = amount_cell.numeric_value
+            item = item_cell.value
+            player = player_cell.value
+            if player not in remaining:
+                continue
+            if item not in remaining[player]:
+                continue
+            if remaining[player][item] <= 0:
+                continue
+            if amount > remaining[player][item]:
+                amount -= remaining[player][item]
+                remaining[player][item] = 0
+            else:
+                remaining[player][item] -= amount
+                amount = 0
+            changes.append((amount_cell, amount))
+
     log.append("Overflow recalculated")
-    return investments, changes
+    return overflow_resources, changes
 
 
-async def apply_overflow_split(self: "ProjectPlugin",
-                               investments: Dict[str, Dict[str, List[int]]],
+async def apply_overflow_split(plugin: "ProjectPlugin",
+                               investments: List[Contract],
                                changes: List[Tuple[Cell, int]]):
     logger.info("Inserting overflow into projects")
-    sheet = await self.sheet.get_sheet()
-    s = await sheet.worksheet(self.config["sheet_overflow_name"])
+    sheet = await plugin.sheet.get_sheet()
+    s = await sheet.worksheet(plugin.config["sheet_overflow_name"])
     log = [f"Inserting investments from {len(investments)} players..."]
     logger.info("Inserting overflow investments for %s player", len(investments))
-    for player, invest in investments.items():
-        l, _ = await insert_investments(self, player, invest)
+    for contract in investments:
+        l, _ = await insert_investments(plugin, contract)
         log += l
     log.append("Investments inserted")
     batch_change = []

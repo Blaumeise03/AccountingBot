@@ -1,11 +1,11 @@
 import logging
 import re
 from enum import Enum
-from typing import List, Dict, Tuple
+from typing import List, Dict, Tuple, Optional
 
 from gspread import Cell
 
-from accounting_bot.exceptions import GoogleSheetException
+from accounting_bot.exceptions import GoogleSheetException, ProjectException
 from accounting_bot.universe.data_utils import Item
 
 logger = logging.getLogger("ext.sheet.project.utils")
@@ -58,22 +58,22 @@ async def find_player_row(cells, player, project, worksheet, log):
     return player_row
 
 
-def calculate_changes(project_resources: [str], quantities: [int],
-                      player_row: int, player_row_formulas: [str],
+def calculate_changes(project_resources: List[str], quantities: List[int],
+                      player_row: int, player_row_formulas: List[str],
                       project_name: str, player: str,
-                      cells: [Cell], log: [str]):
+                      cells: List[Cell], log: List[str]):
     changes = []
     for i in range(len(project_resources)):
-        cell = next(filter(lambda c: c.row == player_row and c.col == (i + 8), cells), None)
+        cell = next(filter(lambda c: c.row == player_row and c.col == (i + 9), cells), None)
         if cell is None:
-            cell = Cell(player_row, i + 8, "")
-        if 0 < (cell.col - 7) < len(project_resources):
+            cell = Cell(player_row, i + 9, "")
+        if 0 < (cell.col - 8) < len(project_resources):
             resource_name = project_resources[cell.col - 8]
             if len(player_row_formulas) < cell.col:
                 quantity_formula = ""
             else:
                 quantity_formula = player_row_formulas[cell.col - 1]  # type: str
-            new_quantity = quantities[cell.col - 8]
+            new_quantity = quantities[cell.col - 9]
             if new_quantity <= 0:
                 continue
             log.append(f"    Invested quantity for {resource_name} is {new_quantity}")
@@ -146,12 +146,121 @@ def format_list(split: {str: [(str, int)]}, success: {str, bool}):
     return res
 
 
+class Contract:
+    def __init__(self, discord_id: int, player_name: str):
+        self.discord_id = discord_id
+        self.player_name = player_name
+        self.contents = []  # type: List[Item]
+        self.split = {}  # type: Dict[Project, List[Item]]
+
+    def __repr__(self):
+        return f"Contract({self.player_name}, {len(self.contents)} items)"
+
+    def parse_list(self, raw_list: str):
+        self.contents = Item.parse_ingame_list(raw_list)
+
+    def get_total_item_split(self, item: Item):
+        count = 0
+        for items in self.split.values():
+            for _item in filter(lambda i: i.name == item.name, items):  # type: Item
+                count += _item.amount
+        return count
+
+    def invest_resource(self, project: "Project", item: Item, amount: int):
+        if item not in self.contents:
+            raise ProjectException(f"Can't split item {item} for {project} if it is not contained in the contract")
+        if amount > item.amount - self.get_total_item_split(item):
+            raise ProjectException(f"Can't split item {item} again, the amount {amount} is exceeding the total amount")
+        if project not in self.split:
+            self.split[project] = []
+        for i in self.split[project]:
+            if i.name == item.name:
+                i.amount += amount
+                return
+        self.split[project].append(Item(item.name, amount))
+
+    def get_invested_resource(self, project: "Project", item: Item):
+        if project not in self.split:
+            return 0
+        amount = 0
+        for split in filter(lambda i: i.name == item.name, self.split[project]):  # type: Item
+            amount += split.amount
+        return amount
+
+    def validate_investments(self, results: Dict["Project", Optional[List[Item]]]) -> bool:
+        for item in self.contents:
+            left = item.amount
+            for project in self.split.keys():
+                quantity = self.get_invested_resource(project, item)
+                if quantity == 0:
+                    continue
+                left -= quantity
+                if results is None or project not in results:
+                    return False
+                if results[project] is None:
+                    return False
+                _item = next(filter(lambda _i: _i.name == item.name, results[project]), None)  # type: Item
+                if _item is None:
+                    return False
+                if _item.amount != quantity:
+                    return False
+            if left > 0:
+                return False
+        return True
+
+    def build_split_list(self, item_order: Optional[List[str]] = None, results: Optional[Dict["Project", Optional[List[Item]]]] = None):
+        if item_order is not None:
+            Item.sort_list(self.contents, item_order)
+        msg = ""
+        max_num = 0
+        max_project_size = 0
+        for project, split_items in self.split.items():
+            for item in split_items:
+                if item.amount > max_num:
+                    max_num = item.amount
+                if len(project.name) > max_project_size:
+                    max_project_size = len(project.name)
+        max_size = min(len(str(max_num)), 10)
+        for item in self.contents:
+            msg += item.name + "\n"
+            left = item.amount
+            for project in self.split.keys():
+                quantity = self.get_invested_resource(project, item)
+                if quantity == 0:
+                    continue
+                left -= quantity
+                spaces = max(max_size - len(str(quantity)), 0)
+                msg += f"    {quantity} {' ' * spaces}-> {project.name}"
+                spaces = max(max_project_size - len(str(project.name)), 0)
+                if results is not None and project in results:
+                    if results[project] is None:
+                        msg += f"{' ' * spaces} (FAILED)\n"
+                    else:
+                        _item = next(filter(lambda _i: _i.name == item.name, results[project]), None)  # type: Item
+                        if _item is None:
+                            msg += f"{' ' * spaces} (NOT INSERTED)\n"
+                        elif _item.amount == quantity:
+                            msg += f"{' ' * spaces} (✓)\n"
+                        else:
+                            msg += f"{' ' * spaces} (PARTIALLY INSERTED: {_item.amount})\n"
+                else:
+                    msg += f"{' ' * spaces} (NOT INSERTED)\n"
+
+            if left > 0:
+                msg += f"    {left}   (FAILED TO INSERT EVERYTHING)\n"
+        return msg
+
+
 class Project(object):
     def __init__(self, name: str):
         self.name = name  # type: str
         self.exclude = Project.ExcludeSettings.none  # type: Project.ExcludeSettings
         self.pending_resources = []  # type: List[Item]
         self.investments_range = None
+        self.resource_order = []  # type: List[str]
+
+    def __repr__(self):
+        return f"Project({self.name})"
 
     def get_pending_resource(self, resource: str) -> int:
         resource = resource.casefold()
@@ -172,42 +281,37 @@ class Project(object):
         return res
 
     @staticmethod
-    def split_contract(items,
+    def split_contract(contract: Contract,
                        project_list: List['Project'],
-                       project_resources: List[str],
+                       project_resources: List[str] = None,
                        priority_projects: List[str] = None,
-                       extra_res: List[int] = None) -> Dict[str, List[Tuple[str, int]]]:
+                       extra_res: Dict["Project", List[Item]] = None) -> None:
         projects_ordered = project_list[::-1]  # Reverse the list
-        item_names = project_resources
         if priority_projects is not None:
             for p_name in reversed(priority_projects):
                 for p in projects_ordered:  # type: Project
                     if p.name == p_name:
                         projects_ordered.remove(p)
                         projects_ordered.insert(0, p)
-        split = {}  # type: {str: [(str, int)]}
-        for item in items:  # type: Item
+        # split = {}  # type: {str: [(str, int)]}
+        contract.split.clear()
+        overflow_project = Project(name="overflow")
+        for item in contract.contents:
             left = item.amount
-            if item.name not in split:
-                split[item.name] = []
-            if item.name not in project_resources:
-                split[item.name].append(("unknown", left))
-                continue
             for project in projects_ordered:  # type: Project
                 if project.exclude != Project.ExcludeSettings.none:
                     continue
                 pending = project.get_pending_resource(item.name)
-                if item.name in item_names:
-                    index = item_names.index(item.name)
-                    if extra_res and len(extra_res) > index:
-                        pending -= extra_res[index]
+                if extra_res is not None and project in extra_res:
+                    _extra = next(filter(lambda r: r.name == item.name, extra_res[project]), None)
+                    if _extra is not None:
+                        pending -= _extra.amount
                 amount = min(pending, left)
                 if pending > 0 and amount > 0:
                     left -= amount
-                    split[item.name].append((project.name, amount))
+                    contract.invest_resource(project, item, amount)
             if left > 0:
-                split[item.name].append(("overflow", left))
-        return split
+                contract.invest_resource(overflow_project, item, left)
 
     @staticmethod
     def calc_investments(split: Dict[str, List[Tuple[str, int]]], project_resources: List[str]) -> Dict[str, List[int]]:
