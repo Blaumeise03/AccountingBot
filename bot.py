@@ -18,7 +18,7 @@ if not os.path.exists("logs/"):
 formatter = logging.Formatter(fmt="[%(asctime)s][%(levelname)s][%(name)s]: %(message)s")
 
 # File log handler
-file_handler = logging.FileHandler(log_filename)
+file_handler = logging.FileHandler(log_filename, encoding="utf-8")
 file_handler.setLevel(logging.INFO)
 file_handler.setFormatter(formatter)
 logger.addHandler(file_handler)

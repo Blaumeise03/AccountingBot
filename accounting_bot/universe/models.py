@@ -1,8 +1,9 @@
 import enum
+from datetime import datetime
 from typing import List, Optional
 
 from sqlalchemy import String, ForeignKey, Float, Enum, BigInteger, Integer, Table, Column, Boolean, \
-    ForeignKeyConstraint, func, TIMESTAMP, text
+    ForeignKeyConstraint, func, TIMESTAMP, text, DateTime
 from sqlalchemy.ext.hybrid import hybrid_property
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship, validates
 
@@ -308,3 +309,30 @@ class Bounty(Base):
     killmail: Mapped[Killmail] = relationship(lazy="joined", innerjoin=True)
     player: Mapped[str] = mapped_column(String(30), primary_key=True)
     bounty_type: Mapped[str] = mapped_column(String(1))
+
+
+class MobiKillmail(Base):
+    __tablename__ = "mobi_killmails"
+    id: Mapped[str] = mapped_column(String(40), primary_key=True)
+    report_id: Mapped[int] = mapped_column(Integer(), unique=True, index=True, nullable=True)
+    is_kill: Mapped[bool] = mapped_column(Boolean())
+    killer_corp: Mapped[str] = mapped_column(String(6))
+    killer_name: Mapped[str] = mapped_column(String(64))
+    victim_corp: Mapped[str] = mapped_column(String(6))
+    victim_name: Mapped[str] = mapped_column(String(64))
+    system_id: Mapped[int] = mapped_column(ForeignKey("solarsystem.id", name="fk_mobi_killmail_system"), nullable=True)
+    isk: Mapped[int] = mapped_column(BigInteger())
+    image_url: Mapped[str] = mapped_column(String(100))
+    date_killed: Mapped[datetime] = mapped_column(DateTime(timezone=False))
+    date_updated: Mapped[datetime] = mapped_column(DateTime(timezone=False))
+    date_created: Mapped[datetime] = mapped_column(DateTime(timezone=False))
+    external_provider: Mapped[str] = mapped_column(String(32), nullable=True)
+    victim_total_damage_received: Mapped[int] = mapped_column(BigInteger(), nullable=True)
+    killer_ship_name: Mapped[str] = mapped_column(String(64), nullable=True)
+    killer_ship_id: Mapped[int] = mapped_column(ForeignKey("item.id", name="fk_mobi_killmail_ship"), nullable=True)
+    victim_ship_name: Mapped[str] = mapped_column(String(64), nullable=True)
+    victim_ship_id: Mapped[int] = mapped_column(ForeignKey("item.id", name="fk_mobi_killmail_victim_ship"), nullable=True)
+    vision_id: Mapped[str] = mapped_column(String(32), nullable=True)
+    user_id: Mapped[int] = mapped_column(BigInteger(), nullable=True)
+    guild_id: Mapped[int] = mapped_column(BigInteger(), nullable=True)
+    battle_type: Mapped[str] = mapped_column(String(3))

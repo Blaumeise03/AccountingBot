@@ -1,3 +1,4 @@
+import csv
 import json
 import logging
 import math
@@ -6,7 +7,8 @@ from datetime import datetime
 from multiprocessing.pool import ThreadPool
 from typing import Dict, Tuple, Union, Any, TYPE_CHECKING
 
-from sqlalchemy import create_engine, update, between, select, delete, or_
+from dateutil import parser
+from sqlalchemy import create_engine, update, between, select, delete, or_, and_
 from sqlalchemy.orm import Session, joinedload, contains_eager
 
 from accounting_bot import utils
@@ -72,6 +74,7 @@ class UniverseDatabase:
         MarketPrice.__table__.create(bind=self.engine, checkfirst=True)
         Killmail.__table__.create(bind=self.engine, checkfirst=True)
         Bounty.__table__.create(bind=self.engine, checkfirst=True)
+        MobiKillmail.__table__.create(bind=self.engine, checkfirst=True)
         logger.info("Database setup completed")
 
     def save_market_data(self, items: Dict[str, Dict[str, Any]]) -> None:
@@ -664,6 +667,98 @@ class UniverseDatabase:
                         warnings.append(f"Killmail {kill.id} is inside of selection, but was not inserted this month "
                                         f"(will be inserted)")
         return warnings
+
+    def save_killmail_csv(self, raw_csv: str, replace_tag: Optional[str] = None):
+        csv_reader = csv.reader(raw_csv.split("\n"), delimiter=",")
+        header = next(csv_reader)
+        if len(header) == 0:
+            return
+        system_cache = {}  # type: Dict[str, System]
+        ship_cache = {}  # type: Dict[str, Item]
+        with Session(self.engine) as conn:
+            for row in csv_reader:
+                if len(row) < len(header):
+                    continue
+                kill_id = row[header.index("id")]
+                kill_obj = conn.query(MobiKillmail).filter(MobiKillmail.id == kill_id).first()
+                if kill_obj is None:
+                    kill_obj = MobiKillmail()
+                    kill_obj.id = kill_id
+                kill_obj.report_id = row[header.index("report_id")] or None
+                kill_obj.is_kill = row[header.index("report_type")].casefold() == "kill".casefold()
+                kill_obj.killer_corp = replace_tag or row[header.index("killer_corp")]
+                kill_obj.killer_name = row[header.index("killer_name")]
+                kill_obj.victim_corp = row[header.index("victim_corp")]
+                kill_obj.victim_name = row[header.index("victim_name")]
+                kill_obj.isk = row[header.index("isk")]
+                kill_obj.image_url = row[header.index("image_url")]
+                kill_obj.date_killed = parser.parse(row[header.index("date_killed")])
+                kill_obj.date_updated = parser.parse(row[header.index("date_updated")])
+                kill_obj.date_created = parser.parse(row[header.index("date_created")])
+                kill_obj.external_provider = row[header.index("external_provider")]
+                kill_obj.victim_total_damage_received = row[header.index("victim_total_damage_received")] or None
+                kill_obj.user_id = row[header.index("user_id")] or None
+                kill_obj.guild_id = row[header.index("guild_id")] or None
+                kill_obj.battle_type = row[header.index("battle_type")]
+
+                kill_obj.killer_ship_name = row[header.index("killer_ship_type")] or None
+                kill_obj.victim_ship_name = row[header.index("victim_ship_type")] or None
+                system_name = row[header.index("system")]
+                if system_name not in system_cache:
+                    system = conn.query(System).filter(System.name == system_name).first()
+                    if system is not None:
+                        # noinspection PyTypeChecker
+                        system_cache[system_name] = system
+                if system_name in system_cache:
+                    kill_obj.system_id = system_cache[system_name].id
+                if kill_obj.victim_ship_name not in ship_cache or kill_obj.killer_ship_name not in ship_cache:
+                    ships = conn.query(Item).filter(
+                        Item.name.in_([kill_obj.victim_ship_name, kill_obj.killer_ship_name])).all()
+                    for ship in ships:
+                        # noinspection PyTypeChecker
+                        ship_cache[ship.name] = ship
+                if kill_obj.victim_ship_name in ship_cache:
+                    kill_obj.victim_ship_id = ship_cache[kill_obj.victim_ship_name].id
+                if kill_obj.killer_ship_name in ship_cache:
+                    kill_obj.killer_ship_id = ship_cache[kill_obj.killer_ship_name].id
+                conn.add(kill_obj)
+            conn.commit()
+
+    def get_killmail_leaderboard(self, killer_corp: str, amount: int) -> List[Tuple[str, int]]:
+        start_of_month = datetime.utcnow().replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+        with (Session(self.engine) as conn):
+            # SELECT killer_name, SUM(isk)
+            # FROM mobi_killmails
+            # WHERE date_killed >= '2023-12-01'
+            # GROUP BY killer_name
+            # ORDER BY SUM(isk) DESC;
+            res = (
+                conn
+                .query(MobiKillmail.killer_name, func.sum(MobiKillmail.isk))
+                .filter(
+                    and_(MobiKillmail.date_killed >= start_of_month,
+                         MobiKillmail.killer_corp == killer_corp)
+                ).group_by(MobiKillmail.killer_name)
+                .order_by(func.sum(MobiKillmail.isk).desc())
+                .limit(amount))
+        result = []
+        for name, isk in res:  # type: str, int
+            result.append((name, isk))
+        return result
+
+    def get_top_killmails(self, killer_corp: str, amount: int) -> List[MobiKillmail]:
+        start_of_month = datetime.utcnow().replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+        with (Session(self.engine, expire_on_commit=False) as conn):
+            res = (
+                conn
+                .query(MobiKillmail)
+                .filter(
+                    and_(MobiKillmail.date_killed >= start_of_month,
+                         MobiKillmail.killer_corp == killer_corp)
+                ).group_by(MobiKillmail.killer_name)
+                .order_by(MobiKillmail.isk.desc())
+                .limit(amount))
+            return list(res)
 
 
 class DatabaseInitializer(UniverseDatabase):

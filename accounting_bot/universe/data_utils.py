@@ -7,7 +7,7 @@ import logging
 import math
 import re
 from datetime import datetime
-from typing import List, Tuple, Optional, Dict, Union, Any
+from typing import List, Tuple, Optional, Dict, Union, Any, Coroutine, Awaitable
 
 import networkx as nx
 import numpy as np
@@ -767,6 +767,21 @@ def save_killmail(embed: Embed, member_plugin: MembersPlugin):
         return 1
     data_plugin.db.save_bounty(int(kill_data["id"]), player, "M")
     return 2
+
+
+@wrap_async
+def save_mobi_csv(csv: str, replace_tag: Optional[str] = None):
+    data_plugin.db.save_killmail_csv(raw_csv=csv, replace_tag=replace_tag)
+
+
+@wrap_async
+def get_killboard_data(corp_tag: str):
+    return data_plugin.db.get_killmail_leaderboard(killer_corp=corp_tag, amount=10)
+
+
+@wrap_async
+def get_top_kills(corp_tag: str):
+    return data_plugin.db.get_top_killmails(killer_corp=corp_tag, amount=10)
 
 
 def get_kill_id(embed: Embed):
