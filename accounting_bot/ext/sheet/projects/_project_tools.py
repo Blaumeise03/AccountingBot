@@ -8,7 +8,7 @@ from gspread import GSpreadException, Cell
 from gspread.utils import ValueRenderOption, ValueInputOption
 
 from accounting_bot.config import Config
-from accounting_bot.exceptions import BotOfflineException, GoogleSheetException
+from accounting_bot.exceptions import BotOfflineException, GoogleSheetException, ProjectException
 from accounting_bot.ext.sheet.projects.project_utils import process_first_column, verify_batch_data, find_player_row, \
     calculate_changes, Project, Contract
 from accounting_bot.ext.sheet.sheet_utils import find_cell
@@ -365,7 +365,9 @@ def iterate_overflow(plugin: "ProjectPlugin", overflow: List[Cell]) -> Generator
         yield res_cell, player_cell, amount_cell
 
 
-async def split_overflow(plugin: "ProjectPlugin", project_resources: List[str], log=None) -> Tuple[List[Contract], List[Tuple[Cell, int]]]:
+async def split_overflow(
+        plugin: "ProjectPlugin", project_resources: List[str], log=None
+) -> Tuple[List[Contract], List[Tuple[Cell, int]]]:
     if log is None:
         log = []
 
@@ -376,18 +378,14 @@ async def split_overflow(plugin: "ProjectPlugin", project_resources: List[str], 
     overflow = await s.range("A2:C")
     i = -1
     total_items = {}  # type: Dict[Project, List[Item]]
-    overflow_resources = []  # type: List[Contract]
+    overflow_contracts = []  # type: List[Contract]
+    overflow_items = []  # type: List[Item]
+    overflow_items_owner = {}  # type: Dict[Item, str]
 
     def _increment_resource(_player: str, _res: str, _amount: int):
-        _contract = next(filter(lambda _c: _c.player_name == _player, overflow_resources), None)
-        if _contract is None:
-            _contract = Contract(discord_id=-1, player_name=_player)
-            overflow_resources.append(_contract)
-        _contract_item = next(filter(lambda _i: _i.name == _res, _contract.contents), None)
-        if _contract_item is None:
-            _contract_item = Item(_res, 0)
-            _contract.contents.append(_contract)
-        _contract_item.amount += _amount
+        _contract_item = Item(_res, _amount)
+        overflow_items_owner[_contract_item] = _player
+        overflow_items.append(_contract_item)
 
     async with plugin.projects_lock:
         # Sum up resources for all players
@@ -402,38 +400,45 @@ async def split_overflow(plugin: "ProjectPlugin", project_resources: List[str], 
                 continue
             _increment_resource(player, item, amount)
 
-        # Remove overflow from contracts
-        for contract in overflow_resources:
-            for project in contract.split.keys():
-                if project.name == "overflow":
-                    for item in contract.split[project]:
-                        _increment_resource(contract.player_name, item.name, -item.amount)
-                    del contract.split[project]
-                    break
-
         # Split contracts
         remaining = {}
-        for contract in overflow_resources:
-            Project.split_contract(contract, plugin.all_projects, project_resources, extra_res=total_items)
-            remaining[contract.player_name] = {}
-            # Increment total_amount so the invested resources will be deducted from the required resources
-            for project, items in contract.split.items():
-                if project.name == "overflow":
+        inserted_items = {}  # type: Dict[str, int]
+        for item in overflow_items:
+            for project in reversed(plugin.all_projects):
+                if project.exclude != Project.ExcludeSettings.none:
                     continue
-                if project not in total_items:
-                    total_items[project] = []
-                for item in items:
-                    total_item = next(filter(lambda _i: _i.name == item.name, total_items[project]), None)
-                    if total_item is None:
-                        total_item = Item(item.name, 0)
-                        total_items[project].append(total_item)
-                    total_item.amount += item.amount
-                    if item.name not in remaining[contract.player_name]:
-                        remaining[contract.player_name][item.name] = 0
-                    remaining[contract.player_name][item.name] += item.amount
+                if item.name not in inserted_items:
+                    inserted_items[item.name] = 0
+                player = overflow_items_owner[item]
+                pending = project.get_pending_resource(item.name)
+                pending = max(0, pending - inserted_items[item.name])
+                if pending <= 0:
+                    continue
+                amount = min(pending, item.amount)
+                if amount == 0:
+                    continue
+                item.amount -= amount
+                inserted_items[item.name] += amount
+                contract = next(
+                    filter(lambda _c: _c.player_name == player, overflow_contracts),
+                    None)
+                if contract is None:
+                    contract = Contract(discord_id=-1, player_name=player)
+                    overflow_contracts.append(contract)
+                contract_item = next(filter(lambda _i: _i.name == item.name, contract.contents), None)
+                if contract_item is None:
+                    contract_item = Item(item.name, 0)
+                    contract.contents.append(contract_item)
+                contract_item.amount += amount
+                contract.invest_resource(project, contract_item, amount)
+                if player not in remaining:
+                    remaining[player] = {}
+                if item.name not in remaining[player]:
+                    remaining[contract.player_name][item.name] = 0
+                remaining[contract.player_name][item.name] += amount
 
-        changes = []  # type: List[Tuple[Cell, int]]
         # Calculate cell changes
+        changes = []  # type: List[Tuple[Cell, int]]
         for item_cell, player_cell, amount_cell in iterate_overflow(plugin, overflow):
             amount = amount_cell.numeric_value
             item = item_cell.value
@@ -442,18 +447,28 @@ async def split_overflow(plugin: "ProjectPlugin", project_resources: List[str], 
                 continue
             if item not in remaining[player]:
                 continue
-            if remaining[player][item] <= 0:
+            if remaining[player][item] == 0:
                 continue
+            if remaining[player][item] < 0:
+                raise ProjectException(
+                    f"Overflow split failed, item {item} was split to often: {remaining[player][item]} for {player}")
             if amount > remaining[player][item]:
                 amount -= remaining[player][item]
                 remaining[player][item] = 0
             else:
                 remaining[player][item] -= amount
                 amount = 0
+            if amount == amount_cell.numeric_value:
+                continue
             changes.append((amount_cell, amount))
+    for player, items in remaining.items():
+        for item, amount in items.items():
+            if amount != 0:
+                raise ProjectException(
+                    f"Overflow split failed, item {item} was not processed correctly for {player}, remaining {amount}")
 
     log.append("Overflow recalculated")
-    return overflow_resources, changes
+    return overflow_contracts, changes
 
 
 async def apply_overflow_split(plugin: "ProjectPlugin",
@@ -479,7 +494,7 @@ async def apply_overflow_split(plugin: "ProjectPlugin",
         })
     log.append(f"Executing {len(batch_change)} changes...")
     logger.info("Executing batch update (%s changes)", len(batch_change))
-    await s.batch_update(batch_change)
+    await s.batch_update(batch_change, value_input_option=ValueInputOption.user_entered)
     log.append("Batch update applied, overflow split completed.")
     logger.info("Batch update applied, overflow split completed")
     return log

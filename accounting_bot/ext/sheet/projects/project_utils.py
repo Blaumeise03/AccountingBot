@@ -68,7 +68,7 @@ def calculate_changes(project_resources: List[str], quantities: List[int],
         if cell is None:
             cell = Cell(player_row, i + 9, "")
         if 0 < (cell.col - 8) < len(project_resources):
-            resource_name = project_resources[cell.col - 8]
+            resource_name = project_resources[cell.col - 9]
             if len(player_row_formulas) < cell.col:
                 quantity_formula = ""
             else:
