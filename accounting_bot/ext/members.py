@@ -17,7 +17,7 @@ from accounting_bot import utils
 from accounting_bot.exceptions import UsernameNotFoundException, NoPermissionException
 from accounting_bot.main_bot import BotPlugin, AccountingBot, PluginWrapper, PluginState
 from accounting_bot.utils import admin_only, guild_only, cmd_check, CmdAnnotation
-from accounting_bot.utils.ui import ModalForm, ConfirmView, AwaitConfirmView
+from accounting_bot.utils.ui import ModalForm, AwaitConfirmView
 
 logger = logging.getLogger("ext.members")
 _T = TypeVar("_T")
@@ -356,7 +356,11 @@ class MembersCommands(commands.Cog):
         player = self.plugin.get_user(name=matched_name)
         if player is None:
             raise UsernameNotFoundException(f"User {matched_name} not found")
-        if player.discord_id != ctx.user.id and not self.plugin.bot.is_admin(ctx.user.id):
+        if (
+                player.discord_id != ctx.user.id and
+                not self.plugin.bot.is_admin(ctx.user.id) and
+                ctx.user.id not in player.authorized_discord_ids
+        ):
             raise NoPermissionException(f"Discord user {ctx.user.name}:{ctx.user.id} is not owner of player {player}")
         player.authorized_discord_ids.append(user.id)
         await self.plugin.save_user_list()
@@ -384,7 +388,11 @@ class MembersCommands(commands.Cog):
         player = self.plugin.get_user(name=matched_name)
         if player is None:
             raise UsernameNotFoundException(f"User {matched_name} not found")
-        if player.discord_id != ctx.user.id and not self.plugin.bot.is_admin(ctx.user.id):
+        if (
+                player.discord_id != ctx.user.id and
+                not self.plugin.bot.is_admin(ctx.user.id) and
+                ctx.user.id not in player.authorized_discord_ids
+        ):
             raise NoPermissionException(f"Disord user {ctx.user.name}:{ctx.user.id} is not owner of player {player}")
         if user.id not in player.authorized_discord_ids:
             await ctx.respond(f"Der Nutzer `{user.name}:{user.id}` (<@{user.id}>) hat keine Rechte für den "
@@ -442,12 +450,23 @@ class MembersCommands(commands.Cog):
             .map(lambda m: (m.nick if m.nick is not None else m.name, m)) \
             .flatten()
         unreg_users = []
+        no_rank = []
         for name, user in users:  # type: str, discord.Member
-            if not self.plugin.get_user(discord_id=user.id):
+            player = self.plugin.get_user(discord_id=user.id)
+            if player is None:
                 unreg_users.append(user)
+            elif player.rank is None or len(player.rank) == 0:
+                no_rank.append((user, player))
         msg = f"Found {len(unreg_users)} unregistered users that have the specified role.\n"
         for user in unreg_users:
             msg += f"<@{user.id}> ({user.name})\n"
+            if len(msg) > 1850:
+                msg += "**Truncated**\n"
+                break
+        if len(no_rank) > 0:
+            msg += f"Found {len(no_rank)} users with no active rank.\n"
+        for user, player in no_rank:
+            msg += f"<@{user.id}> ({user.name}): {player.name} - {player.rank}\n"
             if len(msg) > 1900:
                 msg += "**Truncated**\n"
                 break
@@ -536,7 +555,8 @@ class MembersCommands(commands.Cog):
         if len(missing) > 0:
             msg_missing += f"\n\n**{len(missing)} Users not found:**\n"
             msg_missing += "\n".join(missing)
-        embed = Embed(title=f"Assign role {role.name}", description=msg + msg_missing, timestamp=datetime.datetime.now(), color=Color.red())
+        embed = Embed(title=f"Assign role {role.name}", description=msg + msg_missing,
+                      timestamp=datetime.datetime.now(), color=Color.red())
         confirm = await AwaitConfirmView(defer_response=True).send_view(
             interaction.followup,
             f"Do you want to assign the role {role.mention} to {len(members)} members?",
@@ -553,4 +573,5 @@ class MembersCommands(commands.Cog):
         embed = Embed(title=f"Assigned role {role.name}", description=msg,
                       timestamp=datetime.datetime.now(), color=Color.green())
         embed.set_footer(text=f"Executed by {ctx.user.name}", icon_url=ctx.user.avatar.url)
-        await interaction.followup.send(f"Assigned the role {role.mention} to {len(members)} members", embed=embed, ephemeral=silent)
+        await interaction.followup.send(f"Assigned the role {role.mention} to {len(members)} members", embed=embed,
+                                        ephemeral=silent)
