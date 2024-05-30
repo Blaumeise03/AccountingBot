@@ -210,7 +210,7 @@ class EmbedBuilderView(AutoDisableView):
     @discord.ui.button(label="✏", style=discord.ButtonStyle.blurple, row=0)
     async def btn_edit(self, button: discord.Button, ctx: Interaction):
         form = await (
-            ModalForm(title="Edit embed", send_response=True)
+            ModalForm(title="Edit embed", send_response=True, ignore_timeout=True)
             .add_field(label="Title", placeholder="The title of the embed", value=self.builder.title, max_length=256)
             .add_field(label="Description", placeholder="The description of the embed", required=False,
                        style=InputTextStyle.paragraph, value=self.builder.description, max_length=4000)
@@ -229,7 +229,7 @@ class EmbedBuilderView(AutoDisableView):
     @discord.ui.button(label="🖼", style=discord.ButtonStyle.blurple, row=0)
     async def btn_edit_icon(self, button: discord.Button, ctx: Interaction):
         form = await (
-            ModalForm(title="Edit embed icons", send_response=True)
+            ModalForm(title="Edit embed icons", send_response=True, ignore_timeout=True)
             .add_field("Footer", placeholder="Footer text", required=False, value=self.builder.footer)
             .add_field("Footer Icon URL", placeholder="https://...", required=False, value=self.builder.footer_icon)
             .add_field("Image", placeholder="https://...", required=False, value=self.builder.image)
@@ -247,7 +247,7 @@ class EmbedBuilderView(AutoDisableView):
     @discord.ui.button(label="⚙", style=discord.ButtonStyle.blurple, row=0)
     async def btn_config(self, button: discord.Button, ctx: Interaction):
         form = await (
-            ModalForm(title="Edit settings", send_response=True)
+            ModalForm(title="Edit settings", send_response=True, ignore_timeout=True)
             .add_field(label="Embed name", placeholder="The name of the embed", value=self.builder.embed_name)
             .add_field(label="File name", placeholder="The description of the embed", value=self.builder.file_name)
             .open_form(ctx.response)
@@ -286,7 +286,7 @@ class EmbedBuilderView(AutoDisableView):
     @discord.ui.button(label="➕", style=discord.ButtonStyle.blurple, row=1)
     async def btn_add(self, button: discord.Button, ctx: Interaction):
         form = await (
-            ModalForm(title="Add field", send_response=True)
+            ModalForm(title="Add field", send_response=True, ignore_timeout=True)
             .add_field(label="Title", placeholder="The title of the field", max_length=256)
             .add_field(label="Content", placeholder="The content of the field", style=InputTextStyle.paragraph,
                        max_length=1024)
@@ -316,7 +316,7 @@ class EmbedBuilderView(AutoDisableView):
         if field is None:
             return
         form = await (
-            ModalForm(title="Edit field", send_response=True)
+            ModalForm(title="Edit field", send_response=True, ignore_timeout=True)
             .add_field(label="Title", placeholder="The title of the field", value=field.name, max_length=256)
             .add_field(label="Content", placeholder="The content of the field", value=field.value,
                        style=InputTextStyle.paragraph, max_length=1024)
