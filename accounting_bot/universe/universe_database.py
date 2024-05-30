@@ -755,8 +755,7 @@ class UniverseDatabase:
                 .filter(
                     and_(MobiKillmail.date_killed >= start_of_month,
                          MobiKillmail.killer_corp == killer_corp)
-                ).group_by(MobiKillmail.killer_name)
-                .order_by(MobiKillmail.isk.desc())
+                ).order_by(MobiKillmail.isk.desc())
                 .limit(amount))
             return list(res)
 

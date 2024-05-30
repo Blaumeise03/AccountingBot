@@ -16,6 +16,7 @@ from discord.ext import tasks, commands
 from accounting_bot.exceptions import KillmailException
 from accounting_bot.main_bot import BotPlugin, PluginWrapper
 from accounting_bot.universe import data_utils
+from accounting_bot.universe.models import MobiKillmail
 from accounting_bot.utils import wrap_async, admin_only
 
 if TYPE_CHECKING:
@@ -52,12 +53,13 @@ class KillboardPlugin(BotPlugin):
         self.config = bot.create_sub_config("killmails")
         self.config.load_tree(CONFIG_TREE)
         self.killboards = set()  # type: Set[Tuple[Union[GuildChannel, Thread, PrivateChannel], Message]]
+        self.cog = KillboardCog(self)
 
     def on_load(self):
-        self.register_cog(KillboardCog(self))
+        self.register_cog(self.cog)
 
     async def on_enable(self):
-        await self.refresh_kill_db()
+        # await self.refresh_kill_db()
         for c, m in self.config["killboards"]:
             try:
                 channel = await self.bot.get_or_fetch_channel(channel_id=c)
@@ -71,7 +73,7 @@ class KillboardPlugin(BotPlugin):
                 logger.error("Failed to access killboard in channel %s message %s: No access", c, m)
         self.save_killboards()
         logger.info("Found %s killboards", len(self.killboards))
-        await self.update_killboards()
+        self.cog.update_messages.start()
 
     def save_killboards(self):
         self.config["killboards"].clear()
@@ -91,11 +93,11 @@ class KillboardPlugin(BotPlugin):
                 if len(csv) < 10:
                     has_data = False
                 page += 1
-                if only_first_page:
-                    break
+                await data_utils.save_mobi_csv(csv, replace_tag=replace_tag)
                 if page > 10:
                     raise KillmailException(f"Reached page 11 for corp {corp_tag}")
-                await data_utils.save_mobi_csv(csv, replace_tag=replace_tag)
+                if only_first_page:
+                    break
 
     async def build_killboard_embed(self):
         data = await data_utils.get_killboard_data(self.config["corp_tag"])
@@ -109,10 +111,17 @@ class KillboardPlugin(BotPlugin):
                       description=f"(this month)\n**Total Kills**\n```\n{board}```",
                       color=Color.red(), timestamp=datetime.now())
         msg = ""
-        for kill in top_kills:
-            msg += (f"{kill.killer_name}: [{kill.victim_corp}] {kill.victim_name}\n"
-                    f"  {kill.victim_ship_name}: {kill.isk:,} ISK\n")
-        embed.add_field(name="Top 10 Kills", value=f"```\n{msg}```", inline=False)
+        for i, kill in enumerate(top_kills):  # type: int, MobiKillmail
+            if kill.date_killed is not None:
+                kill_time = int(kill.date_killed.timestamp())
+                kill_time = f"<t:{kill_time}:d>"
+            else:
+                kill_time = "`Unknown time`"
+            msg += (f"{i + 1}. {kill_time} {kill.killer_name}:  {kill.isk:,} ISK\n"
+                    # The Zero Width Space does ensure that the line will be a new line with an indent
+                    f"  ​`{kill.victim_ship_name}` [{kill.victim_corp}] {kill.victim_name}\n")
+        embed.add_field(name="Top 10 Kills", value=msg, inline=False)
+        embed.set_footer(text="Last updated")
         return embed
 
     async def update_killboards(self):
@@ -124,6 +133,9 @@ class KillboardPlugin(BotPlugin):
 class KillboardCog(Cog):
     def __init__(self, plugin: KillboardPlugin):
         self.plugin = plugin
+
+    def cog_unload(self) -> None:
+        self.update_messages.cancel()
 
     @tasks.loop(hours=4)
     async def update_messages(self):
