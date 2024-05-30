@@ -67,7 +67,8 @@ class HelpCommand(commands.Cog):
                 cmds.append(f"{utils.get_cmd_name(cmd)}")
         for cmd in self.bot.commands:
             cmds.append(f"{utils.get_cmd_name(cmd)}".strip())
-        return filter(lambda n: ctx.value is None or n.casefold().startswith(ctx.value.casefold().strip()), cmds)
+        return filter(lambda n: ctx.value is None or n.casefold().startswith(ctx.value.casefold().strip().lstrip("/")),
+                      cmds)
 
     @staticmethod
     def get_general_embed(bot: commands.Bot):
@@ -144,7 +145,9 @@ class HelpCommand(commands.Cog):
     def get_help_embed(bot: commands.Bot, selection: Optional[str] = None):
         if selection is None:
             return HelpCommand.get_general_embed(bot)
-        selection = selection.strip()
+        selection = selection.strip().lstrip("/")
+        if len(selection) == 0:
+            return HelpCommand.get_general_embed(bot)
         if selection in bot.cogs:
             cog = bot.cogs[selection]
             return HelpCommand.get_cog_embed(cog)
