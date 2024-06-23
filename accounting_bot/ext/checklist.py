@@ -10,6 +10,7 @@ import os
 import re
 from datetime import datetime, timedelta
 from enum import Enum
+from pathlib import Path
 from typing import Optional, List, Dict, Any, Union, Literal
 
 import discord
@@ -26,6 +27,7 @@ from accounting_bot.utils.ui import ModalForm, NumPadView
 
 logger = logging.getLogger("ext.checklist")
 CONFIG_PATH = "config/checklists.json"
+DELETED_PATH = "config/checklists/deleted_{time}_{channel_id}.json"
 hour_pattern = re.compile(r"[01]?\d:\d\d")
 
 EMOJI_CHECKED = "<:c_r:1152242632358101112>"
@@ -102,7 +104,17 @@ class CheckListPlugin(BotPlugin):
                 continue
             async_tasks.append(checklist.update_message(ignore_error=True, force=force))
         for d in to_delete:
+            path = Path(
+                DELETED_PATH.format(
+                    time=datetime.now().strftime("%Y-%m-%d_%H-%M"),
+                    channel_id=d.channel_id))
+            if not path.parent.exists():
+                path.parent.mkdir()
+            with open(path, mode="w", encoding="utf-8") as file:
+                json.dump(d.to_dict(), file, ensure_ascii=False, indent=2)
             self.checklists.remove(d)
+            logger.info("Checklist from channel %s was deleted and saved to %s",
+                        d.channel_id, path)
         self.save_checklists()
         await asyncio.gather(*async_tasks)
 
@@ -207,7 +219,7 @@ class Task:
 def _task_filter(tasks: List[Task], time_range: Union[RepeatDelay, Literal['expired']],
                  base_time: Optional[datetime] = None):
     now = base_time if base_time is not None else datetime.now()
-    if type(time_range) == str:
+    if type(time_range) is str:
         max_age = now
         min_age = None
     elif isinstance(time_range, RepeatDelay):
@@ -245,6 +257,8 @@ class CheckList:
                     raise e
                 else:
                     self.message_id = None
+                    logger.info("Message %s in channel %s not found", self.message_id, self.channel_id)
+                    return
         if self.message is None:
             return
         update = False
@@ -258,7 +272,16 @@ class CheckList:
         if update or force:
             logger.debug("Updated message %s in channel %s, (update=%s, force=%s)",
                          self.message.id, self.channel_id, update, force)
-            await self.message.edit(embed=new_embed, view=self.view)
+            try:
+                await self.message.edit(embed=new_embed, view=self.view)
+            except discord.NotFound as e:
+                if not ignore_error:
+                    raise e
+                else:
+                    self.message_id = None
+                    self.message = None
+                    logger.info("Message %s in channel %s not found", self.message_id, self.channel_id)
+                    return
 
     def cleanup_tasks(self):
         now = datetime.now()
