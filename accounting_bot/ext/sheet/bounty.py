@@ -274,7 +274,7 @@ class BountyCommands(Cog):
             if b["ship"] is None:
                 b["ship"] = "N/A"
         msg = f"Bounties aus diesem Monat für `{player}`\n```"
-        b_sum = functools.reduce(lambda x, y: x + y, map(lambda b: b["value"], res))
+        b_sum = functools.reduce(lambda x, y: x + y, map(lambda b: b["value"], res), 0)
         i = 0
         for b in res:
             msg += f"\n{b['type']} {b['kill_id']:<7} {b['ship']:<12.12} {b['value']:11,.0f} ISK"
@@ -282,6 +282,8 @@ class BountyCommands(Cog):
                 msg += f"\ntruncated {len(res) - i - 1} more killmails"
                 break
             i += 1
+        else:
+            msg += "-- Keine Kills --"
         msg += f"\n```\nSumme: {b_sum:14,.0f} ISK\n*Hinweis: Dies ist nur eine ungefähre Vorschau*"
         await ctx.followup.send(msg)
 
