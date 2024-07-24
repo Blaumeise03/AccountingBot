@@ -4,9 +4,11 @@
 # Depends-On: [accounting_bot.ext.members]
 # End
 import datetime
+import enum
 import functools
 import json
 import logging
+from enum import Enum
 from os.path import exists
 from typing import Dict, List, Union, Iterable, Optional
 
@@ -17,11 +19,12 @@ from discord.ext import commands
 from google.oauth2.service_account import Credentials
 from gspread.utils import ValueRenderOption, ValueInputOption
 
+from accounting_bot import utils
 from accounting_bot.exceptions import GoogleSheetException
 from accounting_bot.ext.members import Player, MembersPlugin
 from accounting_bot.ext.sheet import sheet_utils
 from accounting_bot.main_bot import BotPlugin, AccountingBot, PluginWrapper
-from accounting_bot.utils import admin_only
+from accounting_bot.utils import admin_only, owner_only
 from accounting_bot.utils.ui import AwaitConfirmView
 
 logger = logging.getLogger("ext.sheet")
@@ -60,7 +63,24 @@ CONFIG_TREE_MEMBERS = {
     "members_rank_index": (int, 8),
     "members_note_index": (int, 15),
     "members_note_alt_prefix": (str, "Twink von "),
+    "members_rank_abstract": (str, "Abstract User")
 }
+
+
+class UserRole(enum.StrEnum):
+    writer = "write"
+    reader = "reader"
+    owner = "owner"
+    commenter = "commenter"
+    organizer = "organizer"
+    fileOrganizer = "fileOrganizer"
+
+
+class UserType(enum.StrEnum):
+    user = "user"
+    group = "group"
+    domain = "domain"
+    anyone = "anyone"
 
 
 class SheetPlugin(BotPlugin):
@@ -113,6 +133,20 @@ class SheetPlugin(BotPlugin):
         if self.sheet_name is None:
             self.sheet_name = sheet.title
         return sheet
+
+    async def load_permissions(self) -> List[Dict[str, Union[str, UserType, UserRole]]]:
+        agc = await self.agcm.authorize()
+        perms = await agc.list_permissions(self.sheet_id)
+        users = []
+        for perm in perms:
+            if perm["kind"] != "drive#permission":
+                continue
+            users.append({
+                "type": UserType[perm["type"]],
+                "email": perm["emailAddress"],
+                "role": UserRole[perm["role"]]
+            })
+        return users
 
     def check_name_overwrites(self, name: str) -> str:
         """
@@ -209,6 +243,19 @@ class SheetCog(commands.Cog):
             wk_name=sheet, wk_i_id=index_id, wk_i_main=index_main, wk_i_char=index_name)
         await confirm.interaction.followup.send(f"Exported players to sheet {sheet}", ephemeral=True)
 
+    @commands.slash_command(name="sheet_perms", description="Command to handle sheet permissions")
+    @owner_only()
+    async def cmd_get_perms(self, ctx: ApplicationContext):
+        perms = await self.plugin.load_permissions()
+        msg = ""
+        for perm in sorted(perms, key=lambda p: p["email"]):
+            msg += perm["role"] + ", " + perm["email"] + "\n"
+        if len(msg) < 2000:
+            await ctx.respond(msg, ephemeral=True)
+        else:
+            await ctx.respond("Alle Nutzer des Sheets:",
+                              file=utils.string_to_file(msg, "permissions.csv"))
+
 
 async def load_usernames(players: Dict[str, Player], plugin: SheetPlugin) -> Dict[str, Player]:
     logger.info("Loading usernames from sheet")
@@ -224,7 +271,9 @@ async def load_usernames(players: Dict[str, Player], plugin: SheetPlugin) -> Dic
     i_member_rank = config["members_rank_index"]
     i_member_note = config["members_note_index"]
     member_note_alt_prefix = config["members_note_alt_prefix"]
+    abstract_rank = config["members_rank_abstract"]
     alt_chars = {}  # type: Dict[str, str]
+    abstract_users = set()
 
     for row in user_raw:
         user = None
@@ -238,6 +287,10 @@ async def load_usernames(players: Dict[str, Player], plugin: SheetPlugin) -> Dic
                 user.rank = row[i_member_rank].strip()
             else:
                 inactive_players.append(row[i_member_name].strip())
+            if user and user.rank == abstract_rank:
+                abstract_users.add(user)
+                user.is_abstract = True
+                continue
             # Check if it is an alt of a main account
             if len(row) > i_member_note and not row[i_member_active]:
                 note = row[i_member_note]  # type: str
@@ -380,6 +433,7 @@ def load_user_overwrites(players: Dict[str, Player]):
             if k in players or v is not None:
                 continue
             pseudo_user = Player(name=k)
+            pseudo_user.is_abstract = True
             players[k] = pseudo_user
             count += 1
     logger.info("Loaded %s pseudo-users from overwrites config", count)

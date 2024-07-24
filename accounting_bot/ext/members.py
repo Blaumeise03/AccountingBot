@@ -42,6 +42,7 @@ class Player:
         self.discord_id = None  # type: int | None
         self.alts = []  # type: List[str]
         self.authorized_discord_ids = []  # type: List[int]
+        self.is_abstract = False
 
     def has_permissions(self, discord_id: int):
         return discord_id == self.discord_id or discord_id in self.authorized_discord_ids
@@ -420,12 +421,16 @@ class MembersCommands(commands.Cog):
         player = self.plugin.get_user(name=matched_name)
         if player is None:
             raise UsernameNotFoundException(f"User {matched_name} not found")
-        msg = f"Spielerinformationen für Spieler `{player.name}`\n"
+        if not player.is_abstract:
+            msg = f"Spielerinformationen für Spieler `{player.name}`\n"
+        else:
+            msg = f"Informationen zum abstrakten Konto `{player.name}`\n"
         if len(player.alts) > 0:
             msg += "Alts:\n```\n"
             for alt in player.alts:
                 msg += alt + "\n"
             msg += "```\n"
+        msg += f"Rank: `{player.rank}`\n"
         if player.discord_id:
             msg += f"Owner: `{player.discord_id}` <@{player.discord_id}>\n"
         else:
@@ -487,6 +492,8 @@ class MembersCommands(commands.Cog):
         unreg_users = []
         missing_roles = []
         for player in self.plugin.players:
+            if player.is_abstract:
+                continue
             if player.rank is None:
                 continue
             if player.discord_id is None:

@@ -163,7 +163,8 @@ class AccountingPlugin(BotPlugin):
         # Save transaction to sheet
         await self.add_transaction(transaction=transaction)
         user = await self.bot.get_or_fetch_user(user_id)
-        logger.info(f"Verified transaction {msg.id} ({time_formatted}). Verified by {user.name} ({user.id}).")
+        logger.info(f"Verified transaction {msg.id} ({time_formatted}). "
+                    f"Verified by {user.name if user is not None else None} ({user_id}).")
 
         # Set message as verified
         self.db.set_verification(msg.id, verified=1)
@@ -997,7 +998,8 @@ class ShipyardTransaction(PackedTransaction):
                 timestamp=self.timestamp,
                 author=self.author
             )]
-        slot_price = min(int(self.price * 0.02 / 100000) * 100000, 50000000)
+        # slot_price = min(int(self.price * 0.02 / 100000) * 100000, 50000000)
+        slot_price = min(int(round(self.price * 0.05, -6)), 50000000)
         if self.builder is not None and slot_price >= 1000000:
             transactions.append(
                 Transaction(
