@@ -726,6 +726,7 @@ class PluginWrapper(object):
             logger.info("Disabling plugin %s", self.name)
             for cog in self.plugin.cogs:
                 self.plugin.bot.remove_cog(cog.__cog_name__)
+                logger.info("Removed cog %s", cog.__cog_name__)
             await self.plugin.on_disable()
         except Exception as e:
             self.state = PluginState.CRASHED
@@ -795,6 +796,8 @@ class PluginWrapper(object):
         )
         if "Depends-On" in config:
             plugin.get_dep_names(config["Depends-On"])
+        if "Load-After" in config:
+            plugin.get_opt_dep_names(config["Load-After"])
         if "Localization" in config:
             plugin.localization_raw = config["Localization"]
         return plugin
