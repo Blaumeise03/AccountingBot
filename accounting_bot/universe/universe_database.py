@@ -28,6 +28,12 @@ logger = logging.getLogger("ext.data.db")
 # logging.getLogger('sqlalchemy.engine').setLevel(logging.INFO)
 
 
+def _ensure_len(string: str, length: int):
+    if len(string) > length:
+        return string[:length]
+    return string
+
+
 def get_file_len(path: str):
     def _count_generator(reader):
         b = reader(1024 * 1024)
@@ -686,9 +692,9 @@ class UniverseDatabase:
                     kill_obj.id = kill_id
                 kill_obj.report_id = row[header.index("report_id")] or None
                 kill_obj.is_kill = row[header.index("report_type")].casefold() == "kill".casefold()
-                kill_obj.killer_corp = replace_tag or row[header.index("killer_corp")]
+                kill_obj.killer_corp = _ensure_len(replace_tag or row[header.index("killer_corp")], 6)
                 kill_obj.killer_name = row[header.index("killer_name")]
-                kill_obj.victim_corp = row[header.index("victim_corp")]
+                kill_obj.victim_corp = _ensure_len(row[header.index("victim_corp")], 6)
                 kill_obj.victim_name = row[header.index("victim_name")]
                 kill_obj.isk = row[header.index("isk")]
                 kill_obj.image_url = row[header.index("image_url")]

@@ -21,7 +21,7 @@ from accounting_bot.universe.models import System, Celestial
 from accounting_bot.universe.universe_database import UniverseDatabase
 from accounting_bot.utils import wrap_async
 
-AU_RATIO = 149597870700
+AU_RATIO = 149_597_870_700
 
 logger = logging.getLogger("ext.data.utils")
 data_plugin = None  # type: DataUtilsPlugin | None

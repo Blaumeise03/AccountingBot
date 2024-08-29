@@ -2,18 +2,22 @@
 # Name: PiPlanerPlugin
 # Author: Blaumeise03
 # Depends-On: [accounting_bot.universe.data_utils, accounting_bot.ext.embeds]
-# Load-After: [accounting_bot.ext.projects]
+# Load-After: [accounting_bot.ext.sheet.projects]
 # End
 import base64
+import csv
 import difflib
 import itertools
 import logging
 import math
 import re
 from datetime import datetime, timedelta
+from io import StringIO
 from typing import List, Dict, Optional, Callable, Coroutine, Any, Union, TYPE_CHECKING
 
+import aiohttp
 import discord
+import requests
 from discord import User, Embed, Color, ApplicationContext, Message, InputTextStyle, Interaction
 from discord.ui import InputText, Button
 
@@ -33,6 +37,7 @@ logger = logging.getLogger("ext.data.pi")
 item_prices = {}  # type: Dict[str, Dict[str, Union[int, float]]]
 available_prices = []
 pending_resources = {}  # type: Dict[str, float]
+average_prices_url: Optional[str] = None
 last_reload = datetime(1907, 1, 1)
 pi_resources = []
 pi_ids = {}  # type: Dict[str, int]
@@ -55,6 +60,7 @@ class PiPlanerPlugin(BotPlugin):
         res = await data_utils.get_items_by_type("pi")
         pi_resources = list(map(lambda i: i.name, res))
         pi_ids = dict(map(lambda i: (i.name, i.id), res))
+        await reload_prices()
 
     def get_session(self, user: User):
         return PiPlanningSession(self, user)
@@ -70,6 +76,39 @@ async def reload_pending_resources(project: "ProjectPlugin"):
     pending_resources = items
     last_reload = datetime.now()
     logger.info("Pending resources loaded")
+
+
+async def reload_prices():
+    logger.info("Reloading item prices")
+    available_prices.clear()
+    item_prices.clear()
+    if average_prices_url is not None:
+        async with aiohttp.ClientSession() as session:
+            async with session.get(average_prices_url) as response:
+                csv_data = await response.text()
+        f = StringIO(csv_data)
+        reader = csv.reader(f, delimiter="\t")
+        header = next(reader, None)
+        if header is None:
+            logger.warning("Could not load average prices, header is emtpy")
+            return
+        if "average_price_no_outliers" not in header or "item_name" not in header:
+            logger.warning("Could not load average prices, invalid header: %s", header)
+            return
+        time_stamp = header[0]
+        index_price = header.index("average_price_no_outliers")
+        index_name = header.index("item_name")
+
+        count = 0
+        for row in reader:
+            if len(row) < max(index_price, index_name):
+                continue
+            count += 1
+            if row[index_name] not in item_prices:
+                item_prices[row[index_name]] = {}
+            item_prices[row[index_name]]["average_price"] = float(row[index_price])
+        available_prices.append("average_price")
+        logger.info("Loaded %s average prices from %s", count, time_stamp)
 
 
 def get_price(item: str, price_types: List[str]) -> Optional[Union[float, int]]:
@@ -194,9 +233,9 @@ def build_planet_table(arrays: List["Array"], mode="LnRhdi", price_types: List[s
         for m in mode:
             match m:
                 case "L":
-                    msg += "🔒" if array.locked else "  "
+                    msg += "🔒" if array.locked else " "
                 case "l":
-                    msg += "🔒" if array.locked else "  "
+                    msg += "🔒" if array.locked else " "
                 case "n":
                     msg += f"{i:>2}"
                 case "R":
@@ -1010,6 +1049,8 @@ class EditPlanModal(ErrorHandledModal):
                 placeholder = ""
                 for p in available_prices:
                     placeholder += f"{p}; "
+                if len(available_prices) == 0:
+                    placeholder += "Keine Preisdaten verfügbar"
                 placeholder.strip().strip(",")
                 self.add_item(InputText(
                     style=InputTextStyle.multiline,

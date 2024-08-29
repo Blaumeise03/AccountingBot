@@ -9,6 +9,7 @@ from dotenv import load_dotenv
 
 from accounting_bot.discordLogger import PycordHandler
 from accounting_bot.main_bot import AccountingBot
+from accounting_bot.universe import pi_planer
 
 logger = logging.getLogger()
 log_filename = "logs/" + datetime.now().strftime("%Y-%m-%d_%H-%M-%S") + ".log"
@@ -43,6 +44,7 @@ logging.info("Loading .env for discord token and config path")
 load_dotenv()
 TOKEN = os.getenv('DISCORD_TOKEN')
 CNFG_PATH = os.getenv("BOT_CONFIG", "config.json")
+pi_planer.average_prices_url = os.getenv("AVERAGE_PRICES_URL", None)
 
 # Setting up discord intents
 intents = discord.Intents.default()
@@ -53,6 +55,12 @@ intents.reactions = True
 # noinspection PyUnresolvedReferences,PyDunderSlots
 intents.members = True
 
-bot = AccountingBot(intents=intents, help_command=None, config_path=CNFG_PATH, pycord_handler=discord_handler)
+bot = AccountingBot(
+    intents=intents,
+    help_command=None,
+    config_path=CNFG_PATH,
+    pycord_handler=discord_handler,
+    # debug_guilds=[582649395149799491, 758444788449148938]
+)
 
 bot.run(TOKEN)
