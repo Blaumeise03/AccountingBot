@@ -193,9 +193,10 @@ class NumPadView(AutoDisableView):
 
     def __init__(self, start_row=0, consume_response=True, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self.selected = None
+        self.selected: Optional[int] = None
         self.consume_response = consume_response
         self.response = None  # type: InteractionResponse | None
+        self.followup = None  # type: Webhook | None
         for i in range(7, 10):
             self.add_item(NumPadView.NumberButton(i, self.callback, row=start_row))
         for i in range(4, 7):
@@ -220,6 +221,7 @@ class NumPadView(AutoDisableView):
     async def callback(self, number: int, ctx: Interaction):
         self.selected = number
         self.response = ctx.response
+        self.followup = ctx.followup
         self.stop()
         if self.consume_response:
             await ctx.response.defer(invisible=True)
