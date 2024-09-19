@@ -281,19 +281,22 @@ async def insert_investment(self: "ProjectPlugin", player: str, project_name: st
 
         log.append("  Calculating changes...")
         raw_quantities = [0]*len(project.resource_order)
-        handled_items = []
+        handled_items = {}
         for i, res_name in enumerate(project.resource_order):
             for item in quantities:
                 if item.name != project.resource_order[i]:
                     continue
                 raw_quantities[i] += item.amount
-                handled_items.append(item)
+                handled_items[i] = item
         log.append(f"  Calculated raw quantities: {raw_quantities}")
-        changes = calculate_changes(
+        changes, handled_cols = calculate_changes(
             project.resource_order, raw_quantities,
             player_row, player_row_formulas,
             project_name, player,
             cells, log)
+        for i in handled_items.keys():
+            if i in handled_cols:
+                handled_cols[handled_cols.index(i)] = handled_items[i]
 
         log.append(f"  Applying {len(changes)} changes to {project_name}:")
         for change in changes:
@@ -301,7 +304,7 @@ async def insert_investment(self: "ProjectPlugin", player: str, project_name: st
         await worksheet.batch_update(changes, value_input_option=ValueInputOption.user_entered)
     logger.debug("Inserted investment for %s into %s!", player, project_name)
     log.append(f"Project {project_name} processed!")
-    return handled_items
+    return list(filter(lambda i: type(i) is Item, handled_cols))
 
 
 async def insert_overflow(self: "ProjectPlugin", player: str, items: List[Item], log=None) -> bool:

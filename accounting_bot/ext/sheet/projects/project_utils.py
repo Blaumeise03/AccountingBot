@@ -1,5 +1,6 @@
 import logging
 import re
+import string
 from enum import Enum
 from typing import List, Dict, Tuple, Optional
 
@@ -9,6 +10,14 @@ from accounting_bot.exceptions import GoogleSheetException, ProjectException
 from accounting_bot.universe.data_utils import Item
 
 logger = logging.getLogger("ext.sheet.project.utils")
+
+
+def col2num(col):
+    num = 0
+    for c in col:
+        if c in string.ascii_letters:
+            num = num * 26 + (ord(c.upper()) - ord('A')) + 1
+    return num
 
 
 def process_first_column(batch_cells: [Cell], log: [str]):
@@ -61,19 +70,25 @@ async def find_player_row(cells, player, project, worksheet, log):
 def calculate_changes(project_resources: List[str], quantities: List[int],
                       player_row: int, player_row_formulas: List[str],
                       project_name: str, player: str,
-                      cells: List[Cell], log: List[str]):
+                      cells: List[Cell], log: List[str],
+                      project_resources_range: Tuple[str, str] = ("I", "BV")):
     changes = []
+    handled_cols = []
+    first_col, last_col = col2num(project_resources_range[0]), col2num(project_resources_range[1])
+    log.append(f"    {project_name} has {len(project_resources)} project resources, range: {project_resources_range}=({first_col}, {last_col})")
+    if len(project_resources) != len(quantities):
+        log.append(f"    Warning! Length of project resources ({len(project_resources)}) does not match the length of quantities ({len(quantities)})")
     for i in range(len(project_resources)):
-        cell = next(filter(lambda c: c.row == player_row and c.col == (i + 9), cells), None)
+        cell = next(filter(lambda c: c.row == player_row and c.col == (i + first_col), cells), None)
         if cell is None:
-            cell = Cell(player_row, i + 9, "")
-        if 0 < (cell.col - 8) < len(project_resources):
+            cell = Cell(player_row, i + first_col, "")
+        if 0 < (cell.col - first_col + 1) <= len(project_resources):
             resource_name = project_resources[cell.col - 9]
             if len(player_row_formulas) < cell.col:
                 quantity_formula = ""
             else:
                 quantity_formula = player_row_formulas[cell.col - 1]  # type: str
-            new_quantity = quantities[cell.col - 9]
+            new_quantity = quantities[cell.col - first_col]
             if new_quantity <= 0:
                 continue
             log.append(f"    Invested quantity for {resource_name} is {new_quantity}")
@@ -85,12 +100,16 @@ def calculate_changes(project_resources: List[str], quantities: List[int],
                     raise GoogleSheetException(log, "Sheet %s contains illegal formula for player %s (cell %s): \"%s\"",
                                                project_name, player, cell.address, quantity_formula)
                 quantity_formula += "+" + str(new_quantity)
+            handled_cols.append(i)
             log.append(f"      New quantity formula: \"{quantity_formula}\"")
             changes.append({
                 "range": cell.address,
                 "values": [[quantity_formula]]
             })
-    return changes
+        else:
+            log.append(f"    Error! Cell {cell.address} is out of range ({project_resources_range}) for project resources!")
+            log.append(f"    ->  0 > {cell.col - first_col + 1} or {cell.col - first_col + 1} <= {len(project_resources)}")
+    return changes, handled_cols
 
 
 def verify_batch_data(batch_data: [], log: [str]):
