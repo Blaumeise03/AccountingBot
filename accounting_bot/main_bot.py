@@ -898,15 +898,19 @@ def find_plugin_order(plugins: List[PluginWrapper]):
 
 async def build_status_embed(bot: AccountingBot) -> Embed:
     owner = None
+
     if bot.owner_id is not None:
         o = bot.get_user(bot.owner_id)
         if o is None:
             try:
-                o = await bot.fetch_user(bot.owner_id)
+                o = await bot.get_or_fetch_user(bot.owner_id)
             except discord.NotFound:
                 pass
         if o is not None:
             owner = o.name
+    if owner is None and bot.owner_ids is not None:
+        owners = await asyncio.gather(*[bot.get_or_fetch_user(o) for o in bot.owner_ids])
+        owner = ", ".join(map(lambda o: o.name, owners))
     desc = f"Status: `{bot.state.name}`\nShard-ID: `{bot.shard_id}`\nShards: `{bot.shard_count}`\nPing: `{bot.latency:.3f} sec`\n" \
            f"Owner: `{owner}`"
     embed = Embed(title="Bot Status", colour=Color.gold(), description=desc, timestamp=datetime.now())

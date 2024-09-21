@@ -293,6 +293,13 @@ def str_to_list(text: str, sep=";") -> List[str]:
     return text_list
 
 
+def limit_str(text: str, limit: int, _ellipsis: bool = True):
+    if len(text) > limit:
+        if _ellipsis:
+            return text[:limit - 3] + "..."
+        return text[:limit]
+
+
 def compare_embed_content(embed1: Embed, embed2: Embed) -> bool:
     if embed1.title.strip(" \n") != embed2.title.strip(" \n"):
         return False
