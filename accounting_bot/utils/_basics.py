@@ -7,6 +7,7 @@ import json
 import logging
 import re
 import traceback
+import warnings
 from concurrent.futures import ThreadPoolExecutor
 from enum import Enum
 from os.path import exists
@@ -14,7 +15,7 @@ from typing import Union, Optional, Type, List, Callable, TypeVar, Dict, TYPE_CH
 
 import discord
 from discord import Interaction, ApplicationContext, InteractionResponded, ApplicationCommand, CheckFailure, Embed, \
-    EmbedField
+    EmbedField, InteractionContextType
 from discord.ext import commands
 from discord.ext.commands import Context, Command, NotOwner
 from discord.ui import View, Modal
@@ -404,10 +405,10 @@ def owner_only() -> Callable[[_T], _T]:
 def guild_only() -> Callable:
     def inner(command: Callable):
         if isinstance(command, ApplicationCommand):
-            command.guild_only = True
+            command.contexts = {InteractionContextType.guild}
             CmdAnnotation.annotate_cmd(command.callback, CmdAnnotation.guild)
         else:
-            command.__guild_only__ = True
+            command.__contexts__ = {InteractionContextType.guild}
             CmdAnnotation.annotate_cmd(command, CmdAnnotation.guild)
         return command
     return inner
