@@ -3,6 +3,7 @@ import json
 import logging
 import math
 import sys
+from typing_extensions import deprecated
 from datetime import datetime
 from multiprocessing.pool import ThreadPool
 from typing import Dict, Tuple, Union, Any, TYPE_CHECKING
@@ -48,6 +49,7 @@ def get_file_len(path: str):
         return sum(buffer.count(b'\n') for buffer in c_generator)
 
 
+@deprecated("UniverseDatabase is no longer maintained, use the BlueEchoesDB instead")
 class UniverseDatabase:
     def __init__(self,
                  username: Optional[str],
@@ -71,9 +73,9 @@ class UniverseDatabase:
         Constellation.__table__.create(bind=self.engine, checkfirst=True)
         Item.__table__.create(bind=self.engine, checkfirst=True)
         System.__table__.create(bind=self.engine, checkfirst=True)
+        Celestial.__table__.create(bind=self.engine, checkfirst=True)
         models.SystemConnections.create(bind=self.engine, checkfirst=True)
         models.StargateConnections.create(bind=self.engine, checkfirst=True)
-        Celestial.__table__.create(bind=self.engine, checkfirst=True)
         Resource.__table__.create(bind=self.engine, checkfirst=True)
         PiPlanSettings.__table__.create(bind=self.engine, checkfirst=True)
         PiPlanResource.__table__.create(bind=self.engine, checkfirst=True)
