@@ -17,7 +17,8 @@ import discord
 import discord.ext
 import mariadb
 import pytz
-from discord import Embed, Interaction, Color, Message, ApplicationContext, option, User, RawReactionActionEvent
+from discord import Embed, Interaction, Color, Message, ApplicationContext, option, User, RawReactionActionEvent, \
+    Forbidden
 from discord.ext import commands
 from discord.ext.commands import Cog, CheckFailure
 from discord.ui import Modal, InputText
@@ -32,7 +33,7 @@ from accounting_bot.ext.sheet import sheet_main
 from accounting_bot.ext.sheet.sheet_main import SheetPlugin
 from accounting_bot.main_bot import BotPlugin, PluginWrapper, AccountingBot
 from accounting_bot.utils import AutoDisableView, ErrorHandledModal, parse_number, admin_only, \
-    guild_only, online_only, CmdAnnotation
+    guild_only, online_only, CmdAnnotation, ui
 
 INVESTMENT_RATIO = 0.3  # percentage of investment that may be used for transactions
 _T = TypeVar("_T")
@@ -40,6 +41,7 @@ _T = TypeVar("_T")
 logger = logging.getLogger("ext.accounting")
 
 NAME_SHIPYARD = "Buyback Program"
+EMOJY_LOADING = "<a:l_b:1341385628503375914>"
 
 # Database lock
 database_lock = Lock()
@@ -126,7 +128,7 @@ class AccountingPlugin(BotPlugin):
             result["Sheet"] = (await self.sheet.get_sheet()).title
         except Exception:
             result["Sheet"] = "Error"
-        
+
         return result
 
     async def inform_player(self, transaction, discord_id, receive):
@@ -152,7 +154,7 @@ class AccountingPlugin(BotPlugin):
                            f"{transaction.amount:,} ISK",
                            time_formatted)
 
-    async def save_transaction(self, transaction: "Transaction", msg: Message, user_id: int):
+    async def save_transaction(self, transaction: "Transaction", msg: Message, user_id: int, skip_db=False):
         # Check if the transaction is valid
         if transaction.amount is None or (
                 not transaction.name_from and not transaction.name_to) or not transaction.purpose:
@@ -167,7 +169,8 @@ class AccountingPlugin(BotPlugin):
                     f"Verified by {user.name if user is not None else None} ({user_id}).")
 
         # Set message as verified
-        self.db.set_verification(msg.id, verified=1)
+        if not skip_db:
+            self.db.set_verification(msg.id, verified=1)
 
     async def inform_players(self, transaction: "Transaction"):
         # Update wallets
@@ -646,6 +649,131 @@ class AccountingCommands(Cog):
             return
         await ctx.followup.send("Der Kontostand von {} beträgt `{:,} ISK`.\nDie Projekteinlagen betragen `{:,} ISK`"
                                 .format(name, balance, invest), ephemeral=True)
+
+    @commands.slash_command(name="batch_transfer", description="Transfer ISK from multiple users to one user")
+    @option("amount", description="The amount of ISK to transfer", required=True, type=int)
+    @option("to", description="The user to transfer the ISK to", required=True, type=str)
+    @option("purpose", description="The purpose of the transfer", required=False, type=str, default="")
+    @admin_only()
+    @online_only()
+    async def batch_transfer(self, ctx: ApplicationContext, amount: int, to: str, purpose: str = ""):
+        await ctx.defer(ephemeral=True)
+        if purpose is None or purpose == "":
+            purpose = "Batch Transfer"
+        users_from = []
+        user_to = None
+        for user in self.plugin.member_p.players:
+            if user.name.casefold() == to.casefold():
+                user_to = user
+                continue
+            if user.is_abstract:
+                continue
+            if user.rank is None or len(user.rank) == 0:
+                continue
+            users_from.append(user)
+        if user_to is None:
+            await ctx.followup.send(f"User `{to}` not found", ephemeral=True)
+            return
+        if amount <= 0:
+            await ctx.followup.send("Amount must be positive", ephemeral=True)
+            return
+        if len(users_from) == 0:
+            await ctx.followup.send("No users found", ephemeral=True)
+            return
+        await self.plugin.load_wallets(force=True)
+        transactions = [
+            Transaction(name_from=user.name, name_to=user_to.name, amount=amount,
+                        purpose=purpose)
+            for user in users_from
+        ]
+
+        class AbortView(ui.AutoDisableView):
+            def __init__(self):
+                super().__init__(timeout=None)
+                self.abort = False
+
+            @discord.ui.button(label="Abort", style=discord.ButtonStyle.red)
+            async def abort_button(self, button: discord.ui.Button, interaction: discord.Interaction):
+                self.abort = True
+                await interaction.response.edit_message(content="Aborting...", view=None)
+
+        async def confirm_callback(interaction: Interaction, view: ConfirmView, transactions=transactions):
+            logger.info("Performing batch transfer (%s ISK) to %s, authorized by %s:%s",
+                        amount, to, interaction.user.name, interaction.user.id)
+            total = len(transactions)
+            old_msg = interaction.message.content
+            await interaction.response.defer(invisible=False, ephemeral=False)
+            embed = Embed(title="Batch Transfer", color=Color.blue())
+            embed.add_field(name="Amount", value=f"{amount:,} ISK")
+            embed.add_field(name="To", value=user_to.name)
+            embed.add_field(name="Purpose", value=transactions[0].purpose, inline=False)
+            embed.set_footer(text=interaction.user.name)
+            embed.timestamp = datetime.now()
+            old_msg = old_msg.split("\n", 1)[-1]
+
+            abort_view = AbortView()
+            msg = await interaction.followup.send(
+                content=f"{old_msg}\n{EMOJY_LOADING} Starting batch transfer", view=abort_view)
+
+
+            msg_embed = await self.plugin.bot.get_channel(
+                self.plugin.accounting_log).send("Autoverifizert", embed=embed)
+            i = 0
+            aborted = False
+            for transaction in transactions:
+                await self.plugin.save_transaction(transaction, interaction.message, interaction.user.id, skip_db=True)
+                i += 1
+                if abort_view.abort:
+                    aborted = True
+                    logger.warning("Batch transfer aborted")
+                    break
+                if i % 5 == 0:
+                    await msg.edit(
+                        content=f"{old_msg}\n"
+                                f"{EMOJY_LOADING} `{total - i}` transactions left (`{i}/{total}`)")
+            if aborted:
+                await msg.edit(
+                    content=f"{old_msg}\n"
+                            f":x: `{total - i}` transactions left (`{i}/{total}`)",
+                    view=None
+                )
+                return
+            i = 0
+            for transaction in transactions:
+                try:
+                    await self.plugin.inform_players(transaction)
+                except Forbidden as e:
+                    logger.warning("Can't inform player %s about transaction: %s", transaction.name_from, e)
+                i += 1
+                if abort_view.abort:
+                    aborted = True
+                    logger.warning("Batch transfer aborted")
+                    break
+                if i % 10 == 0:
+                    await msg.edit(
+                        content=f"{old_msg}\n"
+                                f"- Finished inserting\n"
+                                f"{EMOJY_LOADING} `{total - i}` transactions left (`{i}/{total}`)")
+            if aborted:
+                await msg.edit(
+                    content=f"{old_msg}\n"
+                            f"- Finished inserting\n"
+                            f":x: `{total - i}` transactions left (`{i}/{total}`)",
+                    view=None
+                )
+                return
+            logger.info("Batch transfer completed")
+            await msg.edit(content=f"{old_msg}\n- Finished inserting\n- Finished informing players", view=None)
+            await interaction.followup.send("Batch transfer completed", ephemeral=True)
+
+
+        cnf_view = ui.ConfirmView(confirm_callback, extended_args=True)
+        m = await ctx.followup.send(
+            f"Do you want to confirm the batch transfer?\n"
+            f"Transfering `{amount:,} ISK` to `{user_to.name}` from {len(users_from)} users\n"
+            f"**Purpose**: {purpose}",
+            view=cnf_view, ephemeral=True)
+        cnf_view.message = m
 
 
 class TransactionBase(ABC):
@@ -1130,6 +1258,8 @@ class AccountingView(AutoDisableView):
             raise BotOfflineException()
         user_name, _, _ = self.plugin.member_p.find_main_name(discord_id=interaction.user.id)
         modal = TransferModal(title="Transfer", color=Color.blue(), plugin=self.plugin, name_from=user_name)
+        import json
+        print(json.dumps(modal.to_dict(), indent=4))
         await interaction.response.send_modal(modal)
 
     @discord.ui.button(label="Einzahlen", style=discord.ButtonStyle.green)
@@ -1222,7 +1352,8 @@ class TransactionView(AutoDisableView):
         (owner, verified) = self.plugin.db.get_owner(interaction.message.id)
         if not verified and (owner == interaction.user.id or interaction.user.id in self.plugin.admins):
             embed = interaction.message.embeds[0]
-            await interaction.response.send_modal(EditModal(plugin=self.plugin, message=interaction.message, title=embed.title))
+            await interaction.response.send_modal(
+                EditModal(plugin=self.plugin, message=interaction.message, title=embed.title))
         elif owner != interaction.user.id:
             await interaction.response.send_message("Dies ist nicht deine Transaktion, wenn du ein Admin bist, lösche "
                                                     "die Nachricht bitte eigenständig.", ephemeral=True)
