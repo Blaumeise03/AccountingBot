@@ -277,12 +277,15 @@ async def load_usernames(players: Dict[str, Player], plugin: SheetPlugin) -> Dic
 
     for row in user_raw:
         user = None
+        rank = None
+        if len(row) > i_member_rank and len(row[i_member_rank].strip()) > 0:
+            rank = row[i_member_rank].strip()
         # Check if main account
-        if len(row) > i_member_active and row[i_member_active]:
+        if len(row) > i_member_active and row[i_member_active] or (rank is not None and rank == abstract_rank):
             user = Player(name=row[i_member_name].strip())
             players[user.name] = user
         # Check if in the corp (and therefore has a rank)
-        if len(row) > i_member_rank and len(row[i_member_rank].strip()) > 0:
+        if rank is not None:
             if user:
                 user.rank = row[i_member_rank].strip()
             else:
@@ -306,7 +309,7 @@ async def load_usernames(players: Dict[str, Player], plugin: SheetPlugin) -> Dic
         if main in inactive_players and alt not in inactive_players:
             inactive_players.remove(main)
 
-    logger.info("Loaded %s chars", len(players))
+    logger.info("Loaded %s chars (%s abstract)", len(players), len(abstract_users))
     players = dict(filter(lambda t: t[0] not in inactive_players, players.items()))
     logger.info("Found %s active chars", len(players))
     return players
