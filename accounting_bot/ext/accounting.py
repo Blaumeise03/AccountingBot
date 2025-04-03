@@ -773,7 +773,7 @@ class AccountingCommands(Cog):
             f"Transfering `{amount:,} ISK` to `{user_to.name}` from {len(users_from)} users\n"
             f"**Purpose**: {purpose}",
             view=cnf_view, ephemeral=True)
-        cnf_view.message = m
+        cnf_view.real_message_handle = m
 
 
 class TransactionBase(ABC):
@@ -1258,8 +1258,8 @@ class AccountingView(AutoDisableView):
             raise BotOfflineException()
         user_name, _, _ = self.plugin.member_p.find_main_name(discord_id=interaction.user.id)
         modal = TransferModal(title="Transfer", color=Color.blue(), plugin=self.plugin, name_from=user_name)
-        import json
-        print(json.dumps(modal.to_dict(), indent=4))
+        #import json
+        #print(json.dumps(modal.to_dict(), indent=4))
         await interaction.response.send_modal(modal)
 
     @discord.ui.button(label="Einzahlen", style=discord.ButtonStyle.green)
@@ -1476,7 +1476,7 @@ class TransferModal(ErrorHandledModal):
         msg = await interaction.followup.send(
             warnings, embed=transaction.create_embed(),
             ephemeral=True, view=view)  # type: discord.WebhookMessage | None
-        view.message = msg
+        view.real_message_handle = msg
         logger.info("Received transaction modal from %s:%s in %s, message %s: %s",
                     interaction.user.id, interaction.user.name, interaction.channel_id,
                     msg.id if msg is not None else None, transaction)
