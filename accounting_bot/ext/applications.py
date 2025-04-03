@@ -102,8 +102,7 @@ class ApplicationPlugin(BotPlugin):
             async def _edit_msg(msg: Message, _view: AutoDisableView):
                 logger.info("Refreshing view for msg %s", msg.id)
                 msg = await msg.edit(view=_view)
-                if _view.message is None:
-                    _view.message = msg
+                _view.real_message_handle = msg
             coros.append(_edit_msg(message, view))
         for v in to_delete:
             _views.remove(v)
@@ -380,8 +379,7 @@ class ApplicationCommands(commands.Cog):
             await ctx.followup.send(f"Unknown view type `{view_type}`.", ephemeral=True)
             return
         await msg.edit(view=view)
-        if view.message is None:
-            view.message = msg
+        view.real_message_handle = msg
         await ctx.followup.send(f"Attached view `{view.__class__.__name__}` to message `{msg.id}`.",
                                 ephemeral=True)
         self.plugin.views.append(view)

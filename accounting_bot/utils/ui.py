@@ -164,7 +164,7 @@ class AwaitConfirmView(AutoDisableView):
                 embeds=embeds,
                 ephemeral=ephemeral)
         else:
-            self.message = await response.send(
+            self.real_message_handle = await response.send(
                 content=message,
                 view=self,
                 embed=embed if embed is not None else discord.utils.MISSING,

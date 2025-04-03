@@ -984,8 +984,7 @@ class AutoSelectArrayModal(ErrorHandledModal):
             embed=emb,
             view=view
         )
-        if view.message is None:
-            view.message = msg
+        view.real_message_handle = msg
 
 
 class NumberInputModal(ErrorHandledModal):

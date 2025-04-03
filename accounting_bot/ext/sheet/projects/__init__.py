@@ -259,7 +259,7 @@ class ConfirmView(AutoDisableView):
         msg_files.append(utils.string_to_file(msg_list, "split.txt"))
         view = InformPlayerView(self.plugin, self.contract, results, base_message)
         await view.load_user()
-        view.message = await interaction.followup.send(
+        view.real_message_handle = await interaction.followup.send(
             base_message,
             files=msg_files,
             ephemeral=False, view=view)

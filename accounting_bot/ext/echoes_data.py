@@ -434,7 +434,7 @@ class EchoesDataCommands(commands.Cog):
             view = ItemSelectView(self.plugin, market_groups,
                                   callback=self.cmd_bp_callback, auto_delete=False)
             msg = await ctx.followup.send("Select an item", view=view)
-            view.message = msg
+            view.real_message_handle = msg
 
     async def cmd_bp_callback(
             self, interaction: discord.Interaction, message: Union[Message, Webhook],
@@ -452,7 +452,7 @@ class EchoesDataCommands(commands.Cog):
             msg = await message.send(embed=embed, view=view, ephemeral=silent)
         else:
             raise TypeError(f"Invalid message type {type(message)}, expected Message or Webhook")
-        view.message = msg
+        view.real_message_handle = msg
 
     @group.command(name="item", description="Tools for blueprint data")
     @option(name="item_name", description="The name of the item, use % as a wildcard", type=str, required=False,
@@ -465,7 +465,7 @@ class EchoesDataCommands(commands.Cog):
             view = ItemSelectView(self.plugin, market_groups,
                                   callback=self.cmd_item_callback, auto_delete=False)
             msg = await ctx.followup.send("Select an item", view=view)
-            view.message = msg
+            view.real_message_handle = msg
         else:
             item = await self.plugin.db.item_repo.fetch_item(
                 item_name=item_name,

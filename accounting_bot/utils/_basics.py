@@ -15,7 +15,7 @@ from typing import Union, Optional, Type, List, Callable, TypeVar, Dict, TYPE_CH
 
 import discord
 from discord import Interaction, ApplicationContext, InteractionResponded, ApplicationCommand, CheckFailure, Embed, \
-    EmbedField, InteractionContextType
+    EmbedField, InteractionContextType, WebhookMessage, Message
 from discord.ext import commands
 from discord.ext.commands import Context, Command, NotOwner
 from discord.ui import View, Modal
@@ -427,6 +427,18 @@ class ErrorHandledView(View):
     def __init__(self, *items: discord.ui.Item,
                  timeout: Optional[float] = 300.0):
         super().__init__(*items, timeout=timeout)
+        # Stores the editable message handle, because WebhookMessage work differently
+        self.real_message_handle: Message | WebhookMessage | None = None
+
+    @property
+    def message(self) -> discord.Message:
+        if self.real_message_handle is not None:
+            return self.real_message_handle
+        return super(ErrorHandledView, self).message
+
+    @message.setter
+    def message(self, msg: discord.Message):
+        self._message = msg
 
     async def on_error(self, error: Exception, item, interaction):
         log_error(logger, error, self.__class__, ctx=interaction)

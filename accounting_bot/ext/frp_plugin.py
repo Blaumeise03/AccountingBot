@@ -63,8 +63,7 @@ class FrpPlugin(BotPlugin):
             view = FRPsView(frp_state)
             try:
                 msg = await p_msg.edit(view=view)
-                if view.message is None:
-                    view.message = msg
+                view.real_message_handle = msg
             except discord.NotFound:
                 logger.info("Message %s not found in channel %s, deleting it", msg_id, chan_id)
                 to_delete.append((msg_id, chan_id))
@@ -112,8 +111,7 @@ class FrpCommands(commands.Cog):
         state = FRPsState(self.plugin)
         view = FRPsView(state)
         m = await ctx.send(view=view)
-        if view.message is None:
-            view.message = m
+        view.real_message_handle = m
         await view.refresh_msg()
         self.plugin.frp_states.append(state)
         self.plugin.config["channel_ids"].append(m.channel.id)
