@@ -176,6 +176,21 @@ class AccountingBot(commands.Bot):
         else:
             self.owner_id = app.owner.id
 
+    async def get_owners(self):
+        owners = set()
+        if self.owner_id is not None:
+            o = self.get_user(self.owner_id)
+            if o is None:
+                try:
+                    o = await self.get_or_fetch_user(self.owner_id)
+                except discord.NotFound:
+                    pass
+            if o is not None:
+                owners.add(o)
+        if self.owner_ids is not None:
+            owners.update(await asyncio.gather(*[self.get_or_fetch_user(o) for o in self.owner_ids]))
+        return list(owners)
+
     async def enable_plugins(self):
         self.state = State.starting
         if self.owner_id is None:
@@ -466,6 +481,28 @@ class BotCommands(commands.Cog):
         embed_plugins = await build_plugin_status_embed(self.bot)
         await ctx.followup.send(embeds=[embed_bot, embed_plugins])
 
+    @commands.slash_command(name="about", description="About the bot")
+    @option(name="silent", description="Execute the command silently", type=bool, required=False, default=True)
+    async def cmd_about(self, ctx: ApplicationContext, silent: bool):
+        await ctx.response.defer(ephemeral=silent)
+        owner_str = ""
+        owners = await self.bot.get_owners()
+        if len(owners) == 1:
+            owner_str = f"{owners[0].mention}"
+        elif len(owners) > 1:
+            owner_str = ", ".join([o.mention for o in owners])
+        emb = discord.Embed(
+            title="About", color=discord.Color.red(),
+            description=f"A multifunctional bot for eve echoes\n"
+                        f"Developed by Blaumeise03\n"
+                        f"This instance is owned by {owner_str}\n"
+        )
+        emb.add_field(
+            name="Links",
+            value=f"[GitHub](https://github.com/Blaumeise03/AccountingBot) [Website](https://blaumeise03.de)\n"
+        )
+        await ctx.response.send_message(embed=emb, ephemeral=silent)
+
     @group_bot.command(name="stop", description="Shuts down the discord bot, if set up properly, it will restart")
     @owner_only()
     async def cmd_stop(self, ctx: ApplicationContext):
@@ -515,6 +552,16 @@ class BotCommands(commands.Cog):
         logger.info("Reloading config, executed by %s:%s", ctx.user.name, ctx.user.id)
         self.bot.load_config()
         await ctx.followup.send("Config reloaded\nNot all plugins might be using the new config version.")
+
+    @group_bot.command(name="emojis", description="Lists all emojis of the bot")
+    @option(name="silent", description="Execute the command silently", type=bool, required=False, default=True)
+    @owner_only()
+    async def cmd_emojis(self, ctx: ApplicationContext, silent: bool):
+        msg = ""
+        for emoji in self.bot.emojis:
+            emoij_code = f"<a:{emoji.name}:{emoji.id}>" if emoji.animated else f"<:{emoji.name}:{emoji.id}>"
+            msg += f"{emoij_code}: `{emoij_code}`\n"
+        await ctx.response.send_message(msg, ephemeral=silent)
 
 
 class BotPlugin(ABC):
