@@ -15,7 +15,11 @@ import discord
 from discord import Embed, Color, Interaction, InputTextStyle, SlashCommandGroup, ApplicationContext, EmbedField, \
     option, TextChannel, InteractionResponse
 from discord.abc import GuildChannel
-from discord.embeds import EmptyEmbed
+try:
+    from discord.embeds import EmptyEmbed
+except ImportError:
+    # ToDo: Remove this after upgrade to pycord 2.6, it is not needed anymore
+    EmptyEmbed = None
 from discord.ext import commands
 
 from accounting_bot import utils
