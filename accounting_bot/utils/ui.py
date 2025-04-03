@@ -106,19 +106,42 @@ class ModalForm(ErrorHandledModal):
 
 # noinspection PyUnusedLocal
 class ConfirmView(AutoDisableView):
-    def __init__(self, callback: Callable[[Interaction], Coroutine], *args, **kwargs):
+    def __init__(
+            self,
+            callback: Callable[[Interaction], Coroutine] | Callable[[Interaction, "ConfirmView"], Coroutine],
+            extended_args=False, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.function = callback
+        self.extended_args = extended_args
+        self.blocked = False
 
     @discord.ui.button(label="Bestätigen", style=discord.ButtonStyle.green)
     async def btn_confirm(self, button: Button, ctx: Interaction):
-        await self.function(ctx)
-        await self.message.delete()
+        if self.blocked:
+            await ctx.response.send_message("Die Aktion wurde bereits ausgeführt", ephemeral=True)
+            return
+        self.blocked = True
+        if self.extended_args:
+            await self.function(ctx, self)
+        else:
+            await self.function(ctx)
+        if self.message is None:
+            return
+        try:
+            await self.message.delete()
+        except discord.NotFound:
+            pass
 
     @discord.ui.button(label="Abbrechen", style=discord.ButtonStyle.grey)
     async def btn_abort(self, button: Button, ctx: Interaction):
+        self.blocked = True
         await ctx.response.defer(invisible=True)
-        await self.message.delete()
+        if self.message is None:
+            return
+        try:
+            await self.message.delete()
+        except discord.NotFound:
+            pass
 
 
 class AwaitConfirmView(AutoDisableView):
