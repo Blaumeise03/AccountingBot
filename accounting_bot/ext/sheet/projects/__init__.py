@@ -15,10 +15,11 @@ from typing import Dict, List, Tuple, Callable, TYPE_CHECKING, Optional
 
 import discord
 import pytz
-from discord import ApplicationContext, InputTextStyle, Interaction, Option, option, Embed, Colour
+from discord import ApplicationContext, InputTextStyle, Interaction, Option, option, Embed, Colour, AutocompleteContext
 from discord.ext import commands
 from discord.ext.commands import cooldown
 from discord.ui import InputText
+from discord.utils import basic_autocomplete
 from gspread import Cell
 
 from accounting_bot import utils
@@ -48,8 +49,8 @@ class ProjectPlugin(BotPlugin):
     def __init__(self, bot: AccountingBot, wrapper: PluginWrapper) -> None:
         super().__init__(bot, wrapper, logger)
         self.projects_lock = asyncio.Lock()
-        self.wk_project_names = []  # type: [str]
-        self.all_projects = []  # type: [Project]
+        self.wk_project_names = []  # type: list[str]
+        self.all_projects = []  # type: list[Project]
         self.sheet = None  # type: SheetPlugin | None
         self.member_p = None  # type: MembersPlugin | None
         self.config = self.bot.create_sub_config("sheet.projects")
@@ -76,6 +77,9 @@ class ProjectPlugin(BotPlugin):
 
     async def load_pending_resources(self):
         return await _project_tools.load_pending_resources(await self.sheet.get_sheet(), self.config)
+
+    async def payout_project(self, project: Project):
+        pass
 
     def on_load(self):
         self.sheet = self.bot.get_plugin("SheetMain")
@@ -146,10 +150,12 @@ class ProjectCommands(commands.Cog):
                 "%d.%m.%Y %H:%M") + "\n"
         else:
             res = "Unknown sheet time\n"
+        msg = ""
         for p in self.plugin.all_projects:
             res += p.to_string() + "\n\n"
+            msg += p.name_to_string() + "\n"
 
-        await ctx.followup.send("Projektliste:", files=[
+        await ctx.followup.send("Projektliste:\n" + msg, files=[
             string_to_file(res, "project_list.txt")])
 
     @commands.slash_command(name="listprojects", description="Lists all projects")
@@ -157,10 +163,12 @@ class ProjectCommands(commands.Cog):
     async def list_projects(self, ctx: ApplicationContext,
                             silent: Option(bool, "Execute command silently", required=False, default=True)):
         res = "Projectlist version: N/A\n"
+        msg = ""
         async with self.plugin.projects_lock:
             for p in self.plugin.all_projects:
                 res += p.to_string() + "\n\n"
-        await ctx.respond("Projektliste:", file=string_to_file(res, "project_list.txt"), ephemeral=silent)
+                msg += p.name_to_string() + "\n"
+        await ctx.respond("Projektliste:\n" + msg, file=string_to_file(res, "project_list.txt"), ephemeral=silent)
 
     @commands.slash_command(name="listresources", description="Lists all required resources")
     @member_only()
@@ -182,9 +190,28 @@ class ProjectCommands(commands.Cog):
         embed = Embed(title="Projekte", description=res, colour=Colour.orange())
         await ctx.followup.send(embed=embed, ephemeral=silent)
 
+    @staticmethod
+    def _projects_autocomplete(ctx: AutocompleteContext):
+        # noinspection PyTypeChecker
+        self: ProjectCommands = ctx.cog
+        project: str = ctx.options["priority_project"]
+        base = ""
+        if ";" in project:
+            base, project = project.rsplit(";", 1)
+        project = project.strip()
+        res = []
+        for p in self.plugin.all_projects:
+            if p.name.casefold().startswith(project.casefold()):
+                if len(base) > 0:
+                    res.append(f"{base};{p.name}")
+                else:
+                    res.append(p.name)
+        return res
+
     @commands.slash_command(name="insertinvestment", description="Saves an investment into the sheet")
     @option("skip_loading", description="Skip the reloading of the projects", required=False, default=False)
     @option("priority_project", required=False, default="",
+            autocomplete=basic_autocomplete(_projects_autocomplete),
             description="Prioritize this project, or multiple separated by a semicolon (;)")
     @commands.cooldown(1, 5, commands.BucketType.default)
     @admin_only()

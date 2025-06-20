@@ -149,6 +149,8 @@ async def load_project(self: "ProjectPlugin", project_name: str, log: [str], she
             project.exclude = Project.ExcludeSettings.all
         elif exclude == "ExcludeInvestments".casefold():
             project.exclude = Project.ExcludeSettings.investments
+        elif exclude == "ExcludeAutoinvest".casefold():
+            project.exclude = Project.ExcludeSettings.auto_split
 
     # Verifying resource names (top row of the sheet)
     i = 0
@@ -166,7 +168,7 @@ async def load_project(self: "ProjectPlugin", project_name: str, log: [str], she
     investments_raw = batch_data[3]
     i = -1
     investments_range = None
-    if project.exclude == Project.ExcludeSettings.none:
+    if project.exclude == Project.ExcludeSettings.none or project.exclude == Project.ExcludeSettings.auto_split:
         for row in investments_raw:
             i += 1
             if len(row) > 0 and row[0].casefold() == "Gesamtanteile".casefold():
@@ -186,6 +188,15 @@ async def load_project(self: "ProjectPlugin", project_name: str, log: [str], she
             project.pending_resources.append(Item(name, quantity))
     log.append(f"\"{project_name}\" processed!")
 
+
+async def load_project_payout(plugin: "ProjectPlugin", project: Project, log: list[str], sheet: gspread_asyncio.AsyncioGspreadSpreadsheet) -> None:
+    logger.info(f"Loading project payout for {project.name}")
+    log.append(f"Starting processing of project sheet \"{project.name}\"")
+    s = await sheet.worksheet(project.name)
+
+    # Scanning project sheet to find the locations of the required entries
+    batch_cells = await s.findall(re.compile(r"(Steuern Corporation)|(Gesamtanteile)|(Auszahlung)"), in_column=1)
+    
 
 async def insert_investments(self: "ProjectPlugin", contract: Contract) -> Tuple[List[str], Dict[Project, List[Item]]]:
     """

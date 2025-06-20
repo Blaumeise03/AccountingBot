@@ -288,13 +288,18 @@ class Project(object):
                 return item.amount
         return 0
 
-    def to_string(self) -> str:
+    def name_to_string(self) -> str:
         exclude = ""
         if self.exclude == Project.ExcludeSettings.all:
             exclude = " (ausgeblendet)"
         elif self.exclude == Project.ExcludeSettings.investments:
             exclude = " (keine Investitionen)"
-        res = f"{self.name}{exclude}\nRessource: ausstehende Menge"
+        elif self.exclude == Project.ExcludeSettings.auto_split:
+            exclude = " (Auto-Split deaktiviert)"
+        return f"{self.name}{exclude}"
+
+    def to_string(self) -> str:
+        res = self.name_to_string() + f"\nRessource: ausstehende Menge"
         for r in self.pending_resources:  # type: Item
             res += f"\n{r.name}: {r.amount}"
         return res
@@ -306,19 +311,28 @@ class Project(object):
                        priority_projects: List[str] = None,
                        extra_res: Dict["Project", List[Item]] = None) -> None:
         projects_ordered = project_list[::-1]  # Reverse the list
+        auto_split = True
         if priority_projects is not None:
             for p_name in reversed(priority_projects):
+                if not auto_split:
+                    break
                 for p in projects_ordered:  # type: Project
                     if p.name == p_name:
                         projects_ordered.remove(p)
                         projects_ordered.insert(0, p)
+                        if p.exclude == Project.ExcludeSettings.auto_split:
+                            auto_split = False
+                            projects_ordered = [p]
+                        break
         # split = {}  # type: {str: [(str, int)]}
         contract.split.clear()
         overflow_project = Project(name="overflow")
         for item in contract.contents:
             left = item.amount
             for project in projects_ordered:  # type: Project
-                if project.exclude != Project.ExcludeSettings.none:
+                if auto_split and project.exclude != Project.ExcludeSettings.none:
+                    continue
+                if not auto_split and project.exclude != Project.ExcludeSettings.auto_split:
                     continue
                 pending = project.get_pending_resource(item.name)
                 if extra_res is not None and project in extra_res:
@@ -353,3 +367,4 @@ class Project(object):
         none = 0  # Don't exclude the project
         investments = 1  # Exclude the project from investments
         all = 2  # Completely hides the project
+        auto_split = 3  # Only explicit investments are allowed, auto-split is not allowed
