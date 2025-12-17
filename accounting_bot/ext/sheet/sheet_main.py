@@ -336,24 +336,32 @@ def load_discord_ids(players: Dict[str, Player], path: str):
         perms_ids = raw["granted_permissions"]
     else:
         perms_ids = {}
+    if "notifications" in raw:
+        nots_ids = raw["notifications"]
+    else:
+        nots_ids = {}
     for player in players.values():
         if player.name in owner_ids:
             player.discord_id = owner_ids[player.name]
         if player.name in perms_ids:
             player.authorized_discord_ids.extend(perms_ids[player.name])
+        if player.name in nots_ids:
+            player.notification_discord_ids.extend(nots_ids[player.name])
     logger.info("Loaded discord ids")
     return players
 
 
 def save_discord_ids(players: List[Player], path: str):
     raw = {
-        "owners": {}, "granted_permissions": {}
+        "owners": {}, "granted_permissions": {}, "notifications": {}
     }
     for player in players:
         if player.discord_id is not None:
             raw["owners"][player.name] = player.discord_id
         if len(player.authorized_discord_ids) > 0:
             raw["granted_permissions"][player.name] = player.authorized_discord_ids
+        if len(player.notification_discord_ids) > 0:
+            raw["notifications"][player.name] = player.notification_discord_ids
     with open(path, "w", encoding="utf-8") as file:
         json.dump(raw, file, ensure_ascii=False, indent=4)
 

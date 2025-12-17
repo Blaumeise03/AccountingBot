@@ -42,6 +42,7 @@ class Player:
         self.discord_id = None  # type: int | None
         self.alts = []  # type: List[str]
         self.authorized_discord_ids = []  # type: List[int]
+        self.notification_discord_ids: list[int] = []
         self.is_abstract = False
 
     def has_permissions(self, discord_id: int):
@@ -406,6 +407,78 @@ class MembersCommands(commands.Cog):
         await ctx.response.send_message(f"Dem Nutzer `{user.name}:{user.id}` (<@{user.id}>) wurden die Owner-Rechte "
                                         f"für den Spieleraccount {player.name} entzogen.", ephemeral=True)
 
+    @commands.slash_command(name="add_notification", description="Adds a user to the notification list for a player")
+    @option("ingame_name", description="The main character name of the user", required=True,
+            autocomplete=main_char_autocomplete)
+    @option("user", description="The discord user to add to the notification list", required=True)
+    @member_only()
+    async def add_notification(self, ctx: ApplicationContext, ingame_name: str, user: User):
+        if user is None:
+            await ctx.respond("A user is required.", ephemeral=True)
+            return
+        if ingame_name is None or ingame_name == "":
+            await ctx.respond("Ingame name is required.", ephemeral=True)
+            return
+        matched_name, _, _ = self.plugin.find_main_name(name=ingame_name)
+        if matched_name is None:
+            await ctx.response.send_message(f"Fehler, Spieler {ingame_name} nicht gefunden!", ephemeral=True)
+        player = self.plugin.get_user(name=matched_name)
+        if player is None:
+            raise UsernameNotFoundException(f"User {matched_name} not found")
+        if (
+                player.discord_id != ctx.user.id and
+                not self.plugin.bot.is_admin(ctx.user.id) and
+                ctx.user.id not in player.authorized_discord_ids
+        ):
+            raise NoPermissionException(f"Dicsord user {ctx.user.name}:{ctx.user.id} is not owner of player {player}")
+        if user.id in player.notification_discord_ids:
+            await ctx.respond(f"Der Nutzer `{user.name}:{user.id}` (<@{user.id}>) ist bereits in der Benachrichtigungsliste "
+                              f"für den Spieleraccount {player.name}.", ephemeral=True)
+            return
+        player.notification_discord_ids.append(user.id)
+        await self.plugin.save_user_list()
+        logger.info("User %s:%s added notification for %s to %s:%s",
+                    ctx.user.name, ctx.user.id, player, user.name, user.id)
+        await ctx.response.send_message(f"Der Nutzer `{user.name}:{user.id}` (<@{user.id}>) wurde zur "
+                                        f"Benachrichtigungsliste für den Spieleraccount {player.name} hinzugefügt.",
+                                        ephemeral=True)
+
+    @commands.slash_command(name="remove_notification", description="Removes a user from the notification list for a player")
+    @option("ingame_name", description="The main character name of the user", required=True,
+            autocomplete=main_char_autocomplete)
+    @option("user", description="The discord user to remove from the notification list", required=True)
+    @member_only()
+    async def remove_notification(self, ctx: ApplicationContext, ingame_name: str, user: User):
+        if user is None:
+            await ctx.respond("A user is required.", ephemeral=True)
+            return
+        if ingame_name is None or ingame_name == "":
+            await ctx.respond("Ingame name is required.", ephemeral=True)
+            return
+        matched_name, _, _ = self.plugin.find_main_name(name=ingame_name)
+        if matched_name is None:
+            await ctx.response.send_message(f"Fehler, Spieler {ingame_name} nicht gefunden!", ephemeral=True)
+        player = self.plugin.get_user(name=matched_name)
+        if player is None:
+            raise UsernameNotFoundException(f"User {matched_name} not found")
+        if (
+                player.discord_id != ctx.user.id and
+                not self.plugin.bot.is_admin(ctx.user.id) and
+                ctx.user.id not in player.authorized_discord_ids
+        ):
+            raise NoPermissionException(f"Disord user {ctx.user.name}:{ctx.user.id} is not owner of player {player}")
+        if user.id not in player.notification_discord_ids:
+            await ctx.respond(f"Der Nutzer `{user.name}:{user.id}` (<@{user.id}>) ist nicht in der Benachrichtigungsliste "
+                              f"für den Spieleraccount {player.name}.", ephemeral=True)
+            return
+        player.notification_discord_ids.remove(user.id)
+        await self.plugin.save_user_list()
+        logger.info("User %s:%s removed notification for %s from %s:%s",
+                    ctx.user.name, ctx.user.id, player, user.name, user.id)
+        await ctx.response.send_message(f"Der Nutzer `{user.name}:{user.id}` (<@{user.id}>) wurde von der "
+                                        f"Benachrichtigungsliste für den Spieleraccount {player.name} entfernt.",
+                                        ephemeral=True)
+
     # noinspection DuplicatedCode
     @commands.slash_command(name="show_permissions", description="Shows all users with permissions for a player")
     @option("ingame_name", description="The main character name of the player", required=True,
@@ -438,6 +511,10 @@ class MembersCommands(commands.Cog):
         if len(player.authorized_discord_ids) > 0:
             msg += "Authorisierte Nutzer (mit Owner-Berechtigungen):\n"
             for i in player.authorized_discord_ids:
+                msg += f"`{i}`: <@{i}>\n"
+        if len(player.notification_discord_ids) > 0:
+            msg += "Benachrichtigte Nutzer:\n"
+            for i in player.notification_discord_ids:
                 msg += f"`{i}`: <@{i}>\n"
         await ctx.response.send_message(msg, ephemeral=True)
 

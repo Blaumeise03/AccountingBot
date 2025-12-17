@@ -180,17 +180,30 @@ class AccountingPlugin(BotPlugin):
             self.wallets[transaction.name_to] = self.wallets[transaction.name_to] + transaction.amount
         await self.load_wallets()
 
-        # Find the discord account
+        # Find the discord account(s)
+        # We send notifications to the main account, as well
+        # as all specified notification accounts
+        senders = []
+        receivers = []
         if transaction.name_from:
-            id_from, _, perfect = self.member_p.get_discord_id(transaction.name_from)
-            if not perfect:
-                id_from = None
-            await self.inform_player(transaction, id_from, receive=False)
+            user_from = self.member_p.get_user(transaction.name_from)
+            if user_from.discord_id:
+                senders.append(user_from.discord_id)
+            for authorized_ids in user_from.notification_discord_ids:
+                if authorized_ids not in senders:
+                    senders.append(authorized_ids)
         if transaction.name_to:
-            id_to, _, perfect = self.member_p.get_discord_id(transaction.name_to)
-            if not perfect:
-                id_to = None
-            await self.inform_player(transaction, id_to, receive=True)
+            user_to = self.member_p.get_user(transaction.name_to)
+            if user_to.discord_id:
+                receivers.append(user_to.discord_id)
+            for authorized_ids in user_to.notification_discord_ids:
+                if authorized_ids not in receivers:
+                    receivers.append(authorized_ids)
+        coroutines = [
+            *(self.inform_player(transaction, discord_id, receive=False) for discord_id in senders),
+            *(self.inform_player(transaction, discord_id, receive=True) for discord_id in receivers)
+        ]
+        await asyncio.gather(*coroutines)
 
     async def save_embeds(self, msg, user_id):
         """
