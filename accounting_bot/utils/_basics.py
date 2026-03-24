@@ -11,7 +11,7 @@ import warnings
 from concurrent.futures import ThreadPoolExecutor
 from enum import Enum
 from os.path import exists
-from typing import Union, Optional, Type, List, Callable, TypeVar, Dict, TYPE_CHECKING
+from typing import Union, Optional, Type, List, Callable, TypeVar, Dict, TYPE_CHECKING, Awaitable
 
 import discord
 from discord import Interaction, ApplicationContext, InteractionResponded, ApplicationCommand, CheckFailure, Embed, \
@@ -40,7 +40,7 @@ _T = TypeVar("_T")
 cmd_annotations = {}  # type: Dict[Callable, List[CmdAnnotation]]
 
 
-def wrap_async(func: Callable[..., _T]):
+def wrap_async(func: Callable[..., _T]) -> Callable[..., Awaitable[_T]]:
     @functools.wraps(func)
     async def run(*args, **kwargs) -> _T:
         try:
