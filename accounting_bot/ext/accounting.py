@@ -40,7 +40,7 @@ _T = TypeVar("_T")
 
 logger = logging.getLogger("ext.accounting")
 
-NAME_SHIPYARD = "Buyback Program"
+NAME_SHIPYARD = "Corptech Budget"
 EMOJY_LOADING = "<a:l_b:1341385628503375914>"
 
 # Database lock
@@ -1391,7 +1391,15 @@ class ConfirmView(AutoDisableView):
             raise BotOfflineException()
         await interaction.response.defer(ephemeral=True, invisible=False)
         await send_transaction(self.plugin, interaction.message.embeds, interaction)
-        await self.message.delete()
+        try:
+            await self.message.delete()
+        except discord.NotFound:
+            try:
+                if self.real_message_handle is not None:
+                    await self.real_message_handle.delete()
+            except discord.NotFound:
+                logger.warning("Failed to delete confirmation message %s", self.real_message_handle.id)
+            pass
 
 
 # noinspection PyUnusedLocal
@@ -1413,7 +1421,7 @@ class ConfirmEditView(AutoDisableView):
         :param message: The original message which should be edited.
         """
         super().__init__()
-        self.message = message
+        self.edit_message = message
         self.original = original
         self.plugin = plugin
 
@@ -1431,7 +1439,7 @@ class ConfirmEditView(AutoDisableView):
             if ocr_verified:
                 self.plugin.db.set_ocr_verification(interaction.message.id, False)
                 warnings += "Warnung: Du kannst diese Transaktion nicht mehr selbst verifizieren.\n"
-        await self.message.edit(embeds=interaction.message.embeds)
+        await self.edit_message.edit(embeds=interaction.message.embeds)
         await interaction.response.send_message(f"Transaktion bearbeitet!\n{warnings}", ephemeral=True)
 
 

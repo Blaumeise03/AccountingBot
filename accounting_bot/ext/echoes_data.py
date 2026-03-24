@@ -5,8 +5,10 @@
 # End
 import asyncio
 import difflib
+import enum
 import logging
 import os
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Dict, Any, List, Optional, TYPE_CHECKING, Union
 
@@ -36,6 +38,13 @@ except ImportError as e:
     raise e
 
 
+class MarketGroup(enum.IntEnum):
+    MINERALS = 1200000
+    MOON_ORES = 120001011
+    GASES = 120001013
+    PLANETARY_RESOURCES = 1200020
+
+
 class EchoesDataPlugin(BotPlugin):
     def __init__(self, bot: AccountingBot, wrapper: PluginWrapper) -> None:
         super().__init__(bot, wrapper, logger)
@@ -43,6 +52,8 @@ class EchoesDataPlugin(BotPlugin):
         self.db: EchoesDB = None
         self.atomic_resources: List[str] = []
         self.automatic_resources: List[str] = []
+        self._price_cache: Dict[int, EstimatedMarketData] = {}
+        self._last_update: dict[int, datetime] = {}
 
     def on_load(self):
         logger.info("Connecting to database")
@@ -73,6 +84,32 @@ class EchoesDataPlugin(BotPlugin):
     async def on_enable(self):
         await self.db.create_tables()
 
+    async def get_item_prices(self, item_ids: List[int]):
+        if len(item_ids) == 0:
+            return []
+        now = datetime.now()
+
+        cached_prices = {id_: self._price_cache[id_] for id_ in item_ids if id_ in self._price_cache}
+        missing_ids = []
+        for id_ in item_ids:
+            if id_ not in cached_prices:
+                missing_ids.append(id_)
+                continue
+            cached_price_time: datetime = self._price_cache[id_].week_of_patch
+            if cached_price_time.isocalendar()[1] == now.isocalendar()[1]:
+                continue
+            cached_price_time = self._last_update[id_]
+            if now - cached_price_time < timedelta(hours=2):
+                continue
+            missing_ids.append(id_)
+        if len(missing_ids) > 0:
+            new_prices = await self.db.market_repo.fetch_last_estimated_prices(missing_ids)
+            for price in new_prices:
+                self._price_cache[price.type_id] = price
+                self._last_update[price.type_id] = now
+                cached_prices[price.type_id] = price
+        return cached_prices
+
 
 def build_cost_table(item: Item, indent=0):
     msg = ""
@@ -98,14 +135,14 @@ def build_cost_formulars(item: Item, atomic_resources: List[str], automatic_reso
         if cost.item.name in automatic_resources:
             rows.append([
                 cost.item.name,
-                f'=IFERROR(C6/$C${start_row}*$B${start_row}; "")',
+                f'=IFERROR(C{current_row}/$C${start_row}*$B${start_row}; "")',
                 f'=ROUNDUP(IFERROR(ROUNDUP(CEILING(VLOOKUP(A${start_row}; Produktionskosten!$1:2318; '
                 f'MATCH(A{current_row}; Produktionskosten!$1:$1; 0); FALSE) * $D${start_row})); 0){out_num_correct})*$C${start_row}'])
         else:
             base_quantity = cost.amount
             rows.append([
                 cost.item.name,
-                f'=IFERROR(C6/$C${start_row}*$B${start_row}; "")',
+                f'=IFERROR(C{current_row}/$C${start_row}*$B${start_row}; "")',
                 f'=ROUNDUP(IFERROR(ROUNDUP(CEILING({base_quantity} * $D${start_row})); 0){out_num_correct})*$C${start_row}'])
         if cost.item.blueprint is not None:
             rows.extend(build_cost_formulars(cost.item, atomic_resources, automatic_resources, start_row=current_row))
@@ -405,6 +442,10 @@ class BlueprintInfoView(AutoDisableView):
                         value_input_option=ValueInputOption.user_entered)
         await interaction.followup.send(
             f"Inserted {req_rows} rows into the sheet {ws.title} at row {start_row}, column A to C", ephemeral=True)
+
+    @discord.ui.button(label="Details", style=discord.ButtonStyle.primary, emoji="🚧")
+    async def btn_details(self, button: discord.ui.Button, interaction: discord.Interaction):
+        pass
 
 
 class EchoesDataCommands(commands.Cog):

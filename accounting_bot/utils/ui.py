@@ -155,21 +155,26 @@ class AwaitConfirmView(AutoDisableView):
                         response: Union[InteractionResponse, Webhook],
                         message: str, ephemeral=True,
                         embed: Embed | None = None,
-                        embeds: List[Embed] | None = None) -> Self:
+                        embeds: List[Embed] | None = None,
+                        file=None) -> Self:
         if isinstance(response, InteractionResponse):
             await response.send_message(
                 content=message,
                 view=self,
                 embed=embed,
                 embeds=embeds,
-                ephemeral=ephemeral)
+                ephemeral=ephemeral,
+                file=file if file is not None else discord.utils.MISSING,
+            )
         else:
             self.real_message_handle = await response.send(
                 content=message,
                 view=self,
                 embed=embed if embed is not None else discord.utils.MISSING,
                 embeds=embeds if embeds is not None else discord.utils.MISSING,
-                ephemeral=ephemeral)
+                ephemeral=ephemeral,
+                file=file if file is not None else discord.utils.MISSING,
+            )
         time_out = await self.wait()
         if time_out:
             self.confirmed = False
