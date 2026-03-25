@@ -140,8 +140,8 @@ class AccountingPlugin(BotPlugin):
         if user is not None:
             await user.send(
                 (
-                    "Du hast ISK auf Deinem Accounting erhalten." if receive else "Es wurde ISK von deinem Konto abgebucht.") +
-                "\nDein Kontostand beträgt `{:,} ISK`".format(
+                    "You have received ISK on your account." if receive else "ISK have been deducted from your account") +
+                "\nYour new balance is `{:,} ISK`".format(
                     await self.get_balance(transaction.name_to if receive else transaction.name_from,
                                            default=-1)),
                 embed=transaction.create_embed())
@@ -658,9 +658,9 @@ class AccountingCommands(Cog):
         balance = await self.plugin.get_balance(name)
         invest = await self.plugin.get_investments(name, default=0)
         if balance is None:
-            await ctx.followup.send("Konto nicht gefunden!", ephemeral=True)
+            await ctx.followup.send("Account not found!", ephemeral=True)
             return
-        await ctx.followup.send("Der Kontostand von {} beträgt `{:,} ISK`.\nDie Projekteinlagen betragen `{:,} ISK`"
+        await ctx.followup.send("The balance of {} is `{:,} ISK`.\nThe project investments equal to `{:,} ISK`"
                                 .format(name, balance, invest), ephemeral=True)
 
     @commands.slash_command(name="batch_transfer", description="Transfer ISK from multiple users to one user")
@@ -847,8 +847,8 @@ class Transaction(TransactionLike):
     # Transaction types
     NAMES = {
         0: "Transfer",
-        1: "Einzahlen",
-        2: "Auszahlen"
+        1: "Deposit",
+        2: "Withdraw"
     }
     # Embed colors
     COLORS = {
@@ -944,13 +944,13 @@ class Transaction(TransactionLike):
                       color=Transaction.COLORS[transaction_type],
                       timestamp=datetime.now())
         if self.name_from is not None:
-            embed.add_field(name="Von", value=self.name_from, inline=True)
+            embed.add_field(name="From", value=self.name_from, inline=True)
         if self.name_to is not None:
-            embed.add_field(name="Zu", value=self.name_to, inline=True)
-        embed.add_field(name="Menge", value=f"{self.amount:,} ISK", inline=True)
-        embed.add_field(name="Verwendungszweck", value=self.purpose, inline=True)
+            embed.add_field(name="To", value=self.name_to, inline=True)
+        embed.add_field(name="Amount", value=f"{self.amount:,} ISK", inline=True)
+        embed.add_field(name="Purpose of use", value=self.purpose, inline=True)
         if self.reference is not None and len(self.reference) > 0:
-            embed.add_field(name="Referenz", value=self.reference, inline=True)
+            embed.add_field(name="Reference", value=self.reference, inline=True)
         embed.timestamp = self.timestamp
         if self.author is not None and len(self.author) > 0:
             embed.set_footer(text=self.author)
@@ -962,7 +962,7 @@ class Transaction(TransactionLike):
         return await plugin.get_wallet_state(self.name_from, self.amount)
 
     @staticmethod
-    async def from_modal(plugin: AccountingPlugin, modal: Modal, author: str, user: int = None) -> ('Transaction', str):
+    async def from_modal(plugin: AccountingPlugin, modal: Modal, author: str, user: int = None) -> tuple['Transaction', str]:
         """
         Creates a Transaction out of a :class:`Modal`, the Modal has to be filled out.
 
@@ -980,42 +980,42 @@ class Transaction(TransactionLike):
         for field in modal.children:
             # Processing all fields of the modal
             name_type = -1
-            if field.label.casefold() == "Von".casefold():
+            if field.label.casefold() in [n.casefold() for n in ["Von", "From"]]:
                 name_type = 0
-            elif field.label.casefold() == "Zu".casefold():
+            elif field.label.casefold() in [n.casefold() for n in ["Zu", "To"]]:
                 name_type = 1
-            elif field.label.casefold() == "Spieler(konto)name".casefold():
-                if modal.title.casefold() == "Einzahlen".casefold():
+            elif field.label.casefold() in [n.casefold() for n in ["Spieler(konto)name", "Player(account)name"]]:
+                if modal.title.casefold() in [n.casefold() for n in ["Einzahlen", "Deposit"]]:
                     name_type = 1
-                if modal.title.casefold() == "Auszahlen".casefold():
+                if modal.title.casefold() in [n.casefold() for n in ["Auszahlen", "Withdraw"]]:
                     name_type = 0
             if name_type != -1:
                 name, match = plugin.parse_player(field.value.strip())
                 if name is None:
-                    warnings += f"Hinweis: Name \"{field.value}\" konnte nicht gefunden werden!\n"
+                    warnings += f"Note: Name \"{field.value}\" couldn't be found!\n"
                     return None, warnings
                 name = plugin.member_p.get_main_name(name)
                 if not match:
-                    warnings += f"Hinweis: Name \"{field.value}\" wurde zu \"**{name}**\" geändert!\n"
+                    warnings += f"Note: Name \"{field.value}\" was changed to \"**{name}**\"!\n"
                 if name_type == 0:
                     transaction.name_from = name
                 if name_type == 1:
                     transaction.name_to = name
                 continue
-            if field.label.casefold() == "Menge".casefold():
+            if field.label.casefold() in [n.casefold() for n in ["Menge", "Amount"]]:
                 raw = field.value
 
                 amount, warn = parse_number(raw)
                 warnings += warn
                 if amount is None or amount < 1:
-                    warnings += "**Fehler**: Die eingegebene Menge ist keine Zahl > 0!\n"
+                    warnings += "**Error**: The given value is not a number > 0!\n"
                     return None, warnings
                 transaction.amount = amount
                 continue
-            if field.label.casefold() == "Verwendungszweck".casefold():
+            if field.label.casefold() in [n.casefold() for n in ["Verwendungszweck", "Purpose of use"]]:
                 transaction.purpose = field.value.strip()
                 continue
-            if field.label.casefold() == "Referenz".casefold():
+            if field.label.casefold() in [n.casefold() for n in ["Referenz", "Reference"]]:
                 transaction.reference = field.value.strip()
 
         # Check wallet ownership and balance
@@ -1023,24 +1023,22 @@ class Transaction(TransactionLike):
             user_id, _, _ = plugin.member_p.get_discord_id(player_name=transaction.name_from)
             await plugin.load_wallets()
             if (user_id is None or user != user_id) and user not in plugin.admins:
-                warnings += "**Fehler**: Dieses Konto gehört dir nicht bzw. dein Discordaccount ist nicht " \
-                            "**verifiziert** (kontaktiere in diesem Fall einen Admin). Nur der Kontobesitzer darf " \
-                            "ISK von seinem Konto an andere senden.\n"
+                warnings += ("**Error**: This account does not belong to your or your Discord account is not verified"
+                             "(contact an admin in this case). Only the account holder may send ISK from their account"
+                             "to others.\n")
             bal = await plugin.get_balance(transaction.name_from)
             inv = await plugin.get_investments(transaction.name_from, default=0)
             if not bal:
-                warnings += "Warnung: Dein Kontostand konnte nicht geprüft werden.\n"
+                warnings += "Warning: Your balance could not be verified.\n"
             elif (bal + inv) < transaction.amount:
-                warnings += "**Fehler**: Dein Kontostand (`{:,} ISK`) und Projekteinlagen (`{:,} ISK`) reichen nicht aus, " \
-                            "um diese Transaktion zu decken. Wenn Dein Accounting nicht zuvor ausgeglichen ist (oder " \
-                            "es für Dich eine Ausnahmeregelung gibt), wird die Transaktion abgelehnt.\n" \
-                    .format(bal, inv)
+                warnings += (f"**Error**: Your balance (`{bal:,} ISK`) and investments (`{inv:,} ISK`) are not "
+                             f"sufficient to cover this transaction. If your accounting is not balanced before (or "
+                             f"there is an exception for you), the transaction will be rejected.\n")
             elif (bal + inv * INVESTMENT_RATIO) < transaction.amount:
-                warnings += "Warnung: Dein Kontostand (`{:,} ISK`) reicht nicht aus, " \
-                            "um diese Transaktion zu decken. Mit deinen Projekteinlagen (`{:,} ISK`) ist die " \
-                            "Transaktion gedeckt, aber überschreitet die **{:.0%}** Grenze und kann deshalb nur " \
-                            "von einem Admin verifiziert werden.\n" \
-                    .format(bal, inv, INVESTMENT_RATIO)
+                warnings += (f"Warning: Your balance (`{bal:,} ISK`) is not sufficient to cover this transaction. "
+                             f"However, with your investments (`{inv:,} ISK`) the transaction is covered, but it "
+                             f"exceeds the **{INVESTMENT_RATIO:.0%}** limit and can therefore only be verified by an "
+                             f"admin.\n")
         return transaction, warnings
 
     @staticmethod
@@ -1055,15 +1053,15 @@ class Transaction(TransactionLike):
         transaction = Transaction()
         for field in embed.fields:
             name = field.name.casefold()
-            if name == "Von".casefold():
+            if name in [n.casefold() for n in ["Von", "From"]]:
                 transaction.name_from = field.value
-            if name == "Zu".casefold():
+            if name in [n.casefold() for n in ["Zu", "To"]]:
                 transaction.name_to = field.value
-            if name == "Menge".casefold():
+            if name in [n.casefold() for n in ["Menge", "Amount"]]:
                 transaction.amount, _ = parse_number(field.value)
-            if name == "Verwendungszweck".casefold():
+            if name in [n.casefold() for n in ["Verwendungszweck", "Purpose of use"]]:
                 transaction.purpose = field.value
-            if name == "Referenz".casefold():
+            if name in [n.casefold() for n in ["Referenz", "Reference"]]:
                 transaction.reference = field.value
         transaction.timestamp = embed.timestamp.astimezone(pytz.timezone(timezone))
         if embed.footer is not None:
@@ -1128,14 +1126,14 @@ class ShipyardTransaction(PackedTransaction):
                 name_from=self.buyer,
                 name_to=NAME_SHIPYARD,
                 amount=self.price,
-                purpose=f"Kauf {self.ship}",
+                purpose=f"Purchase {self.ship}",
                 timestamp=self.timestamp,
                 author=self.author
             ),
             Transaction(
                 name_from=NAME_SHIPYARD,
                 amount=self.station_fees,
-                purpose=f"Stationsgebühren {self.ship}",
+                purpose=f"Station fees {self.ship}",
                 timestamp=self.timestamp,
                 author=self.author
             )]
@@ -1147,7 +1145,7 @@ class ShipyardTransaction(PackedTransaction):
                     name_from=NAME_SHIPYARD,
                     name_to=self.builder,
                     amount=slot_price,
-                    purpose=f"Slotgebühr {self.ship}",
+                    purpose=f"Slot fee {self.ship}",
                     timestamp=self.timestamp,
                     author=self.author
                 )
@@ -1164,15 +1162,15 @@ class ShipyardTransaction(PackedTransaction):
 
     def to_embed(self):
         embed = Embed(
-            title="Shipyard Bestellung",
+            title="Shipyard Order",
             color=Color.orange()
         )
-        embed.add_field(name="Käufer", value=self.buyer, inline=True)
-        embed.add_field(name="Produkt", value=self.ship, inline=True)
-        embed.add_field(name="Preis", value="{:,} ISK".format(self.price), inline=True)
-        embed.add_field(name="Stationsgebühr", value="{:,} ISK".format(self.station_fees), inline=True)
+        embed.add_field(name="Buyer", value=self.buyer, inline=True)
+        embed.add_field(name="Product", value=self.ship, inline=True)
+        embed.add_field(name="Price", value="{:,} ISK".format(self.price), inline=True)
+        embed.add_field(name="Station fees", value="{:,} ISK".format(self.station_fees), inline=True)
         if self.builder is not None:
-            embed.add_field(name="Bauer", value=self.builder, inline=True)
+            embed.add_field(name="Builder", value=self.builder, inline=True)
         embed.timestamp = self.timestamp
         if self.author is not None and len(self.author) > 0:
             embed.set_footer(text=self.author)
@@ -1183,15 +1181,15 @@ class ShipyardTransaction(PackedTransaction):
         transaction = ShipyardTransaction()
         for field in embed.fields:
             name = field.name.casefold()
-            if name == "Käufer".casefold():
+            if name in [n.casefold() for n in ["Käufer", "Buyer"]]:
                 transaction.buyer = field.value
-            if name == "Produkt".casefold():
+            if name in [n.casefold() for n in ["Produkt", "Product"]]:
                 transaction.ship = field.value
-            if name == "Preis".casefold():
+            if name in [n.casefold() for n in ["Preis", "Price"]]:
                 transaction.price = parse_number(field.value)[0]
-            if name == "Stationsgebühr".casefold():
+            if name in [n.casefold() for n in ["Stationsgebühr", "Station fees"]]:
                 transaction.station_fees = parse_number(field.value)[0]
-            if name == "Bauer".casefold():
+            if name in [n.casefold() for n in ["Bauer", "Builder"]]:
                 transaction.builder = field.value
         transaction.timestamp = embed.timestamp.astimezone(pytz.timezone(timezone))
         if embed.footer is not None:
@@ -1232,7 +1230,7 @@ async def send_transaction(plugin: AccountingPlugin,
                     transaction = ShipyardTransaction.from_embed(embed, plugin.timezone)
                     if interaction.user.id in plugin.admins_shipyard:
                         transaction.authorized = True
-                        note += "\nDu kannst diese Transaktion selbst verifizieren"
+                        note += "\nYou may verify this transaction yourself"
             if not transaction:
                 logger.warning("Embed in message %s is not a transaction", msg.id)
                 continue
@@ -1247,9 +1245,9 @@ async def send_transaction(plugin: AccountingPlugin,
             if transaction.self_verification():
                 plugin.db.set_ocr_verification(msg.id, True)
         except mariadb.Error as e:
-            note += "\nFehler beim Eintragen in die Datenbank, die Transaktion wurde jedoch trotzdem im " \
-                    f"Accountinglog gepostet. Informiere bitte einen Admin, danke.\n{e}"
-    await interaction.followup.send("Transaktion gesendet!" + note, ephemeral=True)
+            note += (f"\nError while inserting into the database. "
+                     f"Transaction has been posted into the Accountinglog anyways. Please inform an admin, thanks\n{e}")
+    await interaction.followup.send("Transaction send!" + note, ephemeral=True)
     return msg
 
 
@@ -1275,29 +1273,29 @@ class AccountingView(AutoDisableView):
         #print(json.dumps(modal.to_dict(), indent=4))
         await interaction.response.send_modal(modal)
 
-    @discord.ui.button(label="Einzahlen", style=discord.ButtonStyle.green)
+    @discord.ui.button(label="Deposit", style=discord.ButtonStyle.green)
     async def btn_deposit_callback(self, button, interaction):
         if not self.plugin.bot.is_online():
             raise BotOfflineException()
         user_name, _, _ = self.plugin.member_p.find_main_name(discord_id=interaction.user.id)
-        modal = TransferModal(title="Einzahlen", color=Color.green(), plugin=self.plugin,
-                              special=True, purpose="Einzahlung Accounting", name_to=user_name)
+        modal = TransferModal(title="Deposit", color=Color.green(), plugin=self.plugin,
+                              special=True, purpose="Deposit Accounting", name_to=user_name)
         await interaction.response.send_modal(modal)
 
-    @discord.ui.button(label="Auszahlen", style=discord.ButtonStyle.red)
+    @discord.ui.button(label="Withdraw", style=discord.ButtonStyle.red)
     async def btn_withdraw_callback(self, button, interaction):
         if not self.plugin.bot.is_online():
             raise BotOfflineException()
         user_name, _, _ = self.plugin.member_p.find_main_name(discord_id=interaction.user.id)
-        modal = TransferModal(plugin=self.plugin, title="Auszahlen", color=Color.red(),
-                              special=True, purpose="Auszahlung Accounting", name_from=user_name)
+        modal = TransferModal(plugin=self.plugin, title="Withdraw", color=Color.red(),
+                              special=True, purpose="Withdrawal Accounting", name_from=user_name)
         await interaction.response.send_modal(modal)
 
     @discord.ui.button(label="Shipyard", style=discord.ButtonStyle.grey)
     async def btn_shipyard_callback(self, button, interaction):
         if not self.plugin.bot.is_online():
             raise BotOfflineException()
-        modal = ShipyardModal(title="Schiffskauf", color=Color.red(), plugin=self.plugin)
+        modal = ShipyardModal(title="Ship purchase", color=Color.red(), plugin=self.plugin)
         await interaction.response.send_modal(modal)
 
     @discord.ui.button(emoji="🖨️", style=discord.ButtonStyle.grey)
@@ -1330,14 +1328,14 @@ class TransactionView(AutoDisableView):
         super().__init__(timeout=None)
         self.plugin = plugin
 
-    @discord.ui.button(label="Verifizieren", style=discord.ButtonStyle.green)
+    @discord.ui.button(label="Verify", style=discord.ButtonStyle.green)
     async def btn_verify_callback(self, button: discord.Button, interaction: Interaction):
         if not self.plugin.bot.is_online():
             raise BotOfflineException()
         await interaction.response.defer(ephemeral=True, invisible=False)
         await self.plugin.verify_transaction(interaction.user.id, interaction.message, interaction)
 
-    @discord.ui.button(label="Löschen", style=discord.ButtonStyle.red)
+    @discord.ui.button(label="Delete", style=discord.ButtonStyle.red)
     async def btn_delete_callback(self, button, interaction):
         if not self.plugin.bot.is_online():
             raise BotOfflineException()
@@ -1350,15 +1348,15 @@ class TransactionView(AutoDisableView):
         if not verified and has_perm:
             await interaction.message.delete()
             self.plugin.db.delete(interaction.message.id)
-            await interaction.response.send_message("Transaktion Gelöscht!", ephemeral=True)
+            await interaction.response.send_message("Transaction deleted!", ephemeral=True)
             logger.info("User %s deleted message %s", interaction.user.id, interaction.message.id)
         elif owner != interaction.user.id:
-            await interaction.response.send_message("Dies ist nicht deine Transaktion, wenn du ein Admin bist, lösche "
-                                                    "die Nachricht bitte eigenständig.", ephemeral=True)
+            await interaction.response.send_message(
+                "This is not your transaction. If you are an admin, delete the message on your own", ephemeral=True)
         else:
-            await interaction.response.send_message("Bereits verifiziert!", ephemeral=True)
+            await interaction.response.send_message("Already verified (cannot delete)!", ephemeral=True)
 
-    @discord.ui.button(label="Bearbeiten", style=discord.ButtonStyle.blurple)
+    @discord.ui.button(label="Edit", style=discord.ButtonStyle.blurple)
     async def btn_edit_callback(self, button, interaction):
         if not self.plugin.bot.is_online():
             raise BotOfflineException()
@@ -1368,10 +1366,11 @@ class TransactionView(AutoDisableView):
             await interaction.response.send_modal(
                 EditModal(plugin=self.plugin, message=interaction.message, title=embed.title))
         elif owner != interaction.user.id:
-            await interaction.response.send_message("Dies ist nicht deine Transaktion, wenn du ein Admin bist, lösche "
-                                                    "die Nachricht bitte eigenständig.", ephemeral=True)
+            # ToDo: Should this be here?
+            await interaction.response.send_message(
+                "This is not your transaction. If you are an admin, delete the message on your own", ephemeral=True)
         else:
-            await interaction.response.send_message("Bereits verifiziert!", ephemeral=True)
+            await interaction.response.send_message("Already verified (cannot modify)!", ephemeral=True)
 
 
 # noinspection PyUnusedLocal
@@ -1385,7 +1384,7 @@ class ConfirmView(AutoDisableView):
         super().__init__(timeout=300)
         self.plugin = plugin
 
-    @discord.ui.button(label="Senden", style=discord.ButtonStyle.green)
+    @discord.ui.button(label="Send", style=discord.ButtonStyle.green)
     async def btn_confirm_callback(self, button, interaction: Interaction):
         if not self.plugin.bot.is_online():
             raise BotOfflineException()
@@ -1425,7 +1424,7 @@ class ConfirmEditView(AutoDisableView):
         self.original = original
         self.plugin = plugin
 
-    @discord.ui.button(label="Speichern", style=discord.ButtonStyle.green)
+    @discord.ui.button(label="Save", style=discord.ButtonStyle.green)
     async def btn_confirm_callback(self, button, interaction):
         if not self.plugin.bot.is_online():
             raise BotOfflineException()
@@ -1438,9 +1437,9 @@ class ConfirmEditView(AutoDisableView):
             ocr_verified = self.plugin.db.get_ocr_verification(interaction.message.id)
             if ocr_verified:
                 self.plugin.db.set_ocr_verification(interaction.message.id, False)
-                warnings += "Warnung: Du kannst diese Transaktion nicht mehr selbst verifizieren.\n"
+                warnings += "Warning: You cannot verify this transaction on your own anymore.\n"
         await self.edit_message.edit(embeds=interaction.message.embeds)
-        await interaction.response.send_message(f"Transaktion bearbeitet!\n{warnings}", ephemeral=True)
+        await interaction.response.send_message(f"Transaction edited!\n{warnings}", ephemeral=True)
 
 
 class TransferModal(ErrorHandledModal):
@@ -1459,15 +1458,15 @@ class TransferModal(ErrorHandledModal):
         self.color = color
         if default:
             if not special:
-                self.add_item(InputText(label="Von", placeholder="Von", required=True, value=name_from))
-                self.add_item(InputText(label="Zu", placeholder="Zu", required=True, value=name_to))
+                self.add_item(InputText(label="From", placeholder="From", required=True, value=name_from))
+                self.add_item(InputText(label="To", placeholder="To", required=True, value=name_to))
             else:
-                self.add_item(InputText(label="Spieler(konto)name", placeholder="z.B. \"KjinaDeNiel\"", required=True,
+                self.add_item(InputText(label="Player(account)name", placeholder="z.B. \"KjinaDeNiel\"", required=True,
                                         value=name_from or name_to))
-            self.add_item(InputText(label="Menge", placeholder="Menge", required=True, value=amount))
+            self.add_item(InputText(label="Amount", placeholder="Amount", required=True, value=amount))
             self.add_item(
-                InputText(label="Verwendungszweck", placeholder="Verwendungszweck", required=True, value=purpose))
-            self.add_item(InputText(label="Referenz", placeholder="Optional", required=False,
+                InputText(label="Purpose of use", placeholder="Purpose of use", required=True, value=purpose))
+            self.add_item(InputText(label="Reference", placeholder="(Optional)", required=False,
                                     value=reference))
 
     async def callback(self, interaction: ApplicationContext):
@@ -1485,14 +1484,14 @@ class TransferModal(ErrorHandledModal):
                 self.plugin.member_p.get_main_name(transaction.name_from)
             )
             if f != transaction.name_from:
-                warnings += f"Info: Der Sender wurde zu \"{transaction.name_from}\" geändert.\n"
+                warnings += f"Note: The sender has been changed to\"{transaction.name_from}\".\n"
         if transaction.name_to:
             t = transaction.name_to
             transaction.name_to = self.plugin.sheet.check_name_overwrites(
                 self.plugin.member_p.get_main_name(transaction.name_to)
             )
             if t != transaction.name_to:
-                warnings += f"Info: Der Empfänger wurde zu \"{transaction.name_to}\" geändert.\n"
+                warnings += f"Note: The recipient has been changed to \"{transaction.name_to}\"\n"
         view = ConfirmView(self.plugin)
         msg = await interaction.followup.send(
             warnings, embed=transaction.create_embed(),
@@ -1519,7 +1518,7 @@ class EditModal(TransferModal):
                                                              interaction.user.id)
         original = self.plugin.transaction_from_embed(interaction.message.embeds[0])
         if not isinstance(original, Transaction):
-            await interaction.response.send_message("Nur normale Transaktionen können aktuell bearbeitet werden",
+            await interaction.response.send_message("Only normal transactions can be edited at the moment.",
                                                     ephemeral=True)
             return
         if transaction is not None and len(warnings) > 0:
@@ -1536,9 +1535,9 @@ class EditModal(TransferModal):
             ocr_verified = self.plugin.db.get_ocr_verification(interaction.message.id)
             if ocr_verified:
                 self.plugin.db.set_ocr_verification(interaction.message.id, False)
-                warnings += "Warnung: Du kannst diese Transaktion nicht mehr selbst verifizieren.\n"
+                warnings += "Warning: You cannot verify this transaction on your own anymore!\n"
         await interaction.message.edit(embed=transaction.create_embed())
-        await interaction.response.send_message(f"Transaktionen wurde editiert!\n{warnings}", ephemeral=True)
+        await interaction.response.send_message(f"Transaction has been edited!\n{warnings}", ephemeral=True)
 
 
 class ShipyardModal(ErrorHandledModal):
@@ -1546,11 +1545,11 @@ class ShipyardModal(ErrorHandledModal):
         super().__init__(*args, **kwargs)
         self.plugin = plugin
         self.color = color
-        self.add_item(InputText(label="Käufer", placeholder="Käufer", required=True))
-        self.add_item(InputText(label="Schiff", placeholder="Schiffsname", required=True))
-        self.add_item(InputText(label="Preis", placeholder="Gesamtkosten", required=True))
-        self.add_item(InputText(label="Davon Stationsgebühren", placeholder="(Klickkosten)", required=True))
-        self.add_item(InputText(label="Bauer", placeholder="Manufacturer", required=False))
+        self.add_item(InputText(label="Buyer", placeholder="Buyer", required=True))
+        self.add_item(InputText(label="Ship", placeholder="Name of ship", required=True))
+        self.add_item(InputText(label="Price", placeholder="Total price", required=True))
+        self.add_item(InputText(label="incl. Station fees", placeholder="(Click costs)", required=True))
+        self.add_item(InputText(label="Builder", placeholder="Manufacturer", required=False))
 
     async def callback(self, interaction: Interaction):
         if not self.plugin.bot.is_online():
@@ -1569,29 +1568,29 @@ class ShipyardModal(ErrorHandledModal):
         warnings = warn_price + warn_fees
         if buyer is None:
             await interaction.response.send_message(
-                f"Spieler \"{self.children[0].value}\" konnte nicht gefunden werden!", ephemeral=True)
+                f"Player \"{self.children[0].value}\" couldn't be found!", ephemeral=True)
             return
         buyer = self.plugin.sheet.check_name_overwrites(self.plugin.member_p.get_main_name(buyer))
         if not buyer_is_match:
-            warnings += f"Hinweis: Käufer \"{self.children[0].value}\" wurde zu \"**{buyer}**\" geändert!\n"
+            warnings += f"Note: Buyer \"{self.children[0].value}\" was changed to \"**{buyer}**\"!\n"
         if builder is not None:
             builder = self.plugin.sheet.check_name_overwrites(self.plugin.member_p.get_main_name(builder))
         if not builder_is_match and len(self.children[4].value) > 0:
-            warnings += f"Warnung: Bauer \"{self.children[4].value}\" wurde zu \"**{builder}**\" geändert!\n"
+            warnings += f"Warning: Builder \"{self.children[4].value}\" was changed to \"**{builder}**\"\n"
         if price is None:
             await interaction.response.send_message(
-                f"\"{self.children[2].value}\" ist keine gültige Zahl! Erlaube Formate (Beispiele):\n"
+                f"\"{self.children[2].value}\" is not a valid number! Allowed formats (Examples):\n"
                 "1,000,000 ISK\n100000\n1 000 000 ISK\n1,000,000.00", ephemeral=True)
             return
         if station_fees is None:
             await interaction.response.send_message(
-                f"\"{self.children[3].value}\" ist keine gültige Zahl! Erlaube Formate (Beispiele):\n"
+                f"\"{self.children[3].value}\" is not a valid number! Allowed formats (Examples):\n"
                 "1,000,000 ISK\n100000\n1 000 000 ISK\n1,000,000.00", ephemeral=True)
             return
 
         slot_price = min(int(price * 0.02 / 100000) * 100000, 50000000)
         if slot_price < 1000000:
-            warnings += f"Warnung: Slotgebühr ist mit {slot_price} zu gering, sie wird nicht eingetragen."
+            warnings += f"Warning: Slot fee of {slot_price} is too low, it has not been saved."
             builder = None
 
         transaction = ShipyardTransaction(
@@ -1603,7 +1602,7 @@ class ShipyardModal(ErrorHandledModal):
             builder=builder)
 
         if len(warnings) == 0:
-            warnings = "Möchtest du diese Transaktion abschicken?"
+            warnings = "Do you want to send this transaction?"
         await interaction.response.send_message(
             warnings,
             embed=transaction.to_embed(),
