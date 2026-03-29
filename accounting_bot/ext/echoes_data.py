@@ -407,7 +407,7 @@ class BlueprintInfoView(AutoDisableView):
         req_rows = len(formulas)
 
         cells = await ws.get(f"A{start_row}:C{start_row + req_rows}", value_render_option=ValueRenderOption.formula)
-        is_empty = len(cells) == 0
+        is_empty = True
         cells_pos = None
         if len(cells) > 0:
             for r, row in enumerate(cells):
