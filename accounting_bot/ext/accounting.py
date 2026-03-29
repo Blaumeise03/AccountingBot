@@ -369,7 +369,7 @@ class AccountingPlugin(BotPlugin):
             return 3
 
     def transaction_from_embed(self, embed: Embed):
-        if embed.title == "Shipyard Bestellung":
+        if embed.title in ("Shipyard Bestellung", "Shipyard Order"):
             return ShipyardTransaction.from_embed(embed, self.timezone)
         return Transaction.from_embed(embed, self.timezone)
 
